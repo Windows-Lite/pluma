@@ -61,6 +61,9 @@ std::wstring fixup_input(const std::wstring &typed) {
 static std::wstring browser_args() {
     // AppContainer: every page runs in a tighter sandbox than the default one (as in Edge's enhanced security)
     std::wstring a = L"--enable-features=msWebView2RendererAppContainer";
+    // the graphics keep decoded images of every page seen, up to a budget made for big PCs: 64 MB is plenty to scroll
+    // through photos without decoding them again, and saved about 17 MB with six tabs (measured 25/10)
+    a += L" --force-gpu-mem-discardable-limit-mb=64";
     wchar_t port[16] = L"";
     if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) a += L" --remote-debugging-port=" + std::wstring(port);
     wchar_t extra[1024] = L"";

@@ -43,8 +43,9 @@ Antes de enseñar algo: captura y mirarla.
 ## La RAM (lo que más le importa; medir antes y después de cada cambio)
 Medido el 25/10 en el portátil (i5-10300H, 16 GB), privada como el Administrador de tareas:
 - Su Firefox con 7 pestañas: 3.100 MB. Pluma con 7 (YouTube, Marca, El País, Reddit, Wikipedia, GitHub, Google):
-  887 MB todas vivas; 296 MB con las de fondo dormidas (cada una 2-3 MB); ver las cifras nuevas en el registro de git.
+  887-960 MB todas vivas; 271 MB con las de fondo dormidas (cada una 2-3 MB); 6 sin YouTube, 206-227 MB.
 - Una pestaña ligera (Google): 183 MB usándola, 109 MB tras un rato quieto. Cerrado y en memoria: 13 MB.
+- Gráfica: caché de imágenes decodificadas con tope de 64 MB (`--force-gpu-mem-discardable-limit-mb`, -17 MB con 6).
 - Lo que no se toca: la gráfica y la pestaña a la vista nunca se recortan mientras se ve (daría tirones).
 - Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja) y soltadas a los 20 min; procesos sin
   nada visible devuelven su memoria con EmptyWorkingSet (vuelve en microsegundos si hace falta); al cerrar la
