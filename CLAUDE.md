@@ -3,13 +3,15 @@
 Navegador del usuario (25/10/2026): «uno que no consuma nada o casi nada de RAM, que vaya rápido y que se abran las
 páginas instantáneo, que admita extensiones (adblock/uBlock) y los scripts de mi YT-MP3 [...] inspírate en Zas».
 Luego: seguro («que no me quiten las contraseñas»), diseño minimalista y moderno como Mapea, transiciones que no vayan
-a tirones en ningún PC, oscuro por defecto («es como uso los navegadores») y claro como opción. Castellano de España;
+a tirones en ningún PC, oscuro por defecto («es como uso los navegadores») y claro como opción. El 25/10 por la tarde:
+«modo claro o que el modo esté sincronizado por el sistema» (ahora «Como Windows» por defecto), poder cambiar la fuente
+(«no me gusta la fuente que trae»: ahora la de Windows por defecto) y multidioma con el de Windows por defecto. Castellano de España;
 código y commits en inglés; nada de em dashes.
 
 ## Piezas
 - `Pluma.exe` (C++ + WebView2, el motor de Edge que trae Windows y que Microsoft parchea solo). Una sola instancia que
   se queda en memoria al cerrar la ventana (como Zas): `Pluma.exe [url]`, `--oculto` (arranque con Windows),
-  `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema,
+  `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
   dormir_s, descargar_s, recientes, descargar_min, reserva, residente, protocolos, `motor` = argumentos extra para el
   motor), sesión en `sesion.tsv`,
   historial en `historial.tsv`, iconos de webs en `iconos\`, registro con tiempos en `pluma.log`.
@@ -22,7 +24,15 @@ código y commits en inglés; nada de em dashes.
   `tab_warm`: una pestaña soltada con el ratón encima empieza a cargar antes del clic), sesión, `ytmp3:` sin preguntar
   (`protocolos`), errores del motor.
 - `src/ui.cpp`: la barra dibujada con Direct2D (nada de la interfaz es una página web: no cuesta procesos), menú,
-  sugerencias, avisos, pestaña nueva. Diseño de Mapea (sus colores, Roboto Mono en `fuentes/`, radios 10/14).
+  sugerencias, avisos, pestaña nueva. Diseño de Mapea (sus colores, radios 10/14). Fuente: la de Windows (Segoe UI
+  Variable) salvo que se elija otra en el menú (Roboto y Roboto Mono de `fuentes/`, o cualquier instalada con `fuente=`).
+  Tema: `tema` = claro/oscuro/sistema; un `tema` guardado sin `ajustes_v=2` era el oscuro de antes y pasa a sistema.
+  Las pestañas se aciertan donde acaban, no donde las tiene la animación (`tab_slots(now, true)`): cerrar muchas seguidas
+  no espera a que se cierre cada una.
+- `src/lang.cpp`: idiomas (es, en, pt, fr, de, it). El código escribe los textos en castellano dentro de `T(L"...")` y la
+  tabla da el del idioma elegido (`idioma`, vacío = el de Windows; si no lo tenemos, inglés). Texto nuevo de la interfaz:
+  `T()` y su fila en la tabla. Los registros (`log_line`) siguen en castellano. El motor recibe el mismo idioma al
+  arrancar (sus menús y el Accept-Language).
   Animaciones: un hilo espera a cada refresco de la pantalla (DwmFlush) y pide un fotograma solo mientras algo se mueve.
 - `src/scripts.cpp`: scripts de usuario (.user.js) sin extensión, cada uno inyectado aparte; script base de Pluma
   (Ctrl+clic y clic central abren detrás; precarga al posar el ratón, con speculation rules).
@@ -32,6 +42,10 @@ código y commits en inglés; nada de em dashes.
 - `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
+- `Pluma.exe` no va en git (25/10, el usuario: «no debería estar en el repo»): cada push a `main` lo compila una Action
+  (`release.yml`, MSVC en windows-latest: el código usa WRL y el cargador estático del SDK) y publica
+  `pluma-vX.Y.Z.zip` (una carpeta con el exe, `extensiones`, `fuentes`, `instalar.ps1`, `tools\motor-video.ps1`, que es lo
+  que espera el laboratorio de windows-lite); los PR los compila `ci.yml`.
 - Compilar: `src\compilar.cmd <ruta>` para probar (no cierra nada). `src\compilar.cmd` a secas cierra el Pluma en
   memoria (el del usuario): solo para ponerle la versión nueva, avisándole antes (el 25/10 se lo cerré usándolo).
 

@@ -370,10 +370,10 @@ static std::wstring clock_text(double s) {
     return b;
 }
 static std::wstring speed_text(double s) {
-    if (fabs(s - 1) < 0.01) return L"Normal";
+    if (fabs(s - 1) < 0.01) return T(L"Normal");
     wchar_t b[16]; swprintf_s(b, L"%g", s);
     std::wstring r = b;
-    for (auto &c : r) if (c == L'.') c = L',';
+    if (wcscmp(lang_code(), L"en")) for (auto &c : r) if (c == L'.') c = L',';   // 1,5 except in English
     return r;
 }
 static std::wstring quality_text(int h) { return std::to_wstring(h) + L"p" + (h >= 2160 ? L" 4K" : h >= 1080 ? L" HD" : L""); }
@@ -797,12 +797,12 @@ static std::vector<int> each_quality(const Video *v) {
 static const wchar_t *tip_text(Video *v, int c, const wchar_t **key) {
     *key = NULL;
     switch (c) {
-    case C_PLAY: *key = L"k"; return v->eof ? L"Volver a reproducir" : v->paused ? L"Reproducir" : L"Pausa";
-    case C_MUTE: *key = L"m"; return v->muted || v->volume <= 0 ? L"Activar sonido" : L"Silenciar";
-    case C_CC: *key = L"c"; return L"Subtítulos";
-    case C_GEAR: return L"Configuración";
-    case C_PAGE: return L"Página de YouTube";
-    case C_FULL: *key = L"f"; return g_fullscreen ? L"Salir de pantalla completa" : L"Pantalla completa";
+    case C_PLAY: *key = L"k"; return v->eof ? T(L"Volver a reproducir") : v->paused ? T(L"Reproducir") : T(L"Pausa");
+    case C_MUTE: *key = L"m"; return v->muted || v->volume <= 0 ? T(L"Activar sonido") : T(L"Silenciar");
+    case C_CC: *key = L"c"; return T(L"Subtítulos");
+    case C_GEAR: return T(L"Configuración");
+    case C_PAGE: return T(L"Página de YouTube");
+    case C_FULL: *key = L"f"; return g_fullscreen ? T(L"Salir de pantalla completa") : T(L"Pantalla completa");
     }
     return NULL;
 }
@@ -924,20 +924,20 @@ struct MenuRow { Icon icon; std::wstring label, value; bool on; };
 static std::vector<MenuRow> menu_rows(Video *v) {
     std::vector<MenuRow> rows;
     if (g_menu_page == 1) {
-        if (!v->caps.empty()) rows.push_back({ I_CC_OFF, L"Subtítulos", v->sub >= 0 ? v->caps[v->sub].name : L"Desactivados", false });
-        rows.push_back({ I_SPEED, L"Velocidad de reproducción", speed_text(v->speed), false });
+        if (!v->caps.empty()) rows.push_back({ I_CC_OFF, T(L"Subtítulos"), v->sub >= 0 ? v->caps[v->sub].name : T(L"Desactivados"), false });
+        rows.push_back({ I_SPEED, T(L"Velocidad de reproducción"), speed_text(v->speed), false });
         std::wstring q = v->vf >= 0 ? std::to_wstring(v->fmts[v->vf].h) + L"p" : L"";
-        rows.push_back({ I_QUALITY, L"Calidad", v->auto_quality ? L"Automática (" + q + L")" : quality_text(v->vf >= 0 ? v->fmts[v->vf].h : 0), false });
+        rows.push_back({ I_QUALITY, T(L"Calidad"), v->auto_quality ? T(L"Automática (") + q + L")" : quality_text(v->vf >= 0 ? v->fmts[v->vf].h : 0), false });
     } else if (g_menu_page == 2) {
         std::vector<int> hs;
         for (auto &f : v->fmts) if (!f.audio && f.h > 0 && std::find(hs.begin(), hs.end(), f.h) == hs.end()) hs.push_back(f.h);
         std::sort(hs.rbegin(), hs.rend());
         for (int h : hs) rows.push_back({ I_COUNT, quality_text(h), L"", !v->auto_quality && v->vf >= 0 && v->fmts[v->vf].h == h });
-        rows.push_back({ I_COUNT, L"Automática", L"", v->auto_quality });
+        rows.push_back({ I_COUNT, T(L"Automática"), L"", v->auto_quality });
     } else if (g_menu_page == 3) {
         for (double s : { 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 }) rows.push_back({ I_COUNT, speed_text(s), L"", fabs(v->speed - s) < 0.01 });
     } else if (g_menu_page == 4) {
-        rows.push_back({ I_COUNT, L"Desactivados", L"", v->sub < 0 });
+        rows.push_back({ I_COUNT, T(L"Desactivados"), L"", v->sub < 0 });
         for (size_t i = 0; i < v->caps.size(); i++) rows.push_back({ I_COUNT, v->caps[i].name, L"", (int)i == v->sub });
     }
     return rows;
@@ -963,7 +963,7 @@ static void paint_menu(Video *v) {
         rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0, 0, (float)w, (float)h), S(12), S(12)), b);
         float y0 = S(8);
         if (g_menu_page > 1) {
-            static const wchar_t *titles[] = { L"", L"", L"Calidad", L"Velocidad de reproducción", L"Subtítulos" };
+            const wchar_t *titles[] = { L"", L"", T(L"Calidad"), T(L"Velocidad de reproducción"), T(L"Subtítulos") };
             if (g_menu_hot == -2) { b->SetColor(rgba(1, 1, 1, 0.1f)); rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(S(24), S(28)), S(16), S(16)), b); }
             draw_icon(rt, b, I_CHEV_L, S(24), S(28), S(24), kWhite);
             text(rt, b, f_head.Get(), titles[g_menu_page], D2D1::RectF(S(48), S(8), w - S(16), S(48)), kText);
