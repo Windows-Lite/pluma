@@ -9,6 +9,7 @@
 // PLUMA_INSTANCIA=<name> runs a separate instance (own mutex, window class and data), off the screen, for tests;
 // PLUMA_DEPURAR=<port> opens the DevTools protocol on that port. Test instances only: PLUMA_SIN_SONIDO=1 keeps them
 // silent (the engine and mpv), PLUMA_PRUEBA_ROMPER_VIDEO=K breaks a video list's pieces from piece K on (video.cpp).
+// PLUMA_SIN_MPV_LOG=1 leaves mpv logging as in a normal build (no mpv.log; only its warnings, in pluma.log).
 #pragma once
 #include <windows.h>
 #include <windowsx.h>
