@@ -7,7 +7,8 @@
 //   Pluma.exe --oculto     starts it hidden, ready (for Windows startup)
 //   Pluma.exe --salir      closes the one in memory for good
 // PLUMA_INSTANCIA=<name> runs a separate instance (own mutex, window class and data), off the screen, for tests;
-// PLUMA_DEPURAR=<port> opens the DevTools protocol on that port.
+// PLUMA_DEPURAR=<port> opens the DevTools protocol on that port. Test instances only: PLUMA_SIN_SONIDO=1 keeps them
+// silent (the engine and mpv), PLUMA_PRUEBA_ROMPER_VIDEO=K breaks a video list's pieces from piece K on (video.cpp).
 #pragma once
 #include <windows.h>
 #include <windowsx.h>

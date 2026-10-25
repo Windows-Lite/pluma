@@ -81,6 +81,8 @@ static std::wstring browser_args() {
     a += L" --force-gpu-mem-discardable-limit-mb=32";
     wchar_t port[16] = L"";
     if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) a += L" --remote-debugging-port=" + std::wstring(port);
+    // tests: PLUMA_SIN_SONIDO=1 keeps a test instance silent from its first page (mpv too, video.cpp)
+    if (g_test && GetEnvironmentVariableW(L"PLUMA_SIN_SONIDO", NULL, 0) > 0) a += L" --mute-audio";
     wchar_t extra[1024] = L"";
     GetPrivateProfileStringW(L"pluma", L"motor", L"", extra, 1024, (g_state + L"\\ajustes.ini").c_str());
     if (*extra) a += L" " + std::wstring(extra);

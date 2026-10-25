@@ -75,7 +75,7 @@ static bool load_mpv() {
 
 // ---------------------------------------------------------------- one video
 // one entry of YouTube's HLS list: a video variant (its own playlist) or an audio rendition, by group
-struct Fmt { std::string url, group, local; int w = 0, h = 0, fps = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec; };
+struct Fmt { std::string url, group, local; int w = 0, h = 0, fps = 0, fetched = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec; };
 struct Cap { std::string url, local; std::wstring name, lang; };
 enum Stage { ST_WAITING, ST_ON };
 struct Video {
@@ -514,29 +514,74 @@ static void load_streams(Video *v, double start, bool paused) {
 }
 static bool http_get(const std::wstring &url, std::string &out);
 static bool safe_playlist(const std::string &text);
+// tests: PLUMA_PRUEBA_ROMPER_VIDEO=K breaks the pieces of a video list from piece K on (counted from 0), the first
+// time that list is read (K! every time), as when they fail to download near the end: their addresses get a 404
+static int g_break_from = -2;
+static bool g_break_always;
+static int break_from() {
+    if (g_break_from == -2) {
+        wchar_t b[16] = L"";
+        g_break_from = g_test && GetEnvironmentVariableW(L"PLUMA_PRUEBA_ROMPER_VIDEO", b, 16) > 0 ? _wtoi(b) : -1;
+        g_break_always = wcschr(b, L'!') != nullptr;
+    }
+    return g_break_from;
+}
+static std::string break_pieces(const std::string &text, int from, double &at) {
+    std::string out;
+    size_t pos = 0;
+    int n = 0;
+    double t = 0;
+    at = -1;
+    while (pos < text.size()) {
+        size_t nl = text.find('\n', pos);
+        std::string line = text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos + 1);
+        pos = nl == std::string::npos ? text.size() : nl + 1;
+        if (line.rfind("#EXTINF:", 0) == 0) { if (n < from) t += atof(line.c_str() + 8); }
+        else if (!line.empty() && line[0] != '#' && line[0] != '\r' && line[0] != '\n') {
+            if (n++ >= from) {
+                size_t slash = line.find('/', 8);
+                if (slash != std::string::npos) line.insert(slash + 1, "rota/");
+                if (at < 0) at = t;
+            }
+        }
+        out += line;
+    }
+    return out;
+}
 static void fetch_playlists(Video *v, std::vector<int> which, std::function<void(Video *)> then) {
     // YouTube's playlist server takes ~1 s per list: Pluma reads the ones it needs at once, on threads of its own,
     // and mpv opens them from disk (it starts in ~1.5 s instead of 4-5; measured 25/10)
-    std::vector<std::pair<int, std::string>> todo;
-    for (int i : which) if (i >= 0 && v->fmts[i].local.empty()) todo.push_back({ i, v->fmts[i].url });
-    int id = v->tab, serial = v->serial;
+    struct Todo { int i; std::string url; bool brk; };
+    std::vector<Todo> todo;
+    for (int i : which)
+        if (i >= 0 && v->fmts[i].local.empty()) {
+            Fmt &f = v->fmts[i];
+            todo.push_back({ i, f.url, break_from() >= 0 && !f.audio && (g_break_always || f.fetched == 0) });
+            f.fetched++;
+        }
+    int id = v->tab, serial = v->serial, from = break_from();
     std::wstring dir = g_state + L"\\cache-video";
     std::wstring vid = v->id;
-    std::thread([todo, id, serial, dir, vid, then] {
+    std::thread([todo, id, serial, dir, vid, from, then] {
         std::vector<std::string> paths(todo.size());
+        std::vector<double> broke(todo.size(), -1);
         std::vector<std::thread> th;
         for (size_t k = 0; k < todo.size(); k++)
             th.emplace_back([&, k] {
                 std::string text;
-                if (!http_get(wide(todo[k].second), text) || text.rfind("#EXTM3U", 0) != 0 || !safe_playlist(text)) return;
-                std::wstring p = dir + L"\\" + vid + L"-" + std::to_wstring(todo[k].first) + L".m3u8";
+                if (!http_get(wide(todo[k].url), text) || text.rfind("#EXTM3U", 0) != 0 || !safe_playlist(text)) return;
+                if (todo[k].brk) text = break_pieces(text, from, broke[k]);
+                std::wstring p = dir + L"\\" + vid + L"-" + std::to_wstring(todo[k].i) + L".m3u8";
                 if (write_file(p, text)) paths[k] = utf8(p);
             });
         for (auto &t : th) t.join();
-        ui_post([todo, paths, id, serial, then] {
+        ui_post([todo, paths, broke, id, serial, from, then] {
+            for (size_t k = 0; k < todo.size(); k++)
+                if (broke[k] >= 0) log_line(L"prueba: lista " + std::to_wstring(todo[k].i) + L" rota desde el trozo " + std::to_wstring(from) + L" (" +
+                                            std::to_wstring((int)broke[k]) + L" s)");
             Video *v = V(tab_by_id(id));
             if (!v || v->serial != serial) return;
-            for (size_t k = 0; k < todo.size(); k++) if (!paths[k].empty()) v->fmts[todo[k].first].local = paths[k];
+            for (size_t k = 0; k < todo.size(); k++) if (!paths[k].empty()) v->fmts[todo[k].i].local = paths[k];
             then(v);
         });
     }).detach();
@@ -602,6 +647,7 @@ static bool start_player(Video *v, double start) {
         // ... over the picture, as YouTube's (not in the black around it)
         { "sub-use-margins", "no" } };
     for (auto &o : opts) M.set_option_string(v->mpv, o.k, o.v.c_str());
+    if (g_test && GetEnvironmentVariableW(L"PLUMA_SIN_SONIDO", NULL, 0) > 0) M.set_option_string(v->mpv, "ao", "null");   // tests: silent
     if (g_dev) { M.set_option_string(v->mpv, "log-file", utf8(g_state + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v"); }   // tests
     if (M.initialize(v->mpv) < 0) { M.terminate_destroy(v->mpv); v->mpv = nullptr; return false; }
     static const char *props[] = { "time-pos", "duration", "pause", "eof-reached", "paused-for-cache", "demuxer-cache-time", "mute", "speed",
