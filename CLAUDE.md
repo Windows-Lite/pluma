@@ -114,8 +114,7 @@ ya tenga esa funcionalidad»).
 - El cambio de la página al reproductor tiene que verse y llegar pronto: al usuario le llegaba a los 15-19 s y de
   golpe («se pone así»). Ahora: las listas se piden ya mientras la página carga el vídeo; el margen de mpv sobre la
   página se ajusta a lo que tardan aquí las listas y cada búsqueda (con 1,5 s fijos llegaba tarde una y otra vez); el
-  sonido cambia en el instante y la imagen crece desde el sitio del vídeo en la página (zoom.cpp) si Pluma está
-  delante. Su línea tiene un servidor de caché de Google que a veces no contesta: esperas de red cortas
+  sonido cambia en el instante y la imagen sigue en el mismo sitio (solo cambian los controles). Su línea tiene un servidor de caché de Google que a veces no contesta: esperas de red cortas
   (`network-timeout` 10, `curl-connect-timeout` 4, WinHTTP 4-10 s) y un vigilante: mpv listo en 12 s o se cierra y se
   intenta una vez más (una vez se quedó quieto minutos); mientras, suena la página.
 - mpv no pregunta la posición en cada fotograma (`time-pos` y `demuxer-cache-time` no se observan; se leen al
@@ -125,6 +124,14 @@ ya tenga esa funcionalidad»).
   Con la Intel (`d3d11-adapter`) iría sin copias entre gráficas, pero su memoria de vídeo sale de la RAM y cuenta como
   de Pluma: 282 MB en vez de 91 (mpv solo, 140-180 frente a 72). Se queda la NVIDIA, por la RAM. En DXGI, en un
   portátil con dos gráficas la pantalla «cuelga» de la del proceso; la de verdad, con EnumDisplayDevices.
+- El reproductor de Pluma va EN EL HUECO DEL VÍDEO de la página, no ocupándola entera: al usuario le parecía «un
+  zoom raro» a los 5 s de cada vídeo, y al salir de pantalla completa se quedaba en él (25/10). Alrededor, una foto
+  de la página hecha por ella misma justo antes (`CapturePreview`, PNG en memoria, decodificada solo al pintar);
+  la página duerme detrás igual. Un clic o la rueda sobre la foto (o la rueda sobre el vídeo) despierta la página,
+  que sigue con el vídeo en ese segundo y recibe ese clic o esa rueda (`Input.dispatchMouseEvent`); el reproductor
+  vuelve con una foto nueva cuando el PC lleva 4 s sin que se toque nada (`GetLastInputInfo`). Si la página cambia de
+  tamaño (ventana, una franja de aviso) o el vídeo se cogió en pantalla completa, la página despierta (la foto ya no
+  vale). El cambio espera a tener la foto reciente (< 3 s) y a que mpv ya dibuje al tamaño del hueco.
 - Elegido por el usuario el 25/10, con las cifras delante: el reproductor de Pluma siempre (~150 MB), no la página
   normal con Pluma solo en pantalla completa (~385 en la ventana) ni la página siempre (~385). La página viva con su
   vídeo parado y el reproductor de Pluma en su hueco no ahorra nada (322 MB la página sola): el ahorro es dormirla.
@@ -171,7 +178,7 @@ ya tenga esa funcionalidad»).
 - Recortar memoria (EmptyWorkingSet) tarda 9-90 ms: nunca en el hilo de la ventana, que comparte la entrada con las
   páginas (un hilo de la ventana ocupado retrasa los clics en la web). Va en un hilo aparte; y la interfaz de Pluma no
   se recorta a sí misma mientras se ve. Medido con `clics.js` en YouTube: mediana 6 ms hasta verse el clic.
-- Pantalla completa y paso de la página al reproductor (zoom.cpp): el vídeo se mueve EN VIVO. mpv lo dibuja en
+- Pantalla completa (zoom.cpp), del hueco del vídeo a la pantalla y vuelta: el vídeo se mueve EN VIVO. mpv lo dibuja en
   cualquier caja de su ventana (`video-margin-ratio-*`) y un hilo cambia la caja en cada refresco de la pantalla
   (`WaitForVBlank`) con un mpv_handle propio (`mpv_create_client`). Una foto de la pantalla solo tapa el instante en
   que la ventana cambia de tamaño (~100 ms); lo de alrededor (barra, barra de tareas, la página) se funde sobre el
@@ -184,7 +191,10 @@ ya tenga esa funcionalidad»).
   un fotograma con el vídeo pequeño en medio); `sub-use-margins=no`, o los subtítulos se van al negro de alrededor.
   La pantalla completa que pide la página va sin animación de Windows (escalaba la página vieja, medio transparente).
 - Pruebas de transiciones: fuera de la pantalla la foto sale negra. Con `PLUMA_A_LA_VISTA=x,y` la instancia de prueba
-  se pone en la pantalla, por encima (y su pantalla completa también), para grabarla con `tools\grabar.exe`.
+  se pone en la pantalla, siempre encima, para grabarla con `tools\grabar.exe`. Así, Chromium la da por tapada a los
+  4 s (su detección de ventanas ocultas) y YouTube encoge su reproductor a 144x0: en ese perfil de prueba,
+  `motor=--disable-features=CalculateNativeWinOcclusion` en `ajustes.ini`. Y las instancias de prueba acumulan
+  pestañas en `sesion.tsv` (46 el 25/10): `cdp.js` habla con la primera que casa, no con la de delante; borrarla.
 - Doble clic en el vídeo: el segundo «soltar» se ignora (llegaba a otra ventana tras el cambio de tamaño).
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.

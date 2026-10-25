@@ -30,6 +30,10 @@ function Target($x, $y) {
     $v = [IntPtr]::Zero
     do { $v = [W.U]::FindWindowExW($win, $v, 'PlumaVideo', [NullString]::Value) } while ($v -ne [IntPtr]::Zero -and -not [W.U]::IsWindowVisible($v))
     if ($v -eq [IntPtr]::Zero) { return $null }
+    # the player is in the video's place in the page: around it, the photo of the page
+    $r = New-Object W.U+RECT; [W.U]::GetWindowRect($v, [ref]$r) | Out-Null
+    $f = [W.U]::FindWindowExW($win, [IntPtr]::Zero, 'PlumaFotoPagina', [NullString]::Value)
+    if (-not ($sx -ge $r.Left -and $sx -lt $r.Right -and $sy -ge $r.Top -and $sy -lt $r.Bottom) -and $f -ne [IntPtr]::Zero -and [W.U]::IsWindowVisible($f)) { $v = $f }
     $p = New-Object W.U+POINT; [W.U]::ClientToScreen($v, [ref]$p) | Out-Null
     return @($v, ($sx - $p.X), ($sy - $p.Y))
 }

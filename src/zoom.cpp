@@ -1,8 +1,9 @@
-// Pluma: into fullscreen and out, and a YouTube video from its page into Pluma's player, with the picture moving on
-// screen as it plays. mpv itself draws the video in any box of its window (its margins), so the picture grows or
-// shrinks live, every frame, with no photo standing still in its place. A photo of the screen only hides the moment
-// the window changes size (a few frames): its picture goes as soon as the player draws at the new size, and what is
-// around the picture (the bar, the taskbar, the page) fades out over the video as it grows, or in once it has shrunk.
+// Pluma: into fullscreen and out of it with the picture moving on screen as it plays: from the video's place in the
+// page to the whole screen, and back. mpv itself draws the video in any box of its window (its margins), so the
+// picture grows or shrinks live, every frame, with no photo standing still in its place. A photo of the screen only
+// hides the moment the window changes size (a few frames): its picture goes as soon as the player draws at the new
+// size, and what is around the picture (the bar, the taskbar, the page) fades out over the video as it grows, or in
+// once it has shrunk.
 // (Before, a photo of the picture grew instead: the video stood still for half a second, and between window and
 // fullscreen it only grows a tenth: "no hay transiciones, tosco y laggy", 25/10. The photo's window, on a thread that
 // read no messages, also showed Windows' busy cursor at every change.)
@@ -181,6 +182,7 @@ static void zoom_run(Plan p) {
             // once the player draws at its new size, the photo's picture goes: the live one is there, in its place
             t = now_ms();
             while (!g_settled && !g_stop && now_ms() - t < kSettleMaxMs) Sleep(2);
+            while (!video_box_drawn(client, win, keep) && !g_stop && now_ms() - t < kSettleMaxMs) Sleep(2);
             t_settled = now_ms();
             next_frame(out.Get()); next_frame(out.Get());
             if (center) root->RemoveVisual(center.Get());
@@ -233,15 +235,16 @@ static bool zoom_go(Plan p, std::function<void()> change, bool for_fullscreen) {
     std::thread(zoom_run, p).detach();
     return true;
 }
-void zoom_remember_area() { g_area_before = media_area(); }
+void zoom_remember_area() { g_area_before = video_on(active_tab()) ? video_window_rect() : media_area(); }
 void zoom_start(bool on) {
-    // fullscreen in: the picture grows from the page area to the screen; out: it shrinks back there, then the window
+    // fullscreen in: the picture grows from its place in the page to the screen; out: it shrinks back there, then
+    // the window changes
     g_want = on;
     RECT mon = fullscreen_rect();
     Plan p = {};
     p.shot = mon;
     if (on) {
-        RECT area = media_area();
+        RECT area = video_window_rect();
         p.keep = rf(area);
         p.win_after = rf(mon);
         p.grow_ms = kGrowMs; p.reveal_ms = kGrowMs * 0.75;
@@ -254,26 +257,6 @@ void zoom_start(bool on) {
         p.grow_ms = kRevealMs; p.reveal_ms = kRevealMs;
     }
     if (!zoom_go(p, [] { fullscreen_now(g_want); }, true)) fullscreen_now(on);
-}
-bool zoom_into_player(RECT page_player, std::function<void()> change) {
-    // a YouTube video going from its page into Pluma's player: the player shows it where the page did, and it grows
-    // to fill the page area while the page around it fades (in sight, so the change is understood: it came late and
-    // all at once, "se pone así", 25/10)
-    if (g_busy || (GetForegroundWindow() != g_win && !g_test_visible) || IsIconic(g_win)) return false;
-    RECT area = media_area(), box;
-    if (!IntersectRect(&box, &page_player, &area)) return false;
-    Plan p = {};
-    p.shot = area;
-    p.keep = rf(box);
-    p.win_after = rf(area);
-    p.grow_ms = kGrowMs + 40; p.reveal_ms = kGrowMs;
-    void *c = video_box_client();
-    if (!c) return false;
-    video_box(c, rf(area), rf(box));   // (the player, still under the page, draws there already)
-    bool going = zoom_go(p, change, false);
-    if (!going) video_box(c, rf(area), rf(area));
-    video_box_done(c);
-    return going;
 }
 bool zoom_busy() { return g_busy; }
 void zoom_want(bool on) { g_want = on; }

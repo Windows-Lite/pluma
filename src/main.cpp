@@ -417,14 +417,15 @@ void fullscreen_now(bool on) {
         RECT m = fullscreen_rect();
         g_fullscreen = true;
         SetWindowLongW(g_win, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
-        SetWindowPos(g_win, g_test && !g_test_visible ? HWND_BOTTOM : HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top,
-                     SWP_FRAMECHANGED | SWP_NOOWNERZORDER | (g_test ? SWP_NOACTIVATE : 0));
+        // (a test on the screen stays where it is, over the rest: the zoom's photo has to stay over it)
+        SetWindowPos(g_win, g_test ? HWND_BOTTOM : HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top,
+                     SWP_FRAMECHANGED | SWP_NOOWNERZORDER | (g_test ? SWP_NOACTIVATE : 0) | (g_test_visible ? SWP_NOZORDER : 0));
     } else {
         g_fullscreen = false;
         SetWindowLongW(g_win, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN);
         // (tests: not SetWindowPlacement, which brings a window off the screen back onto it)
-        if (g_test) SetWindowPos(g_win, g_test_visible ? HWND_TOP : HWND_BOTTOM, g_test_rect.left, g_test_rect.top, g_test_rect.right - g_test_rect.left,
-                                 g_test_rect.bottom - g_test_rect.top, SWP_NOACTIVATE);
+        if (g_test) SetWindowPos(g_win, HWND_BOTTOM, g_test_rect.left, g_test_rect.top, g_test_rect.right - g_test_rect.left,
+                                 g_test_rect.bottom - g_test_rect.top, SWP_NOACTIVATE | (g_test_visible ? SWP_NOZORDER : 0));
         else SetWindowPlacement(g_win, &g_before_fs);
         SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
     }
@@ -448,7 +449,7 @@ static void show_window() {
         if (GetEnvironmentVariableW(L"PLUMA_TAMANO", size, 32)) swscanf_s(size, L"%dx%d", &w, &h);   // e.g. 1920x1040
         // PLUMA_A_LA_VISTA=x,y: on the screen, over the rest (to record a transition as the user sees it)
         if (GetEnvironmentVariableW(L"PLUMA_A_LA_VISTA", at, 32) && swscanf_s(at, L"%d,%d", &x, &y) == 2) g_test_visible = true;
-        SetWindowPos(g_win, g_test_visible ? HWND_TOP : HWND_BOTTOM, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetWindowPos(g_win, g_test_visible ? HWND_TOPMOST : HWND_BOTTOM, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         return;
     }
     if (!IsWindowVisible(g_win)) ShowWindow(g_win, GetPropW(g_win, L"max") ? SW_SHOWMAXIMIZED : SW_SHOW);

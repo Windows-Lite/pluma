@@ -203,8 +203,9 @@ bool dark_theme();
 void video_init();
 bool video_available();                   // the engine (motor-video\libmpv-2.dll) is there
 void video_page_changed(Tab *t);          // its address changed or it came on screen: a YouTube video starts the watch
-enum { VIDEO_ASKED, VIDEO_ENDED, VIDEO_LEAVE, VIDEO_FAILED };
-void video_back_to_page(Tab *t, int how); // the page again: ASKED (and stays there), ENDED, LEAVE (it navigates), FAILED
+enum { VIDEO_ASKED, VIDEO_ENDED, VIDEO_LEAVE, VIDEO_FAILED, VIDEO_WOKEN };
+void video_back_to_page(Tab *t, int how); // the page again: ASKED (and stays there), ENDED, LEAVE (it navigates), FAILED,
+                                          // WOKEN (the person went to the page: the player comes back once left alone)
 void video_destroy(Tab *t);               // the tab or its page goes: the player too, the page untouched
 void video_layout();                      // window moved or resized, tab switched: the player follows
 bool video_on(Tab *t);
@@ -220,6 +221,7 @@ double video_aspect();                    // the playing video's width/height, o
 void *video_box_client();                 // a handle of its own on the player on screen (nullptr: none)
 void video_box(void *client, D2D1_RECT_F win, D2D1_RECT_F box);   // the picture fits in box (screen px); win: its window
 void video_box_done(void *client);
+bool video_box_drawn(void *client, D2D1_RECT_F win, D2D1_RECT_F box);   // mpv already draws it so
 RECT video_window_rect();                 // the player's window on the screen
 void video_zoom_done();                   // the picture is in place: the controls again
 
@@ -232,7 +234,6 @@ void zoom_want(bool on);                  // asked during a zoom: where it ends
 void zoom_stop();                         // the window goes: the zoom ends at once
 void zoom_remember_area();                // going fullscreen: where the picture goes back to
 void zoom_message(WPARAM wp, LPARAM lp);
-bool zoom_into_player(RECT page_player, std::function<void()> change);   // a video from its page into Pluma's player
 
 // ---------------------------------------------------------------- userscripts (scripts.cpp)
 struct UserScript { std::wstring file, name, version, description, run_at; bool enabled = true, noframes = false;
