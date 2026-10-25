@@ -83,6 +83,7 @@ struct Settings {
     bool spare = false;                // a view made ahead of time (the next page starts 35 ms sooner; costs ~10 MB)
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
     bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
+    bool youtube_lite = true;          // YouTube answered with Pluma's own light page (youtube.cpp)
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
@@ -108,6 +109,11 @@ void data_clear_all();               // cookies, cache and history (not password
 void ui_ntp_changed();               // the new tab page's rows are read again
 void ui_open_menu_page(const std::wstring &which);   // the menu, open at "ext" or "scripts"
 std::wstring lang_name(const wchar_t *code);         // a language by its own name ("" = Windows's)             // Pluma closes for good: a waiting update goes in for the next start
+
+// ---------------------------------------------------------------- YouTube ligero (youtube.cpp)
+struct Tab;
+void youtube_attach(Tab *t);              // every view: YouTube's pages answered with Pluma's light one
+void youtube_settings_changed();          // the setting went off: the light pages go back to YouTube's
 
 // ---------------------------------------------------------------- languages (lang.cpp)
 const wchar_t *T(const wchar_t *es);   // a text of the interface, written in Spanish, in the person's language
@@ -228,6 +234,7 @@ struct Tab {
     bool video_mode = false;           // ... on screen instead of the page, which sleeps behind it
     std::wstring video_declined;       // the video the person went back to the page for: it stays on the page
     bool incognito = false;            // InPrivate: nothing of it is kept (history, cookies, session); gone with the window
+    bool yt_lite = false;              // its page is Pluma's light YouTube (youtube.cpp): Pluma's player goes straight in
     // the bar's geometry, animated
     Anim x, w, hover, close_hover;
     bool placed = false;

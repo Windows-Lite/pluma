@@ -309,6 +309,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     EventRegistrationToken tok;
     ICoreWebView2 *v = t->view.Get();
     settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
+    youtube_attach(t);    // and its light YouTube
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
@@ -723,7 +724,7 @@ static void hide_view(Tab *t) {
     t->hidden_since = now_ms();
     if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
     // where it was: if it is let go later, it comes back to the same place (and a video to the same second)
-    if (t->video_mode) t->saved_media = video_position(t);   // (its page sleeps: Pluma's player knows)
+    if (t->video_mode || video_on(t)) t->saved_media = video_position(t);   // (its page sleeps, or has no video of its own: Pluma's player knows)
     else if (t->view && !t->loading) {
         int id = t->id;
         t->view->ExecuteScript(L"[scrollX, scrollY, ((document.querySelector('video') || {}).currentTime) || 0]",

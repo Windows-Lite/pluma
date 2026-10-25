@@ -167,6 +167,7 @@ void settings_load() {
     g_set.spare = ini_get(L"reserva", L"0") == L"1";
     g_set.resident = ini_get(L"residente", L"1") != L"0";
     g_set.native_video = ini_get(L"video_propio", L"1") != L"0";
+    g_set.youtube_lite = ini_get(L"youtube_ligero", L"1") != L"0";
     g_set.suggest_top = ini_get(L"sugerir_visitadas", L"1") != L"0";
     g_set.bookmarks_bar = ini_get(L"barra_marcadores", L"0") == L"1";
     g_set.schemes.clear();
@@ -195,6 +196,7 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"descargar_min", std::to_wstring(g_set.recent_discard_min).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"residente", g_set.resident ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"video_propio", g_set.native_video ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"youtube_ligero", g_set.youtube_lite ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"sugerir_visitadas", g_set.suggest_top ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"barra_marcadores", g_set.bookmarks_bar ? L"1" : L"0", f.c_str());
     std::wstring sc;

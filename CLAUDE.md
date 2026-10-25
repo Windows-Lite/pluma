@@ -52,6 +52,7 @@ código y commits en inglés; nada de em dashes.
   `%LOCALAPPDATA%\Pluma\extensiones`), instalar desde la Chrome Web Store o Edge Add-ons con «Añadir a Pluma»,
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
 - `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
+- `src/youtube.cpp` + `src/youtube.html`: YouTube ligero (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
 - `Pluma.exe` no va en git (25/10, el usuario: «no debería estar en el repo»): cada push a `main` lo compila una Action
@@ -182,6 +183,34 @@ ya tenga esa funcionalidad»).
   paraba a cargar con 4 MB; con 33 MB no se para. 4K: 196 MB en total, la gráfica Intel al 57 %, la CPU al 3 %.
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
   en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
+
+## YouTube ligero (`src/youtube.cpp`, `src/youtube.html`)
+Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos memoria, sin perder la cuenta.
+- Cuando la pestaña va a www.youtube.com (`/`, `/results`, `/feed/subscriptions`, `/feed/history`, `/playlist`,
+  `/watch` y la portada o los vídeos de un canal), Pluma contesta ese documento (WebResourceRequested, solo
+  documentos, solo la dirección que dio el NavigationStarting de la pestaña) con su página (RCDATA 203) en la misma
+  dirección: mismo origen, así que las cookies y la sesión siguen. La página llama a la API de YouTube
+  (`/youtubei/v1/browse|search|next|navigation/resolve_url|like|subscription`, cliente WEB, firmada con
+  SAPISIDHASH + SAPISID1PHASH/3PHASH si hay sesión, como YouTube.js y la propia web) y pinta. Sugerencias de
+  `suggestqueries-clients6.youtube.com` (`xhr=t&oe=utf-8`, CORS abierto a youtube.com).
+- Ninguna página habla con Pluma: tema, idioma y textos (`t('...')` en la página, traducidos con `T()`) se escriben en
+  el HTML al servirlo (`/*PLUMA_CFG*/`). Ajuste `youtube_ligero` (Configuración > YouTube y vídeo), encendido.
+- Lo que no hace (directos, Shorts, Studio, compras, music.youtube.com, otras pestañas del canal) es el YouTube de
+  siempre. Si una llamada o la lectura falla, la página va a la misma dirección con `pluma_normal=1` (esa dirección,
+  en esa pestaña); el botón «YouTube normal», con `pluma_normal=2` (todo YouTube en esa pestaña hasta salir de
+  YouTube, con un aviso para volver). Pluma cancela esa navegación y va a la dirección sin la marca: YouTube y la
+  barra nunca la ven.
+- Vídeo: sin el reproductor de YouTube. Al cargar la página, `video.cpp` le pide `__pluma.extract()` (la respuesta
+  visionOS con su HLS, como a la página de YouTube) y mpv entra en `#movie_player` en cuanto dibuja, sin esperar a
+  ninguna página. La página se queda despierta y a la vista (no hay foto ni sueño: es ligera); el reproductor está
+  fijo arriba (sticky) y la página corre por debajo. Cuatro veces por segundo `__pluma.tick()`: el segundo de mpv
+  entra; el sitio del hueco, el segundo de una marca de tiempo pulsada y si las sugerencias tapan el hueco (mpv se
+  esconde: nada de la página se puede pintar encima de su ventana) salen. Al acabar, «A continuación» (la lista o el
+  recomendado) a los 8 s; «Página de YouTube» o un fallo de mpv, el YouTube normal en ese segundo.
+- Historial: las URL de `playbackTracking` (de la respuesta visionOS), con `s.` cambiado a `www.` y `ver=2`, `c=web`,
+  `cver`, `cpn` como YouTube.js: `playback` al empezar y `watchtime` cada 30 s y al salir.
+- Pruebas de los lectores: `node tools\youtube-test.js` (respuestas reales recortadas en `tools\yt-respuestas`).
+  Probar el flujo con sesión no se puede en la instancia de prueba: va sin cuenta.
 
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en

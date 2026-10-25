@@ -81,6 +81,7 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"version\":" + json_escape(update_version());
     o += L",\"suggest\":" + std::wstring(b(g_set.suggest_top));
     o += L",\"video\":" + std::wstring(b(g_set.native_video));
+    o += L",\"ytlite\":" + std::wstring(b(g_set.youtube_lite));
     o += L",\"videoAvailable\":" + std::wstring(b(video_available()));
     o += L",\"resident\":" + std::wstring(b(g_set.resident));
     o += L",\"startup\":" + std::wstring(b(startup_on()));
@@ -137,6 +138,7 @@ static void apply(const std::wstring &key, const Json &val) {
     else if (key == L"update") { g_set.update = (int)val.n; settings_save(); }
     else if (key == L"suggest") { g_set.suggest_top = val.b; settings_save(); ui_ntp_changed(); }
     else if (key == L"video") { g_set.native_video = val.b; settings_save(); video_settings_changed(); }
+    else if (key == L"ytlite") { g_set.youtube_lite = val.b; settings_save(); youtube_settings_changed(); }
     else if (key == L"resident") { g_set.resident = val.b; settings_save(); }
     else if (key == L"spare") { g_set.spare = val.b; settings_save(); }
     else if (key == L"sleep") { g_set.sleep_s = std::max(10, (int)val.n); settings_save(); }
@@ -166,6 +168,7 @@ void settings_attach(ICoreWebView2 *v) {
             LPWSTR uri = NULL;
             if (FAILED(a->get_Request(&req)) || FAILED(req->get_Uri(&uri))) return S_OK;
             std::wstring u = uri; CoTaskMemFree(uri);
+            if (!settings_page_url(u)) return S_OK;   // (another filter's request: youtube.cpp)
             int id = settings_page_url(u) ? page_resource(u) : 0;
             std::string body = id ? page_html(id) : "";
             bool page = id != 0;
