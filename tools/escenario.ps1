@@ -20,6 +20,9 @@ $env:PLUMA_INSTANCIA = $Nombre; $env:PLUMA_DEPURAR = "$Puerto"
 node "$T\cdp.js" $Puerto youtube.com "(() => { const v = document.querySelector('video'); if (v) v.pause(); return 1; })()" | Out-Null
 foreach ($u in $urls[1..6]) { & $exe $u; Start-Sleep -Milliseconds 1800 }
 Start-Sleep $Espera
-"=== $Nombre  ($($Ajustes -join ', '))"
+$os = Get-CimInstance Win32_OperatingSystem
+$load = [math]::Round(100 - $os.FreePhysicalMemory * 100.0 / $os.TotalVisibleMemorySize)
+# over ~80 % Windows itself trims every process and the numbers come out too low: not a valid measurement
+"=== $Nombre  ($($Ajustes -join ', '))   memoria del PC en uso: $load %$(if ($load -ge 80) { '  (NO VALE: Windows recortando)' })"
 & "$T\medir.ps1" -Nombre $Nombre
 if (-not $Abierto) { & "$T\prueba.ps1" -Nombre $Nombre -Salir | Out-Null }

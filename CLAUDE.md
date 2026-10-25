@@ -51,20 +51,25 @@ Antes de enseñar algo: captura y mirarla.
 
 ## La RAM (lo que más le importa; medir antes y después de cada cambio)
 Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada como el Administrador de tareas:
-- Su Firefox con 7 pestañas: 3.100 MB. Pluma con las 7 de `escenario.ps1`: 887-960 MB todas vivas; con las de fondo
-  congeladas 214-271; soltando las de fondo salvo las 2 últimas, 140-183. Con 3 pestañas, 134-145.
+- Su Firefox con 7 pestañas: 3.100 MB. Pluma con las 7 de `escenario.ps1` (Google delante): **118 MB** con todo lo de
+  hoy (gráfica 16, motor 40, página 44, red 10, interfaz 4); antes, 887-960 todas vivas y 214-271 solo congelándolas.
+  3 pestañas: 122-130. Medir de una en una: con el PC por encima de ~80 % de memoria Windows recorta todo por su cuenta
+  y salen cifras falsas (70 MB); `escenario.ps1` apunta la memoria del PC en uso.
 - Una pestaña ligera (Google): 183 MB usándola, 109 MB tras un rato quieto. Cerrado y en memoria: 13 MB.
-- Lo que queda con una web delante: la gráfica 45-120 MB (texturas; en una gráfica integrada son RAM y no se pueden
-  devolver: EmptyWorkingSet no le quita nada, y recortarla o avisarle de poca memoria no la baja), el motor 25-70,
-  la página (Google ~45, YouTube 220-380, igual que en cualquier navegador), la interfaz 3-15, la red ~10.
+- Lo que queda con una web delante: la gráfica 45-55 MB recortada (sin recortar se queda 90-120 con lo que dejan los
+  vídeos y las webs pesadas, y no lo suelta sola), el motor 25-70, la página (Google ~45, YouTube 220-380, igual que en
+  cualquier navegador), la interfaz 3-15, la red ~10.
 - Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja); soltadas al minuto salvo las 2 últimas
   vistas (`recientes`), que aguantan 20 min; caché de imágenes de la gráfica con tope de 32 MB
   (`--force-gpu-mem-discardable-limit-mb`); sin vista de reserva (`reserva=0`: crear una vista son ~35 ms); procesos
-  sin nada visible (y el motor, la red y la interfaz 4 s después de cada carga) devuelven su memoria con
+  sin nada visible (y el motor, la red, la gráfica y la interfaz 4 s después de cada carga) devuelven su memoria con
   EmptyWorkingSet; al cerrar la ventana se congela todo (lo que suena se suelta) y todo devuelve su memoria.
-- Probado y descartado: encoger las vistas congeladas, recortar la gráfica, la gráfica NVIDIA
-  (`--force_high_performance_gpu`), un «poca memoria» momentáneo en la página a la vista. Ninguno bajaba nada.
-- No hacer: quitar el aislamiento de sitios (seguridad) ni recortar la gráfica o la página a la vista (tirones).
+- Recortar la gráfica tras cada carga: medido con `tools\tirones.js` (25 s de scroll a 144 Hz, recorte a mitad) igual
+  que sin recortar (4 y 3 fotogramas de más de 25 ms; mediana 6,9 ms en los dos). Un EmptyWorkingSet lanzado desde
+  PowerShell no le hace nada (no tiene permiso): probar siempre desde Pluma.
+- Probado y descartado: encoger las vistas congeladas, la gráfica NVIDIA (`--force_high_performance_gpu`), un «poca
+  memoria» momentáneo en la página a la vista. Ninguno bajaba nada.
+- No hacer: quitar el aislamiento de sitios (seguridad) ni recortar la página a la vista mientras se usa.
 
 ## Seguridad
 - Motor de Edge, actualizado por Windows. Páginas en AppContainer (`msWebView2RendererAppContainer`), aislamiento de

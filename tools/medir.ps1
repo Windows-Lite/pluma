@@ -3,7 +3,9 @@
 param([string]$Nombre = 't1', [switch]$Detalle)
 $folder = if ($Nombre) { "Pluma\prueba.$Nombre\webview2" } else { 'Pluma\webview2' }
 $wv = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -like "*$folder*" -and ($Nombre -or $_.CommandLine -notlike '*prueba.*') }
-$hostp = Get-CimInstance Win32_Process -Filter "Name='Pluma.exe'"
+# the window's own process: the parent of this profile's engine (several test instances may be running)
+$engine = $wv | Where-Object { $_.CommandLine -notmatch '--type=' } | Select-Object -First 1
+$hostp = Get-CimInstance Win32_Process -Filter "Name='Pluma.exe'" | Where-Object { $engine -and $_.ProcessId -eq $engine.ParentProcessId }
 $ids = @($wv.ProcessId) + @($hostp.ProcessId)
 $perf = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $ids -contains [int]$_.IDProcess }
 $rows = foreach ($p in $perf) {

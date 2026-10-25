@@ -521,8 +521,9 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
 // a few seconds after a page has loaded, the engine gives back what loading it left behind (at most every half
 // minute; never the graphics nor the page on screen)
 static void trim_after_load() {
+    // after a page has loaded or a tab was let go
     static double last = -1e9;
-    if (now_ms() - last < 30000) return;
+    if (now_ms() - last < 20000) return;
     last = now_ms();
     SetTimer(g_win, 0x51A6, 4000, [](HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); tabs_trim(TRIM_IDLE); });
 }
@@ -686,6 +687,9 @@ void tabs_preload(const std::wstring &url) {
         Tab *t = tab_by_id(id);   // still waiting, or already a tab
         if (!t || !c) { if (c) c->Close(); return; }
         attach(t, c);
+        // silent until it is asked for: a video loading out of sight must not start sounding
+        ComPtr<ICoreWebView2_8> v8;
+        if (tab_index(id) < 0 && SUCCEEDED(t->view.As(&v8))) v8->put_IsMuted(TRUE);
         std::wstring u = t->pending;
         t->pending.clear();
         t->view->Navigate(u.c_str());
@@ -704,6 +708,8 @@ static bool use_preload(Tab *t, const std::wstring &url) {
     ui_release_icon(t);
     g_tabs[i] = std::move(p);   // the empty tab gives its place to the page already on its way
     Tab *n = g_tabs[i].get();
+    ComPtr<ICoreWebView2_8> v8;
+    if (n->view && SUCCEEDED(n->view.As(&v8))) v8->put_IsMuted(FALSE);
     if (n->view && !n->loading) history_add(n->url, n->title);
     ui_tab_icon_changed(n);
     if (i == g_active) tab_activate(i);
@@ -839,7 +845,7 @@ void tabs_tick() {
         int newer = 0;
         for (auto &o : g_tabs) if (o.get() != t && o->view && o->hidden_since > t->hidden_since && !o->audible) newer++;
         double limit = newer < g_set.keep_recent ? g_set.recent_discard_min * 60.0 : g_set.discard_s;
-        if (limit > 0 && hidden > limit * 1000.0) { release_view(t); continue; }
+        if (limit > 0 && hidden > limit * 1000.0) { release_view(t); trim_after_load(); continue; }   // and what it left behind goes too
         if (!oldest || t->hidden_since < oldest->hidden_since) oldest = t;
     }
     if (pressure && oldest && now - oldest->hidden_since > 10000) {
@@ -902,10 +908,11 @@ void tabs_trim(int mode) {
                 if (FAILED(list->GetValueAtIndex(i, &x)) || FAILED(x->get_ProcessInfo(&pi))) continue;
                 INT32 pid = 0; COREWEBVIEW2_PROCESS_KIND kind;
                 pi->get_ProcessId(&pid); pi->get_Kind(&kind);
-                // while on screen the graphics keep everything (no stutter); the engine too, unless the PC is idle
+                // frozen tabs: only page processes. After a load and when idle, also the engine, the network and the
+                // graphics, which keep 40-60 MB of what heavy pages and videos left behind (it does not come back:
+                // measured), without a single extra stutter in 25 s of scrolling at 144 Hz (tools/tirones.js)
                 if (mode == TRIM_FROZEN && kind != COREWEBVIEW2_PROCESS_KIND_RENDERER) continue;
-                static bool gpu_test = [] { wchar_t v[4] = L""; return GetEnvironmentVariableW(L"PLUMA_RECORTAR_GRAFICA", v, 4) > 0; }();
-                if (mode == TRIM_IDLE && kind == COREWEBVIEW2_PROCESS_KIND_GPU && !gpu_test) continue;
+
                 bool needed = false;
                 ComPtr<ICoreWebView2FrameInfoCollection> frames;
                 if (SUCCEEDED(x->get_AssociatedFrameInfos(&frames)) && frames) {
