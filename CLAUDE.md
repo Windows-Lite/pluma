@@ -34,6 +34,11 @@ código y commits en inglés; nada de em dashes.
   tabla da el del idioma elegido (`idioma`, vacío = el de Windows; si no lo tenemos, inglés). Texto nuevo de la interfaz:
   `T()` y su fila en la tabla. Los registros (`log_line`) siguen en castellano. El motor recibe el mismo idioma al
   arrancar (sus menús y el Accept-Language).
+- `src/settings.cpp` + `src/settings.html`: la página de configuración (`pluma://settings`, ⋯ > Configuración), como la
+  de Edge: buscador arriba, secciones a la izquierda separadas por divisores. El HTML va dentro del exe (RCDATA 200) y se
+  sirve en `https://pluma.local/` (WebResourceRequested); habla con Pluma por `chrome.webview.postMessage`, encendido solo
+  en esa página (las demás lo tienen apagado) y con el origen comprobado. Sus textos van en castellano en `data-t` y Pluma
+  los traduce con `T()`. Idioma, actualizaciones, YouTube y «sugerir» salieron del menú ⋯ y viven aquí.
 - `src/update.cpp`: actualizaciones desde las releases del repo (público). La versión va dentro del exe
   (`PLUMA_VERSION`, la pone release.yml); una build local es «dev» y nunca se actualiza. Busca 30 s después de arrancar y
   cada 6 h; baja `pluma-vX.Y.Z.zip`, lo compara con su `.sha256` y lo deja en `actualizacion\`. Entra al cerrar la

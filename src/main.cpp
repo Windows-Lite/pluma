@@ -186,6 +186,7 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"tema", g_set.theme == 1 ? L"oscuro" : g_set.theme == 2 ? L"sistema" : L"claro", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"fuente", g_set.font.c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"idioma", g_set.lang.c_str(), f.c_str());
+    settings_page_refresh_soon();
     WritePrivateProfileStringW(L"pluma", L"actualizar", g_set.update == 0 ? L"no" : g_set.update == 1 ? L"avisar" : L"auto", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"dormir_s", std::to_wstring(g_set.sleep_s).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"descargar_s", std::to_wstring(g_set.discard_s).c_str(), f.c_str());

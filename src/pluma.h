@@ -89,7 +89,19 @@ void update_finish();              // at start: what the last update left
 void update_init();                // checks from now on, if the build and the settings allow it
 void update_check_now();           // the menu's "check now"
 void update_on_hide();             // the window was closed: a waiting update goes in
-void update_on_quit();             // Pluma closes for good: a waiting update goes in for the next start
+void update_on_quit();
+// ---------------------------------------------------------------- the settings page (settings.cpp)
+bool settings_page_url(const std::wstring &u);              // https://pluma.local/...: Pluma's own page
+std::wstring settings_page_display(const std::wstring &u);  // ... shown as pluma://...
+std::wstring settings_page_from_typed(const std::wstring &typed);   // pluma://settings typed -> its url ("" if not)
+void settings_open();                // opens it (or goes to the tab that has it)
+void settings_attach(ICoreWebView2 *v);   // every view: serves the page and listens to it
+void settings_page_refresh();        // the open settings pages show what changed
+void settings_page_refresh_soon();
+void data_clear_all();               // cookies, cache and history (not passwords)
+void ui_ntp_changed();               // the new tab page's rows are read again
+void ui_open_menu_page(const std::wstring &which);   // the menu, open at "ext" or "scripts"
+std::wstring lang_name(const wchar_t *code);         // a language by its own name ("" = Windows's)             // Pluma closes for good: a waiting update goes in for the next start
 
 // ---------------------------------------------------------------- languages (lang.cpp)
 const wchar_t *T(const wchar_t *es);   // a text of the interface, written in Spanish, in the person's language

@@ -537,6 +537,7 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         float cy = (r.top + r.bottom) / 2;
         float ix = compact && !active ? (r.left + r.right) / 2 : r.left + S(18);
         if (t->loading && t->view) { draw_spinner(rt, g_br.Get(), ix, cy, S(6.5f), now, p.accent); busy = true; }
+        else if (settings_page_url(t->url)) glyph(rt, g_br.Get(), g_f.icon.Get(), G_GEAR, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.text);
         else if (t->incognito) {
             // incognito: Edge's InPrivate sign instead of the site's icon, in the accent
             glyph(rt, g_br.Get(), g_f.icon.Get(), G_INPRIVATE, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.accent);
@@ -693,7 +694,7 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     }
     bool focused = ui_address_focused();
     float ix = a.left + S(20), cy = (a.top + a.bottom) / 2;
-    std::wstring u = t ? t->url : L"";
+    std::wstring u = t ? settings_page_display(t->url) : L"";
     wchar_t ig = G_SEARCH;
     D2D1_COLOR_F ic = p.sub;
     if (!focused && !u.empty()) {
@@ -932,7 +933,8 @@ static void place_edit() {
     SetWindowPos(g_edit, NULL, (int)(a.left + S(36)), (int)((a.top + a.bottom) / 2 - h / 2.0f), (int)(right - a.left - S(36)), h,
                  SWP_NOZORDER | SWP_NOACTIVATE);
 }
-void ui_set_address_text(const std::wstring &s) {
+void ui_set_address_text(const std::wstring &url) {
+    std::wstring s = settings_page_display(url);   // (Pluma's own pages: pluma://...)
     g_addr_text = s;
     if (!ui_address_focused()) { g_in_change = true; SetWindowTextW(g_edit, s.c_str()); g_in_change = false; }
     ui_invalidate();
@@ -1239,13 +1241,13 @@ static bool sug_commit(bool new_tab) {
 
 // ---------------------------------------------------------------- the menu
 // each language by its own name; "" is Windows's
-static std::wstring lang_name(const wchar_t *code) {
+std::wstring lang_name(const wchar_t *code) {
     static const struct { const wchar_t *code, *name; } names[] = { { L"es", L"Español" }, { L"en", L"English" }, { L"pt", L"Português" },
                                                                     { L"fr", L"Français" }, { L"de", L"Deutsch" }, { L"it", L"Italiano" } };
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_LANG, PAGE_UPDATE, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1374,6 +1376,25 @@ void ui_open_menu() {
     ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
     open_menu_page(PAGE_MAIN, { a.x, a.y, b.x, b.y });
 }
+void data_clear_all() {
+    ComPtr<ICoreWebView2_13> v13; ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Profile2> p2;
+    Tab *t = nullptr;
+    for (auto &x : g_tabs) if (x->view && !x->incognito) { t = x.get(); break; }
+    history_clear();
+    if (t && SUCCEEDED(t->view.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && SUCCEEDED(pr.As(&p2)))
+        p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE |
+                              COREWEBVIEW2_BROWSING_DATA_KINDS_DOWNLOAD_HISTORY | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY),
+                              Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>([](HRESULT) -> HRESULT { ui_toast(T(L"Datos borrados: cookies, caché e historial")); return S_OK; }).Get());
+    else ui_toast(T(L"Historial borrado"));
+}
+void ui_ntp_changed() { g_ntp_filled = false; ui_invalidate(); }
+void ui_open_menu_page(const std::wstring &which) {
+    // the settings page's "Extensiones" and "Scripts": the menu, open at that page
+    D2D1_RECT_F m = menu_rect();
+    POINT a = { (LONG)m.left, (LONG)m.top }, b = { (LONG)m.right, (LONG)m.bottom };
+    ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+    open_menu_page(which == L"scripts" ? PAGE_SCRIPTS : PAGE_EXT, { a.x, a.y, b.x, b.y });
+}
 static MItem item(const std::wstring &text, wchar_t icon, const std::wstring &hint, std::function<void()> act) {
     MItem m; m.text = text; m.icon = icon; m.hint = hint; m.act = act; return m;
 }
@@ -1392,8 +1413,6 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(re);
         v.push_back(sep());
         MItem z; z.kind = 5; z.text = L"Zoom"; z.icon = G_ZOOM; v.push_back(z);
-        v.push_back(item(T(L"Buscar en la página"), G_SEARCH, T(L"Ctrl+F"), [] { after_menu([] { tab_find(); }); }));
-        v.push_back(item(T(L"Imprimir"), G_PRINT, T(L"Ctrl+P"), [] { after_menu([] { tab_print(); }); }));
         v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { after_menu([] { tab_downloads(); }); }));
         v.push_back(sep());
         size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
@@ -1403,19 +1422,8 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sub(T(L"Buscador"), G_GLOBE, engine_name(g_set.engine), PAGE_ENGINE));
         v.push_back(sub(T(L"Tema"), G_COLOR, g_set.theme == 1 ? T(L"Oscuro") : g_set.theme == 2 ? T(L"Como Windows") : T(L"Claro"), PAGE_THEME));
         v.push_back(sub(T(L"Fuente"), G_FONT, g_set.font.empty() ? T(L"La de Windows") : g_set.font, PAGE_FONT));
-        v.push_back(sub(T(L"Idioma"), G_LANG, lang_name(g_set.lang.empty() ? L"" : lang_code()), PAGE_LANG));
-        v.push_back(sub(T(L"Actualizaciones"), G_UPDATE, update_version(), PAGE_UPDATE));
-        if (video_available()) {
-            // YouTube in Pluma's own player (a fraction of the page's memory)
-            MItem yt; yt.kind = 3; yt.text = T(L"YouTube en el reproductor de Pluma"); yt.on = g_set.native_video;
-            yt.act = [] { g_set.native_video = !g_set.native_video; settings_save(); video_settings_changed(); };
-            v.push_back(yt);
-        }
-        // the new tab page: the sites visited most, while the person has no pages of their own there
-        MItem st; st.kind = 3; st.text = T(L"Sugerir lo que más visito"); st.on = g_set.suggest_top;
-        st.act = [] { g_set.suggest_top = !g_set.suggest_top; settings_save(); g_ntp_filled = false; };
-        v.push_back(st);
         v.push_back(sub(T(L"Borrar datos"), G_ERASE, L"", PAGE_CLEAR));
+        v.push_back(item(T(L"Configuración"), G_GEAR, L"", [] { after_menu([] { settings_open(); }); }));
         v.push_back(item(T(L"Herramientas de desarrollo"), G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
         v.push_back(sep());
         v.push_back(note(T(L"Pluma usa ahora ") + std::to_wstring(engine_memory_mb()) + T(L" MB de memoria")));
@@ -1480,40 +1488,10 @@ static std::vector<MItem> build_page(int page) {
         if (std::find(std::begin(fams), std::end(fams), g_set.font) == std::end(fams)) {
             MItem m; m.kind = 4; m.text = g_set.font; m.on = true; v.push_back(m);
         }
-    } else if (page == PAGE_LANG) {
-        v.push_back(back(T(L"Idioma")));
-        for (const wchar_t *c : { L"", L"es", L"en", L"pt", L"fr", L"de", L"it" }) {
-            MItem m; m.kind = 4; m.text = lang_name(c); m.on = g_set.lang == c;
-            std::wstring code = c;
-            m.act = [code] { g_set.lang = code; settings_save(); ui_invalidate(); menu_rebuild(); panel_render(g_menu); };
-            v.push_back(m);
-        }
-    } else if (page == PAGE_UPDATE) {
-        v.push_back(back(T(L"Actualizaciones")));
-        const wchar_t *modes[] = { T(L"Nunca"), T(L"Avisarme"), T(L"Automáticas") };
-        for (int i : { 2, 1, 0 }) {
-            MItem m; m.kind = 4; m.text = modes[i]; m.on = g_set.update == i;
-            m.act = [i] { g_set.update = i; settings_save(); menu_rebuild(); panel_render(g_menu); };
-            v.push_back(m);
-        }
-        v.push_back(sep());
-        v.push_back(item(T(L"Buscar ahora"), G_RELOAD, L"", [] { after_menu([] { update_check_now(); }); }));
-        v.push_back(note(T(L"Versión ") + std::wstring(update_version())));
     } else if (page == PAGE_CLEAR) {
         v.push_back(back(T(L"Borrar datos")));
         v.push_back(item(T(L"El historial de Pluma"), G_CLOCK, L"", [] { history_clear(); menu_close(); ui_toast(T(L"Historial borrado")); }));
-        MItem all = item(T(L"Todo menos las contraseñas"), G_ERASE, L"", [] {
-            ComPtr<ICoreWebView2_13> v13; ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Profile2> p2;
-            Tab *t = nullptr;
-            for (auto &x : g_tabs) if (x->view) { t = x.get(); break; }
-            history_clear();
-            if (t && SUCCEEDED(t->view.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && SUCCEEDED(pr.As(&p2)))
-                p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE |
-                                      COREWEBVIEW2_BROWSING_DATA_KINDS_DOWNLOAD_HISTORY | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY),
-                                      Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>([](HRESULT) -> HRESULT { ui_toast(T(L"Datos borrados: cookies, caché e historial")); return S_OK; }).Get());
-            else ui_toast(T(L"Historial borrado"));
-            menu_close();
-        });
+        MItem all = item(T(L"Todo menos las contraseñas"), G_ERASE, L"", [] { data_clear_all(); menu_close(); });
         all.danger = true;
         v.push_back(all);
         v.push_back(note(T(L"Las cookies cierran tus sesiones en las webs.")));
