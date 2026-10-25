@@ -47,11 +47,13 @@ node tools\clics.js <puerto> <url> <n>        lo que tarda un clic en llegar a l
 node tools\tirones.js <puerto> <url> <s>      fotogramas lentos al hacer scroll; tools\scroll.ps1 lo pasa por 3 webs
 node tools\rueda.js <puerto> <url> <pasos>    scroll con la rueda de verdad; con captura.exe ... burst n ms y
                                               tools\hoja.py, una hoja de fotogramas para ver qué parpadea
+tools\rafaga.ps1 [-Fotos 14] [-Cada 35] [-Acciones ...]  fotos seguidas hechas por Pluma (lentas: ~0,4 s cada una,
+                                              sirven para ver estados, no fluidez; los tiempos, en pluma.log)
 tools\foto.ps1 [-Nombre yt] -Salida x.png [-Acciones 'move x,y','click x,y','key 0x4B','char <','wait ms']
                                               foto hecha por Pluma con los controles del reproductor (captura.exe
                                               los saca opacos); las acciones van al reproductor y a sus controles
 ```
-En las pruebas, nada de pantalla completa: la ventana de prueba saldría encima de la pantalla del usuario.
+En las pruebas la pantalla completa (tecla F al reproductor) se queda fuera de la pantalla; el telón también.
 Las medidas varían mucho entre pasadas (la gráfica, de 47 a 120 MB en el mismo escenario): comparar ideas lanzándolas
 a la vez y repetir antes de creerse una diferencia pequeña.
 Clase de la ventana de prueba: `PlumaVentana.<nombre>`; paneles `PlumaPanel`; datos en `%LOCALAPPDATA%\Pluma\prueba.<nombre>`.
@@ -144,8 +146,14 @@ ya tenga esa funcionalidad»).
   páginas (un hilo de la ventana ocupado retrasa los clics en la web). Va en un hilo aparte; y la interfaz de Pluma no
   se recorta a sí misma mientras se ve. Medido con `clics.js` en YouTube: mediana 6 ms hasta verse el clic.
 - Pantalla completa: se entra y se sale con un fundido a negro (un «telón» por encima de todo, como Firefox: 80 ms,
-  el cambio debajo, 80 ms para que se dibuje y 170 ms de salida). De golpe, la página se veía colocada dos veces
-  (en la ventana y luego en la pantalla): «tosco, laggy» (25/10). Sin telón en las pruebas (taparía la pantalla del
-  usuario) ni con las animaciones de Windows apagadas; a los 2 s se quita pase lo que pase.
+  el cambio debajo, y 170 ms de salida en cuanto el reproductor dibuja al tamaño nuevo, como poco 70 ms y como mucho
+  300). De golpe, la página se veía colocada dos veces (en la ventana y luego en la pantalla): «tosco, laggy» (25/10).
+  El telón va en un hilo suyo, un paso por refresco (DwmFlush): con temporizadores de la ventana daba 3-6 pasos,
+  porque con un vídeo la cola de la ventana nunca se vacía y los WM_TIMER van los últimos. Durante el cambio, sin la
+  animación de maximizar de Windows (seguía después del telón). Sin animaciones de Windows, sin telón; a los 2 s se
+  quita pase lo que pase. En las pruebas la pantalla completa ocurre fuera de la pantalla, del tamaño del monitor
+  (y sin SetWindowPlacement, que devuelve a la pantalla una ventana que está fuera).
+- Doble clic en el vídeo: pantalla completa y el vídeo sigue como estaba; el segundo «soltar» se ignora (llegaba a
+  otra ventana tras el cambio de tamaño y dejaba el vídeo en pausa, 25/10).
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.

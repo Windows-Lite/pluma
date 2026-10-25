@@ -79,7 +79,7 @@ struct Video {
     double pos = 0, dur = 0, cached = 0, start_at = 0, volume = 100, speed = 1, gain_db = 0;
     bool paused = true, eof = false, buffering = false, muted = false, restarted = false, loaded = false;
     double asked = 0, last_move = 0, bezel_at = -1e9, vol_text_at = -1e9;
-    int bezel_icon = 0, serial = 0;
+    int bezel_icon = 0, serial = 0, osd_w = 0, osd_h = 0;
 };
 static int g_serial;
 static Video *V(Tab *t) { return t ? (Video *)t->video : nullptr; }
@@ -555,10 +555,11 @@ static bool start_player(Video *v, double start) {
     for (auto &o : opts) M.set_option_string(v->mpv, o.k, o.v.c_str());
     if (g_dev) { M.set_option_string(v->mpv, "log-file", utf8(g_state + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v"); }   // tests
     if (M.initialize(v->mpv) < 0) { M.terminate_destroy(v->mpv); v->mpv = nullptr; return false; }
-    static const char *props[] = { "time-pos", "duration", "pause", "eof-reached", "paused-for-cache", "demuxer-cache-time", "mute", "speed" };
+    static const char *props[] = { "time-pos", "duration", "pause", "eof-reached", "paused-for-cache", "demuxer-cache-time", "mute", "speed",
+                                   "osd-width", "osd-height" };
     static const int fmt[] = { MPV_FORMAT_DOUBLE, MPV_FORMAT_DOUBLE, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_DOUBLE,
-                               MPV_FORMAT_FLAG, MPV_FORMAT_DOUBLE };
-    for (int i = 0; i < 8; i++) M.observe_property(v->mpv, (uint64_t)i, props[i], fmt[i]);
+                               MPV_FORMAT_FLAG, MPV_FORMAT_DOUBLE, MPV_FORMAT_INT64, MPV_FORMAT_INT64 };
+    for (int i = 0; i < 10; i++) M.observe_property(v->mpv, (uint64_t)i, props[i], fmt[i]);
     M.set_wakeup_callback(v->mpv, post_events, (void *)(INT_PTR)v->tab);
     apply_volume(v);
     set_flag(v, "mute", v->muted);
@@ -1175,6 +1176,8 @@ static void on_property(Video *v, uint64_t code, mpv_event_property *p) {
     case 5: v->cached = std::max(0.0, d - v->pos); break;
     case 6: v->muted = f; if (t && v->stage == ST_ON) { t->audible = !v->paused && !f; ui_invalidate(); } break;
     case 7: if (d > 0) v->speed = d; break;
+    case 8: if (p->format == MPV_FORMAT_INT64) v->osd_w = (int)*(int64_t *)p->data; video_resized(); break;   // the size mpv draws at
+    case 9: if (p->format == MPV_FORMAT_INT64) v->osd_h = (int)*(int64_t *)p->data; video_resized(); break;
     }
 }
 static void sync_tick(Tab *t, Video *v);
@@ -1246,6 +1249,20 @@ static void menu_click(Video *v, int row) {
         g_menu_page = 0;
     }
 }
+// A double click: the first click already paused (or played), so it is undone, and the window goes fullscreen. The
+// release of the second click is ignored: it may even arrive elsewhere, the window having changed size under the
+// mouse (that left the video paused after leaving fullscreen, 25/10)
+static double g_skip_up_until;
+static void double_click(Video *v) {
+    toggle_pause(v);
+    set_fullscreen(!g_fullscreen);
+    g_skip_up_until = now_ms() + 600;
+}
+static bool skip_up() {
+    if (now_ms() >= g_skip_up_until) return false;
+    g_skip_up_until = 0;
+    return true;
+}
 static void track_leave(HWND h) {
     // (not in tests: they move the mouse with messages, and Windows, seeing the real one elsewhere, says it left)
     if (g_test) return;
@@ -1315,10 +1332,11 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         int c = hit(v, x, y);
         if (c == C_BAR) { g_drag_seek = true; SetCapture(h); g_mouse_x = x; v->pos = bar_time(v, x); seek_abs(v, v->pos, false); paint_all(v); }
         else if (c == C_VOLBAR) { g_drag_vol = true; SetCapture(h); set_volume(v, vol_at(x), false); }
-        else if (c == C_NONE && msg == WM_LBUTTONDBLCLK) { toggle_pause(v); set_fullscreen(!g_fullscreen); }
+        else if (c == C_NONE && msg == WM_LBUTTONDBLCLK) double_click(v);
         return 0;
     }
     case WM_LBUTTONUP: {
+        if (skip_up()) return 0;
         int c = hit(v, x, y);
         if (g_drag_seek) { g_drag_seek = false; ReleaseCapture(); v->pos = bar_time(v, x); seek_abs(v, v->pos, true); paint_all(v); return 0; }
         if (g_drag_vol) { g_drag_vol = false; ReleaseCapture(); return 0; }
@@ -1353,11 +1371,12 @@ static LRESULT CALLBACK video_wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (on) { SetFocus(h); if (g_menu_page) { g_menu_page = 0; paint_all(v); SetPropW(h, L"menu", (HANDLE)1); } }
         return 0;
     case WM_LBUTTONUP:
-        // a click pauses or plays; the two clicks of a double click do both, and the double click is fullscreen (as YouTube)
+        // a click pauses or plays; a double click is fullscreen, and the video goes on as it was (as YouTube)
+        if (skip_up()) return 0;
         if (on) { if (GetPropW(h, L"menu")) RemovePropW(h, L"menu"); else toggle_pause(v); }
         return 0;
     case WM_LBUTTONDBLCLK:
-        if (on) set_fullscreen(!g_fullscreen);
+        if (on) double_click(v);
         return 0;
     case WM_KEYDOWN: case WM_SYSKEYDOWN: {
         bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
@@ -1730,7 +1749,12 @@ void video_debug_shot(const std::wstring &path) {
                 for (int k = 0; k < 3; k++) d[k] = (BYTE)std::min(255.0f, s[k] * l->alpha + d[k] * (1 - a));
             }
     }
-    for (int i = 0; i < w * h; i++) ((BYTE *)bits)[i * 4 + 3] = 255;
+    float ca = curtain_alpha();   // the fullscreen curtain, over everything
+    for (int i = 0; i < w * h; i++) {
+        BYTE *d = (BYTE *)bits + i * 4;
+        if (ca > 0) for (int k = 0; k < 3; k++) d[k] = (BYTE)(d[k] * (1 - ca));
+        d[3] = 255;
+    }
     ComPtr<IWICImagingFactory> wic; ComPtr<IWICBitmap> wb; ComPtr<IWICStream> st; ComPtr<IWICBitmapEncoder> enc; ComPtr<IWICBitmapFrameEncode> fr;
     if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
         SUCCEEDED(wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppBGRA, w * 4, w * h * 4, (BYTE *)bits, &wb)) &&
@@ -1743,6 +1767,13 @@ void video_debug_shot(const std::wstring &path) {
         fr->Commit(); enc->Commit();
     }
     DeleteObject(bmp); DeleteDC(mdc);
+}
+bool video_settled() {
+    // the player on screen already draws at its window's size (the fullscreen curtain waits for it)
+    Video *v = V(active_tab());
+    if (!v || v->stage != ST_ON || !v->wnd || !v->mpv) return true;
+    RECT r; GetClientRect(v->wnd, &r);
+    return abs(v->osd_w - r.right) <= 2 && abs(v->osd_h - r.bottom) <= 2;
 }
 bool video_on(Tab *t) { Video *v = V(t); return v && v->stage == ST_ON; }
 double video_position(Tab *t) { Video *v = V(t); return v ? v->pos : 0; }

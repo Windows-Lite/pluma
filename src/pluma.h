@@ -207,11 +207,14 @@ void video_back_to_page(Tab *t, int how); // the page again: ASKED (and stays th
 void video_destroy(Tab *t);               // the tab or its page goes: the player too, the page untouched
 void video_layout();                      // window moved or resized, tab switched: the player follows
 bool video_on(Tab *t);
+bool video_settled();                     // the player on screen already draws at its new size
 double video_position(Tab *t);
 bool video_focus();                       // the keys to the player, if one is on screen
 void video_toggle_mute(Tab *t);
 void video_settings_changed();
 void video_debug_shot(const std::wstring &path);   // tests: the window with the controls' real transparency
+float curtain_alpha();                    // the fullscreen curtain's darkness now, 0..1 (main.cpp)
+void video_resized();                     // the player drew at a new size (the curtain may lift)
 
 // ---------------------------------------------------------------- userscripts (scripts.cpp)
 struct UserScript { std::wstring file, name, version, description, run_at; bool enabled = true, noframes = false;

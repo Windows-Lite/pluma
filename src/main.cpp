@@ -2,6 +2,8 @@
 #include "pluma.h"
 #include <unordered_map>
 #include <ctime>
+#include <atomic>
+#include <thread>
 
 HINSTANCE g_inst;
 HWND g_win, g_bar, g_edit;
@@ -15,7 +17,9 @@ std::vector<HistoryEntry> g_history;
 static std::wstring g_class = L"PlumaVentana", g_mutex = L"PlumaNavegadorUnico";
 static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_OPEN = WM_APP + 3;
 static const ULONG_PTR kCopyOpen = 0x504C55;   // WM_COPYDATA from a second Pluma.exe: urls, one per line
-static const UINT_PTR kTimerQuit = 1, kTimerHistory = 2, kTimerTabs = 3, kTimerSession = 4;
+static const UINT_PTR kTimerQuit = 1, kTimerHistory = 2, kTimerTabs = 3, kTimerSession = 4, kTimerBurst = 5;
+static int g_burst_left, g_burst_n;   // tests: a burst of pictures
+static double g_burst_t0;
 static LARGE_INTEGER g_t0, g_freq;
 static bool g_start_hidden, g_env_ready;
 static std::vector<std::wstring> g_waiting_urls;   // asked for before the engine was ready
@@ -385,21 +389,37 @@ static void restore_placement() {
     SetWindowPlacement(g_win, &wp);
     if (show == SW_SHOWMAXIMIZED) SetPropW(g_win, L"max", (HANDLE)1);
 }
+static RECT g_test_rect;   // tests: where the window was before fullscreen
+static RECT screen_rect() {
+    // the screen the window is on; in tests, a screen of that size where the window is (off the user's screen)
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoW(MonitorFromWindow(g_win, MONITOR_DEFAULTTONEAREST), &mi);
+    RECT r = mi.rcMonitor;
+    if (g_test) {
+        RECT w; GetWindowRect(g_win, &w);
+        if (g_fullscreen) return w;
+        OffsetRect(&r, w.left - r.left, w.top - r.top);
+    }
+    return r;
+}
 static void apply_fullscreen(bool on) {
     if (on == g_fullscreen) return;
     if (on) {
         g_before_fs.length = sizeof(g_before_fs);
         GetWindowPlacement(g_win, &g_before_fs);
+        GetWindowRect(g_win, &g_test_rect);
+        RECT m = screen_rect();
         g_fullscreen = true;
-        MONITORINFO mi = { sizeof(mi) };
-        GetMonitorInfoW(MonitorFromWindow(g_win, MONITOR_DEFAULTTONEAREST), &mi);
         SetWindowLongW(g_win, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
-        SetWindowPos(g_win, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
-                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+        SetWindowPos(g_win, g_test ? HWND_BOTTOM : HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top,
+                     SWP_FRAMECHANGED | SWP_NOOWNERZORDER | (g_test ? SWP_NOACTIVATE : 0));
     } else {
         g_fullscreen = false;
         SetWindowLongW(g_win, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN);
-        SetWindowPlacement(g_win, &g_before_fs);
+        // (tests: not SetWindowPlacement, which brings a window off the screen back onto it)
+        if (g_test) SetWindowPos(g_win, HWND_BOTTOM, g_test_rect.left, g_test_rect.top, g_test_rect.right - g_test_rect.left,
+                                 g_test_rect.bottom - g_test_rect.top, SWP_NOACTIVATE);
+        else SetWindowPlacement(g_win, &g_before_fs);
         SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
     }
     ui_layout();
@@ -408,60 +428,90 @@ static void apply_fullscreen(bool on) {
 // Into fullscreen and out through black, as Firefox does: a curtain over the screen darkens in 80 ms, the window
 // changes under it, and it lifts in 170 ms once the page (or the player) has drawn itself at its new size. Changed
 // at once, the page was seen laid out twice, first in the window, then on the screen ("tosco, laggy", 25/10).
-static HWND g_curtain;
-static int g_curtain_phase;            // 0 none, 1 darkening, 2 waiting for the new size to draw, 3 lifting
-static bool g_curtain_want;
-static double g_curtain_t0, g_curtain_began;
-static const double kCurtainIn = 80, kCurtainHold = 80, kCurtainOut = 170;
-static LRESULT CALLBACK curtain_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg != WM_TIMER) return DefWindowProcW(h, msg, wp, lp);
-    double now = now_ms(), k;
-    BYTE a = 255;
-    if (now - g_curtain_began > 2000) g_curtain_phase = 4;   // whatever happened, never a black screen
-    if (g_curtain_phase == 1) {
-        k = std::min(1.0, (now - g_curtain_t0) / kCurtainIn);
-        a = (BYTE)lround(255 * (1 - (1 - k) * (1 - k)));
-        if (k >= 1) { apply_fullscreen(g_curtain_want); g_curtain_phase = 2; g_curtain_t0 = now_ms(); }
-    } else if (g_curtain_phase == 2) {
-        if (now - g_curtain_t0 >= kCurtainHold) { g_curtain_phase = 3; g_curtain_t0 = now; }
-    } else if (g_curtain_phase == 3) {
-        k = std::min(1.0, (now - g_curtain_t0) / kCurtainOut);
-        a = (BYTE)lround(255 * (1 - k) * (1 - k));
-        if (k >= 1) g_curtain_phase = 4;
+// The curtain lives on a thread of its own, one step per screen refresh: driven by the window's timers it got 3-6
+// steps instead of a dozen, as a playing video keeps the window's queue busy and timers come last (25/10).
+static const UINT WM_APP_CURTAIN = WM_APP + 30;   // from the curtain: wp 1 dark (change now), wp 2 gone
+static std::atomic<bool> g_curtain_busy{ false }, g_curtain_want{ false }, g_curtain_applied{ false }, g_curtain_settled{ false },
+                         g_curtain_abort{ false };
+static std::atomic<int> g_curtain_alpha{ 0 };
+static const double kCurtainIn = 80, kCurtainHold = 70, kCurtainHoldMax = 300, kCurtainOut = 170;
+float curtain_alpha() { return g_curtain_busy ? g_curtain_alpha / 255.0f : 0; }
+void video_resized() { if (g_curtain_applied) g_curtain_settled = video_settled(); }
+static void curtain_run(RECT m) {
+    HWND h = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+                             L"PlumaTelon", L"", WS_POPUP, 0, 0, 0, 0, NULL, NULL, g_inst, NULL);
+    if (h) {
+        SetLayeredWindowAttributes(h, 0, 0, LWA_ALPHA);
+        SetWindowPos(h, HWND_TOPMOST, m.left, m.top, m.right - m.left, m.bottom - m.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
-    if (g_curtain_phase == 4) {
-        KillTimer(h, 1);
-        ShowWindow(h, SW_HIDE);
-        g_curtain_phase = 0;
-        if (g_fullscreen != g_curtain_want) apply_fullscreen(g_curtain_want);
-        return 0;
+    double began = now_ms(), t0 = began, last = began;
+    int phase = h ? 1 : 0, steps = 0;
+    double t_dark = 0, t_lift = 0;
+    if (!h) PostMessageW(g_win, WM_APP_CURTAIN, 1, 0);   // no curtain: change at once
+    while (phase && !g_curtain_abort) {
+        DwmFlush();   // the next screen refresh
+        double now = now_ms();
+        if (now - last < 2) Sleep(4);   // (nothing to compose: DwmFlush does not wait)
+        now = now_ms(); last = now;
+        MSG msg;
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+        if (now - began > 2000) break;   // whatever happened, never a black screen
+        BYTE a = 255;
+        steps++;
+        if (phase == 1) {
+            double k = std::min(1.0, (now - t0) / kCurtainIn);
+            a = (BYTE)lround(255 * (1 - (1 - k) * (1 - k)));
+            if (k >= 1) { phase = 2; PostMessageW(g_win, WM_APP_CURTAIN, 1, 0); t0 = 0; t_dark = now - began; }
+        } else if (phase == 2) {
+            // the page gets a moment to lay itself out; Pluma's player says when it draws at the new size
+            if (g_curtain_applied && t0 == 0) t0 = now;
+            if (t0 > 0 && (now - t0 >= kCurtainHoldMax || (now - t0 >= kCurtainHold && g_curtain_settled))) { phase = 3; t0 = now; t_lift = now - began; }
+        } else if (phase == 3) {
+            double k = std::min(1.0, (now - t0) / kCurtainOut);
+            a = (BYTE)lround(255 * (1 - k) * (1 - k));
+            if (k >= 1) phase = 0;
+        }
+        g_curtain_alpha = a;
+        SetLayeredWindowAttributes(h, 0, a, LWA_ALPHA);
     }
-    SetLayeredWindowAttributes(h, 0, a, LWA_ALPHA);
-    return 0;
+    if (g_dev) log_line(L"telón: " + std::to_wstring(steps) + L" pasos en " + std::to_wstring((int)(now_ms() - began)) + L" ms (negro a los " + std::to_wstring((int)t_dark) + L", sube a los " + std::to_wstring((int)t_lift) + L")");
+    if (h) DestroyWindow(h);
+    PostMessageW(g_win, WM_APP_CURTAIN, 2, 0);
+}
+static void curtain_message(WPARAM wp) {
+    // on the window's thread: the change itself, under the curtain; and the end
+    if (wp == 1) {
+        apply_fullscreen(g_curtain_want);
+        g_curtain_settled = video_settled();
+        g_curtain_applied = true;
+    } else {
+        g_curtain_busy = false;
+        BOOL off = FALSE;
+        DwmSetWindowAttribute(g_win, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
+        if (g_fullscreen != g_curtain_want) apply_fullscreen(g_curtain_want);   // asked again meanwhile
+    }
 }
 void set_fullscreen(bool on) {
-    if (g_curtain_phase) { g_curtain_want = on; return; }   // on its way: it ends where asked last
+    if (g_curtain_busy) { g_curtain_want = on; return; }   // on its way: it ends where asked last
     if (on == g_fullscreen) return;
-    // (tests run off the screen: a curtain would cover the user's; no curtain without Windows' animations either)
-    if (!g_motion || g_test || !IsWindowVisible(g_win) || IsIconic(g_win)) { apply_fullscreen(on); return; }
-    if (!g_curtain) {
+    // (no curtain without Windows' animations; in tests it goes off the screen too, over the test window)
+    if (!g_motion || !IsWindowVisible(g_win) || IsIconic(g_win)) { apply_fullscreen(on); return; }
+    static bool registered;
+    if (!registered) {
         WNDCLASSEXW wc = { sizeof(wc) };
-        wc.lpfnWndProc = curtain_proc; wc.hInstance = g_inst; wc.lpszClassName = L"PlumaTelon";
+        wc.lpfnWndProc = DefWindowProcW; wc.hInstance = g_inst; wc.lpszClassName = L"PlumaTelon";
         wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-        RegisterClassExW(&wc);
-        g_curtain = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-                                    L"PlumaTelon", L"", WS_POPUP, 0, 0, 0, 0, NULL, NULL, g_inst, NULL);
-        if (!g_curtain) { apply_fullscreen(on); return; }
+        registered = RegisterClassExW(&wc) != 0;
     }
-    MONITORINFO mi = { sizeof(mi) };
-    GetMonitorInfoW(MonitorFromWindow(g_win, MONITOR_DEFAULTTONEAREST), &mi);
-    SetLayeredWindowAttributes(g_curtain, 0, 0, LWA_ALPHA);
-    SetWindowPos(g_curtain, HWND_TOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
-                 mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     g_curtain_want = on;
-    g_curtain_phase = 1;
-    g_curtain_t0 = g_curtain_began = now_ms();
-    SetTimer(g_curtain, 1, 8, NULL);
+    g_curtain_applied = g_curtain_settled = g_curtain_abort = false;
+    g_curtain_alpha = 0;
+    g_curtain_busy = true;
+    // and not Windows' own maximize animation when the window goes back: it ran on after the curtain had lifted
+    BOOL off = TRUE;
+    DwmSetWindowAttribute(g_win, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
+    RECT m = screen_rect();
+    std::thread(curtain_run, m).detach();
 }
 static void show_window() {
     g_start_hidden = false;
@@ -480,7 +530,7 @@ static void show_window() {
 static void hide_window() {
     // closed but kept warm: the session is saved, the pages frozen and the memory given back (tabs_on_hide)
     ui_close_popups();
-    if (g_curtain_phase) { KillTimer(g_curtain, 1); ShowWindow(g_curtain, SW_HIDE); g_curtain_phase = 0; }
+    if (g_curtain_busy) { g_curtain_want = false; g_curtain_abort = true; }
     if (g_fullscreen) apply_fullscreen(false);   // (at once: the window goes)
     save_placement();
     if (IsZoomed(g_win)) SetPropW(g_win, L"max", (HANDLE)1); else RemovePropW(g_win, L"max");
@@ -643,12 +693,26 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_SHOW: open_urls({}); return 0;
     case WM_APP_QUIT: quit_now(); return 0;
+    case WM_APP_CURTAIN: curtain_message(wp); return 0;
     case WM_APP + 90: if (g_test) video_debug_shot(g_state + L"\\foto.png"); return 0;   // tests: a picture with the player's controls
+    case WM_APP + 91:
+        // tests: wp pictures, one every lp ms (foto-00.png...), to see a transition; with the time of each in the log
+        if (g_test) { g_burst_left = (int)wp; g_burst_n = 0; g_burst_t0 = now_ms(); SetTimer(h, kTimerBurst, (UINT)lp, NULL); }
+        return 0;
     case WM_TIMER:
         if (wp == kTimerQuit) { KillTimer(h, kTimerQuit); DestroyWindow(h); }
         else if (wp == kTimerHistory) { KillTimer(h, kTimerHistory); history_flush(); }
         else if (wp == kTimerTabs) tabs_tick();
         else if (wp == kTimerSession) { KillTimer(h, kTimerSession); session_save(); }
+        else if (wp == kTimerBurst) {
+            wchar_t name[32]; swprintf_s(name, L"\\foto-%02d.png", g_burst_n);
+            double t = now_ms() - g_burst_t0;
+            video_debug_shot(g_state + name);
+            log_line(L"foto " + std::to_wstring(g_burst_n) + L" a los " + std::to_wstring((int)t) + L" ms (telón " +
+                     std::to_wstring((int)lround(curtain_alpha() * 100)) + L" %, pantalla completa " + (g_fullscreen ? L"sí)" : L"no)"));
+            g_burst_n++;
+            if (--g_burst_left <= 0) KillTimer(h, kTimerBurst);
+        }
         return 0;
     case WM_ENDSESSION:
         if (wp) { if (IsWindowVisible(h)) { save_placement(); session_save(); } history_flush(); }
