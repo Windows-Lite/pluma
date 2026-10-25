@@ -426,10 +426,11 @@ void fullscreen_now(bool on) {
     tabs_layout_views();
 }
 void set_fullscreen(bool on) {
-    // with a zoom (zoom.cpp), unless Windows' animations are off
+    // with a zoom (zoom.cpp) for Pluma's video player; at once for a page (the page lays out its own fullscreen: a
+    // zoom of the whole page looked doubled and wrong in the user's recording, 25/10), and without Windows' animations
     if (zoom_busy()) { zoom_want(on); return; }   // on its way: it ends where asked last
     if (on == g_fullscreen) return;
-    if (!g_motion || !IsWindowVisible(g_win) || IsIconic(g_win)) { fullscreen_now(on); return; }
+    if (!g_motion || !IsWindowVisible(g_win) || IsIconic(g_win) || video_aspect() <= 0) { fullscreen_now(on); return; }
     zoom_start(on);
 }
 static void show_window() {

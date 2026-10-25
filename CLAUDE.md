@@ -125,6 +125,13 @@ ya tenga esa funcionalidad»).
   Con la Intel (`d3d11-adapter`) iría sin copias entre gráficas, pero su memoria de vídeo sale de la RAM y cuenta como
   de Pluma: 282 MB en vez de 91 (mpv solo, 140-180 frente a 72). Se queda la NVIDIA, por la RAM. En DXGI, en un
   portátil con dos gráficas la pantalla «cuelga» de la del proceso; la de verdad, con EnumDisplayDevices.
+- Elegido por el usuario el 25/10, con las cifras delante: el reproductor de Pluma siempre (~150 MB), no la página
+  normal con Pluma solo en pantalla completa (~385 en la ventana) ni la página siempre (~385). La página viva con su
+  vídeo parado y el reproductor de Pluma en su hueco no ahorra nada (322 MB la página sola): el ahorro es dormirla.
+- Pluma solo coge el vídeo mientras la página lo reproduce (en su grabación lo cogió en mitad de un doble clic en el
+  reproductor de la página, en pausa en 0:01, y ahí se quedó). Si mpv deja de avanzar 8 s sin pausa (30 cargando),
+  vuelve la página en ese segundo. La pantalla completa que pide la página va de golpe, sin zoom (el zoom de la
+  página entera se veía doble).
 - Clic en el vídeo: pausa a los 250 ms, como YouTube (medido en su página: espera a ver si hay un segundo clic, y en
   un doble clic no pausa nunca). Doble clic: pantalla completa y el vídeo sigue igual.
 - Controles: los del reproductor nuevo de YouTube («delhi»), medidos en su página: sus iconos SVG, píldoras

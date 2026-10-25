@@ -1432,11 +1432,23 @@ static void CALLBACK ctl_tick(HWND, UINT, UINT_PTR id, DWORD) {
     // watching, 123 with this; measured 25/10). On a thread of its own, and never the player's process
     static double last_trim = 0;
     if (now_ms() - last_trim > 20000 && active_tab()->suspended) { last_trim = now_ms(); tabs_trim(TRIM_IDLE); }
-    // the time and the bar, while they show: four times a second
-    if (g_ctl.at(now_ms()) > 0 && !g_drag_seek) {
+    // the time and the bar (repainted while they show), four times a second
+    if (!g_drag_seek) {
         double was = v->pos;
         refresh_pos(v);
-        if ((long long)was != (long long)v->pos || fabs(was - v->pos) >= 0.2) paint_all(v);
+        if (g_ctl.at(now_ms()) > 0 && ((long long)was != (long long)v->pos || fabs(was - v->pos) >= 0.2)) paint_all(v);
+        // a watchman: playing, not loading, and the time does not move for 8 s (or it loads for 30): the page takes
+        // over at that second, as when mpv fails
+        static double still_since = 0;
+        bool moving = fabs(was - v->pos) > 0.01;
+        if (moving || v->paused || v->eof || g_menu_page) still_since = 0;
+        else if (!still_since) still_since = now_ms();
+        else if (now_ms() - still_since > (v->buffering ? 30000 : 8000)) {
+            still_since = 0;
+            log_line(L"vídeo propio: mpv dejó de avanzar; sigue la página");
+            PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
+            return;
+        }
     }
     if (g_ctl.to <= 0 || v->paused || v->eof || g_menu_page || g_drag_seek || g_drag_vol) return;
     POINT pt;
@@ -1576,7 +1588,7 @@ static void CALLBACK sync_timer(HWND, UINT, UINT_PTR tid, DWORD) {
 static void sync_tick(Tab *t, Video *v) {
     // mpv waits, paused, a second ahead of the page; when the page gets there, the two swap
     if (!t || v->stage != ST_WAITING || !v->restarted) return;
-    if (now_ms() - v->asked > 45000) { video_destroy(t); return; }   // the page never got to play it
+    if (now_ms() - v->asked > 45000) { video_destroy(t); video_page_changed(t); return; }   // the page did not play it: later, then
     int id = t->id;
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (!p || !p.getCurrentTime) return null;"
             L" const r = p.getBoundingClientRect();"
@@ -1596,13 +1608,9 @@ static void sync_tick(Tab *t, Video *v) {
                          area.left + (LONG)((r.arr[2].n + r.arr[4].n) * k), area.top + (LONG)((r.arr[3].n + r.arr[5].n) * k) };
              IntersectRect(&pp, &pp, &area);
              if (st == 0) { video_destroy(t); return; }   // the video ended meanwhile
-             if (st == 2) {
-                 // paused on the page: take over, paused at its second
-                 seek_abs(v, pt, true);
-                 v->pos = pt;
-                 switch_now(t, v, false, pp);
-                 return;
-             }
+             // paused on the page: Pluma waits for it to play again. (Taking over paused, it took over in the middle
+             // of a double click on the page's player, paused at 0:01, and the person was left there, 25/10)
+             if (st != 1 || zoom_busy()) { SetTimer(g_msg, kSyncTimer + id, 300, sync_timer); return; }
              double gap = v->start_at - pt;
              if (st == 1 && gap <= 0.04) {
                  if (gap < -0.35) {
