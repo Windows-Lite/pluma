@@ -68,6 +68,7 @@ extern bool g_motion;   // Windows "Show animations"
 struct Settings {
     std::wstring engine = L"google";   // google, duckduckgo, bing, startpage, brave
     int theme = 2;                     // 0 light (as Mapea), 1 dark, 2 as Windows (the default)
+    int update = 2;                    // 0 never, 1 tell me, 2 automatic (the default; update.cpp)
     std::wstring lang;                 // the interface's language: es, en, pt, fr, de, it (empty = Windows's)
     std::wstring font;                 // the bar's typeface: a family installed in Windows or one in fuentes\ (empty = Windows's)
     int sleep_s = 45;                  // a hidden tab is frozen after this
@@ -81,6 +82,14 @@ struct Settings {
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
 extern Settings g_set;
+
+// ---------------------------------------------------------------- updates (update.cpp)
+const wchar_t *update_version();   // the release this is ("dev" for a local build)
+void update_finish();              // at start: what the last update left
+void update_init();                // checks from now on, if the build and the settings allow it
+void update_check_now();           // the menu's "check now"
+void update_on_hide();             // the window was closed: a waiting update goes in
+void update_on_quit();             // Pluma closes for good: a waiting update goes in for the next start
 
 // ---------------------------------------------------------------- languages (lang.cpp)
 const wchar_t *T(const wchar_t *es);   // a text of the interface, written in Spanish, in the person's language
@@ -112,6 +121,7 @@ void history_hide_site(const std::wstring &url, bool hide);           // off the
 void set_fullscreen(bool on);
 void app_quit();                          // closes Pluma for good (not just the window)
 void app_close_window();                  // what the window's X does
+void app_restart(bool hidden);            // starts Pluma.exe again (after an update) and closes this one
 std::wstring fixup_input(const std::wstring &typed);   // what was typed in the address bar -> the url to load
 
 extern HINSTANCE g_inst;

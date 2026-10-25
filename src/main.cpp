@@ -157,6 +157,8 @@ void settings_load() {
     g_set.theme = th == L"claro" ? 0 : th == L"oscuro" ? 1 : 2;
     g_set.font = ini_get(L"fuente", L"");
     g_set.lang = ini_get(L"idioma", L"");
+    std::wstring up = ini_get(L"actualizar", L"auto");
+    g_set.update = up == L"no" ? 0 : up == L"avisar" ? 1 : 2;
     g_set.sleep_s = std::max(10, _wtoi(ini_get(L"dormir_s", L"45").c_str()));
     g_set.discard_s = std::max(0, _wtoi(ini_get(L"descargar_s", L"60").c_str()));
     if (g_set.discard_s > 0 && g_set.discard_s < 10) g_set.discard_s = 10;
@@ -184,6 +186,7 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"tema", g_set.theme == 1 ? L"oscuro" : g_set.theme == 2 ? L"sistema" : L"claro", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"fuente", g_set.font.c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"idioma", g_set.lang.c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"actualizar", g_set.update == 0 ? L"no" : g_set.update == 1 ? L"avisar" : L"auto", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"dormir_s", std::to_wstring(g_set.sleep_s).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"descargar_s", std::to_wstring(g_set.discard_s).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"recientes", std::to_wstring(g_set.keep_recent).c_str(), f.c_str());
@@ -551,6 +554,7 @@ static void hide_window() {
     history_flush();
     ShowWindow(g_win, SW_HIDE);
     tabs_on_hide();
+    update_on_hide();
 }
 static void open_urls(const std::vector<std::wstring> &urls) {
     if (!g_env_ready) { for (auto &u : urls) g_waiting_urls.push_back(u); show_window(); return; }
@@ -570,6 +574,7 @@ static void quit_now() {
     ui_close_popups();
     if (IsWindowVisible(g_win)) { save_placement(); session_save(); }
     history_flush();
+    update_on_quit();
     SetTimer(g_win, kTimerQuit, 150, NULL);
 }
 
@@ -748,6 +753,14 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 void session_save_soon() { if (g_win) SetTimer(g_win, kTimerSession, 1500, NULL); }
 void app_quit() { quit_now(); }
 void app_close_window() { PostMessageW(g_win, WM_CLOSE, 0, 0); }
+void app_restart(bool hidden) {
+    // the new one waits for this one to go (the "saliendo" handover) and opens what there was: the session, or hidden
+    std::wstring cmd = L"\"" + g_root + L"\\Pluma.exe\"" + (hidden ? L" --oculto" : L"");
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    if (CreateProcessW(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, g_root.c_str(), &si, &pi)) { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); }
+    quit_now();
+}
 
 static std::wstring arg_to_url(const std::wstring &a) {
     // a file from the Explorer becomes a file:// address; anything else is taken as typed
@@ -852,6 +865,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         if (active_tab() && active_tab()->url.empty()) ui_focus_address(false);
         log_line(L"ventana a la vista en " + std::to_wstring((int)now_ms()) + L" ms");
     }
+    update_finish();
     history_load();
     pins_load();
     scripts_load();
@@ -862,6 +876,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         if (!g_tabs.empty()) tab_activate(g_active < 0 ? 0 : g_active);   // gives the one on screen its page
         if (!g_waiting_urls.empty()) { auto u = g_waiting_urls; g_waiting_urls.clear(); open_urls(u); }
         spare_prepare();
+        update_init();
     });
 
     MSG m;

@@ -25,6 +25,7 @@ Edge's engine (WebView2) behind a native interface of its own.</p>
   the bar's font to choose (Windows's own by default); the new tab shows the pages you add with the address's star
   (Ctrl+D).
 - **Languages**: Spanish, English, Portuguese, French, German and Italian; Windows's language by default.
+- **Updates**: automatic from this repo's releases (checked against their SHA-256, installed when the window closes), or just a notice, or off.
 
 ## Install
 

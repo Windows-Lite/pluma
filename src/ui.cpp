@@ -27,7 +27,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
-                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7 };
+                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -248,7 +248,8 @@ static bool page_on_screen() {
 static bool ntp_on_screen() { Tab *t = active_tab(); return !g_fullscreen && (!t || t->url.empty()); }
 float ui_band_height() {
     if (g_fullscreen) return 0;
-    return S(kTabRowH + kToolRowH) + S(kNoticeH) * g_notice_h.at(now_ms());
+    // the note's room is taken at once (the page is laid out once, not every frame); the card slides into it
+    return S(kTabRowH + kToolRowH) + S(kNoticeH) * g_notice_h.to;
 }
 
 // ---------------------------------------------------------------- layout of the tab row
@@ -358,7 +359,7 @@ static D2D1_RECT_F zoom_rect() {
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
 static D2D1_RECT_F notice_rect() {
     float y = S(kTabRowH + kToolRowH);
-    return R(0, y, g_geo.W, y + S(kNoticeH) * g_notice_h.at(now_ms()));
+    return R(0, y, g_geo.W, y + S(kNoticeH) * g_notice_h.to);
 }
 static D2D1_RECT_F notice_btn_rect() {
     D2D1_RECT_F n = notice_rect();
@@ -1244,7 +1245,7 @@ static std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_LANG, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_LANG, PAGE_UPDATE, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1403,6 +1404,7 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sub(T(L"Tema"), G_COLOR, g_set.theme == 1 ? T(L"Oscuro") : g_set.theme == 2 ? T(L"Como Windows") : T(L"Claro"), PAGE_THEME));
         v.push_back(sub(T(L"Fuente"), G_FONT, g_set.font.empty() ? T(L"La de Windows") : g_set.font, PAGE_FONT));
         v.push_back(sub(T(L"Idioma"), G_LANG, lang_name(g_set.lang.empty() ? L"" : lang_code()), PAGE_LANG));
+        v.push_back(sub(T(L"Actualizaciones"), G_UPDATE, update_version(), PAGE_UPDATE));
         if (video_available()) {
             // YouTube in Pluma's own player (a fraction of the page's memory)
             MItem yt; yt.kind = 3; yt.text = T(L"YouTube en el reproductor de Pluma"); yt.on = g_set.native_video;
@@ -1486,6 +1488,17 @@ static std::vector<MItem> build_page(int page) {
             m.act = [code] { g_set.lang = code; settings_save(); ui_invalidate(); menu_rebuild(); panel_render(g_menu); };
             v.push_back(m);
         }
+    } else if (page == PAGE_UPDATE) {
+        v.push_back(back(T(L"Actualizaciones")));
+        const wchar_t *modes[] = { T(L"Nunca"), T(L"Avisarme"), T(L"Automáticas") };
+        for (int i : { 2, 1, 0 }) {
+            MItem m; m.kind = 4; m.text = modes[i]; m.on = g_set.update == i;
+            m.act = [i] { g_set.update = i; settings_save(); menu_rebuild(); panel_render(g_menu); };
+            v.push_back(m);
+        }
+        v.push_back(sep());
+        v.push_back(item(T(L"Buscar ahora"), G_RELOAD, L"", [] { after_menu([] { update_check_now(); }); }));
+        v.push_back(note(T(L"Versión ") + std::wstring(update_version())));
     } else if (page == PAGE_CLEAR) {
         v.push_back(back(T(L"Borrar datos")));
         v.push_back(item(T(L"El historial de Pluma"), G_CLOCK, L"", [] { history_clear(); menu_close(); ui_toast(T(L"Historial borrado")); }));

@@ -12,6 +12,7 @@ código y commits en inglés; nada de em dashes.
 - `Pluma.exe` (C++ + WebView2, el motor de Edge que trae Windows y que Microsoft parchea solo). Una sola instancia que
   se queda en memoria al cerrar la ventana (como Zas): `Pluma.exe [url]`, `--oculto` (arranque con Windows),
   `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
+  actualizar (auto | avisar | no),
   dormir_s, descargar_s, recientes, descargar_min, reserva, residente, protocolos, `motor` = argumentos extra para el
   motor), sesión en `sesion.tsv`,
   historial en `historial.tsv`, iconos de webs en `iconos\`, registro con tiempos en `pluma.log`.
@@ -33,6 +34,12 @@ código y commits en inglés; nada de em dashes.
   tabla da el del idioma elegido (`idioma`, vacío = el de Windows; si no lo tenemos, inglés). Texto nuevo de la interfaz:
   `T()` y su fila en la tabla. Los registros (`log_line`) siguen en castellano. El motor recibe el mismo idioma al
   arrancar (sus menús y el Accept-Language).
+- `src/update.cpp`: actualizaciones desde las releases del repo (público). La versión va dentro del exe
+  (`PLUMA_VERSION`, la pone release.yml); una build local es «dev» y nunca se actualiza. Busca 30 s después de arrancar y
+  cada 6 h; baja `pluma-vX.Y.Z.zip`, lo compara con su `.sha256` y lo deja en `actualizacion\`. Entra al cerrar la
+  ventana (si está residente, se reinicia oculto), al salir del todo o con «Reiniciar ahora»: Pluma.exe pasa a
+  Pluma.old.exe y el nuevo ocupa su sitio; el nuevo copia el resto al arrancar. Carpeta sin permiso de escritura: solo
+  avisa. Pruebas: `PLUMA_ACTUALIZAR_URL` apunta a una release falsa servida en 127.0.0.1.
   Animaciones: un hilo espera a cada refresco de la pantalla (DwmFlush) y pide un fotograma solo mientras algo se mueve.
 - `src/scripts.cpp`: scripts de usuario (.user.js) sin extensión, cada uno inyectado aparte; script base de Pluma
   (Ctrl+clic y clic central abren detrás; precarga al posar el ratón, con speculation rules).
