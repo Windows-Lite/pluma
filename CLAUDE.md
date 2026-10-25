@@ -47,13 +47,15 @@ node tools\clics.js <puerto> <url> <n>        lo que tarda un clic en llegar a l
 node tools\tirones.js <puerto> <url> <s>      fotogramas lentos al hacer scroll; tools\scroll.ps1 lo pasa por 3 webs
 node tools\rueda.js <puerto> <url> <pasos>    scroll con la rueda de verdad; con captura.exe ... burst n ms y
                                               tools\hoja.py, una hoja de fotogramas para ver qué parpadea
+tools\grabar.exe <s> <carpeta> [ancho]             graba la pantalla de verdad a su frecuencia (Desktop Duplication
+                                              en la gráfica de la pantalla; va con preferencia «ahorro» en Windows)
 tools\rafaga.ps1 [-Fotos 14] [-Cada 35] [-Acciones ...]  fotos seguidas hechas por Pluma (lentas: ~0,4 s cada una,
                                               sirven para ver estados, no fluidez; los tiempos, en pluma.log)
 tools\foto.ps1 [-Nombre yt] -Salida x.png [-Acciones 'move x,y','click x,y','key 0x4B','char <','wait ms']
                                               foto hecha por Pluma con los controles del reproductor (captura.exe
                                               los saca opacos); las acciones van al reproductor y a sus controles
 ```
-En las pruebas la pantalla completa (tecla F al reproductor) se queda fuera de la pantalla; el telón también.
+En las pruebas la pantalla completa (tecla F al reproductor) se queda fuera de la pantalla.
 Las medidas varían mucho entre pasadas (la gráfica, de 47 a 120 MB en el mismo escenario): comparar ideas lanzándolas
 a la vez y repetir antes de creerse una diferencia pequeña.
 Clase de la ventana de prueba: `PlumaVentana.<nombre>`; paneles `PlumaPanel`; datos en `%LOCALAPPDATA%\Pluma\prueba.<nombre>`.
@@ -109,6 +111,22 @@ ya tenga esa funcionalidad»).
   se habría quedado colgada ese tiempo (van con `mpv_command_async`).
 - No `stopVideo` en la página al dormirla: luego YouTube ignora el salto al segundo y empieza desde 0. Tampoco
   `autoload-files=no` en mpv: deja el audio sin elegir (vídeo mudo).
+- El cambio de la página al reproductor tiene que verse y llegar pronto: al usuario le llegaba a los 15-19 s y de
+  golpe («se pone así»). Ahora: las listas se piden ya mientras la página carga el vídeo; el margen de mpv sobre la
+  página se ajusta a lo que tardan aquí las listas y cada búsqueda (con 1,5 s fijos llegaba tarde una y otra vez); el
+  sonido cambia en el instante y la imagen crece desde el sitio del vídeo en la página (zoom.cpp) si Pluma está
+  delante. Su línea tiene un servidor de caché de Google que a veces no contesta: esperas de red cortas
+  (`network-timeout` 10, `curl-connect-timeout` 4, WinHTTP 4-10 s) y un vigilante: mpv listo en 12 s o se cierra y se
+  intenta una vez más (una vez se quedó quieto minutos); mientras, suena la página.
+- mpv no pregunta la posición en cada fotograma (`time-pos` y `demuxer-cache-time` no se observan; se leen al
+  necesitarlas, 4 veces por segundo mientras se ven los controles): sus avisos tenían la cola de la ventana siempre
+  llena y los temporizadores se quedaban sin turno.
+- Gráfica: mpv dibuja con la que Windows le da al proceso (en el portátil, la NVIDIA, con la pantalla en la Intel).
+  Con la Intel (`d3d11-adapter`) iría sin copias entre gráficas, pero su memoria de vídeo sale de la RAM y cuenta como
+  de Pluma: 282 MB en vez de 91 (mpv solo, 140-180 frente a 72). Se queda la NVIDIA, por la RAM. En DXGI, en un
+  portátil con dos gráficas la pantalla «cuelga» de la del proceso; la de verdad, con EnumDisplayDevices.
+- Clic en el vídeo: pausa a los 250 ms, como YouTube (medido en su página: espera a ver si hay un segundo clic, y en
+  un doble clic no pausa nunca). Doble clic: pantalla completa y el vídeo sigue igual.
 - Controles: los del reproductor nuevo de YouTube («delhi»), medidos en su página: sus iconos SVG, píldoras
   `rgba(0,0,0,.3)` de 40 px, barra `#ff0033` que acaba en `#ff2791`, a 59 px del borde y a 12 de los lados, menú
   `rgba(0,0,0,.6)` con radio 12 y filas de 48, avisos con la tecla, el «bezel» del centro. Son ventanas con capas
@@ -145,15 +163,14 @@ ya tenga esa funcionalidad»).
 - Recortar memoria (EmptyWorkingSet) tarda 9-90 ms: nunca en el hilo de la ventana, que comparte la entrada con las
   páginas (un hilo de la ventana ocupado retrasa los clics en la web). Va en un hilo aparte; y la interfaz de Pluma no
   se recorta a sí misma mientras se ve. Medido con `clics.js` en YouTube: mediana 6 ms hasta verse el clic.
-- Pantalla completa: se entra y se sale con un fundido a negro (un «telón» por encima de todo, como Firefox: 80 ms,
-  el cambio debajo, y 170 ms de salida en cuanto el reproductor dibuja al tamaño nuevo, como poco 70 ms y como mucho
-  300). De golpe, la página se veía colocada dos veces (en la ventana y luego en la pantalla): «tosco, laggy» (25/10).
-  El telón va en un hilo suyo, un paso por refresco (DwmFlush): con temporizadores de la ventana daba 3-6 pasos,
-  porque con un vídeo la cola de la ventana nunca se vacía y los WM_TIMER van los últimos. Durante el cambio, sin la
-  animación de maximizar de Windows (seguía después del telón). Sin animaciones de Windows, sin telón; a los 2 s se
-  quita pase lo que pase. En las pruebas la pantalla completa ocurre fuera de la pantalla, del tamaño del monitor
-  (y sin SetWindowPlacement, que devuelve a la pantalla una ventana que está fuera).
-- Doble clic en el vídeo: pantalla completa y el vídeo sigue como estaba; el segundo «soltar» se ignora (llegaba a
-  otra ventana tras el cambio de tamaño y dejaba el vídeo en pausa, 25/10).
+- Pantalla completa (zoom.cpp): con un zoom, como los móviles y los Mac: foto de la pantalla por encima de todo, su
+  vídeo crece hasta llenarla (o encoge a su sitio) mientras lo demás se oscurece, la ventana cambia debajo y la foto
+  se desvanece cuando el reproductor ya dibuja al tamaño nuevo (240 ms de zoom, 120 de salida). Lo anima
+  DirectComposition, Windows mismo a la frecuencia de la pantalla. Antes: de golpe («tosco, laggy») y luego un fundido
+  a negro («tosca, no fluida», 25/10; con temporizadores de la ventana daba 3-6 pasos). Sin la animación de maximizar
+  de Windows durante el cambio. En las pruebas la pantalla completa ocurre fuera de la pantalla, del tamaño del monitor
+  (sin SetWindowPlacement, que devuelve a la pantalla una ventana que está fuera), y la foto sale negra: el aspecto
+  solo se ve en la pantalla de verdad (`tools\grabar.exe`).
+- Doble clic en el vídeo: el segundo «soltar» se ignora (llegaba a otra ventana tras el cambio de tamaño).
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.

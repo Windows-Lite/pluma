@@ -24,7 +24,7 @@ if "%~1"=="" if exist ..\Pluma.exe ..\Pluma.exe --salir
 if "%~1"=="" ping -n 2 127.0.0.1 >nul
 rc /nologo /fo pluma.res pluma.rc || exit /b 1
 cl /nologo /O2 /MT /EHsc /utf-8 /W3 /std:c++17 /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN /I "%WV%\include" ^
-   main.cpp tabs.cpp ui.cpp scripts.cpp extensions.cpp video.cpp pluma.res /Fe:"%OUT%" ^
+   main.cpp tabs.cpp ui.cpp scripts.cpp extensions.cpp video.cpp zoom.cpp pluma.res /Fe:"%OUT%" ^
    /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF "%WV%\x64\WebView2LoaderStatic.lib" ^
    advapi32.lib d2d1.lib dwmapi.lib dwrite.lib gdi32.lib ole32.lib oleaut32.lib psapi.lib shell32.lib shlwapi.lib ^
    urlmon.lib user32.lib uxtheme.lib version.lib windowscodecs.lib winhttp.lib || exit /b 1

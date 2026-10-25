@@ -213,8 +213,17 @@ bool video_focus();                       // the keys to the player, if one is o
 void video_toggle_mute(Tab *t);
 void video_settings_changed();
 void video_debug_shot(const std::wstring &path);   // tests: the window with the controls' real transparency
-float curtain_alpha();                    // the fullscreen curtain's darkness now, 0..1 (main.cpp)
-void video_resized();                     // the player drew at a new size (the curtain may lift)
+void video_resized();                     // the player drew at a new size (the fullscreen zoom may end)
+double video_aspect();                    // the playing video's width/height, or 0 without Pluma's player
+
+// ---------------------------------------------------------------- fullscreen (main.cpp, with the zoom of zoom.cpp)
+void fullscreen_now(bool on);             // the change itself, at once
+RECT fullscreen_rect();                   // the screen it fills (in tests, one off the user's screen)
+void zoom_start(bool on);
+bool zoom_busy();
+void zoom_want(bool on);                  // asked during a zoom: where it ends
+void zoom_message(WPARAM wp);
+bool zoom_into_player(RECT page_player, std::function<void()> change);   // a video from its page into Pluma's player
 
 // ---------------------------------------------------------------- userscripts (scripts.cpp)
 struct UserScript { std::wstring file, name, version, description, run_at; bool enabled = true, noframes = false;

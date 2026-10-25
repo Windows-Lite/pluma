@@ -32,6 +32,7 @@ static struct {
     int (*command)(mpv_handle *, const char **);
     int (*command_async)(mpv_handle *, uint64_t, const char **);
     int (*set_property)(mpv_handle *, const char *, int, void *);
+    int (*get_property)(mpv_handle *, const char *, int, void *);
     int (*observe_property)(mpv_handle *, uint64_t, const char *, int);
     mpv_event *(*wait_event)(mpv_handle *, double);
     void (*set_wakeup_callback)(mpv_handle *, void (*)(void *), void *);
@@ -52,10 +53,10 @@ static bool load_mpv() {
 #define LOAD(field, name) *(FARPROC *)&M.field = GetProcAddress(g_mpv, name)
     LOAD(create, "mpv_create"); LOAD(initialize, "mpv_initialize"); LOAD(terminate_destroy, "mpv_terminate_destroy");
     LOAD(set_option_string, "mpv_set_option_string"); LOAD(command, "mpv_command"); LOAD(command_async, "mpv_command_async");
-    LOAD(set_property, "mpv_set_property");
+    LOAD(set_property, "mpv_set_property"); LOAD(get_property, "mpv_get_property");
     LOAD(observe_property, "mpv_observe_property"); LOAD(wait_event, "mpv_wait_event"); LOAD(set_wakeup_callback, "mpv_set_wakeup_callback");
 #undef LOAD
-    if (!M.create || !M.initialize || !M.command || !M.command_async || !M.wait_event || !M.set_wakeup_callback) {
+    if (!M.create || !M.initialize || !M.command || !M.command_async || !M.get_property || !M.wait_event || !M.set_wakeup_callback) {
         g_mpv_failed = true; FreeLibrary(g_mpv); g_mpv = NULL; return false;
     }
     return true;
@@ -63,7 +64,7 @@ static bool load_mpv() {
 
 // ---------------------------------------------------------------- one video
 // one entry of YouTube's HLS list: a video variant (its own playlist) or an audio rendition, by group
-struct Fmt { std::string url, group, local; int h = 0, fps = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec; };
+struct Fmt { std::string url, group, local; int w = 0, h = 0, fps = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec; };
 struct Cap { std::string url, local; std::wstring name, lang; };
 enum Stage { ST_WAITING, ST_ON };
 struct Video {
@@ -80,12 +81,14 @@ struct Video {
     bool paused = true, eof = false, buffering = false, muted = false, restarted = false, loaded = false;
     double asked = 0, last_move = 0, bezel_at = -1e9, vol_text_at = -1e9;
     int bezel_icon = 0, serial = 0, osd_w = 0, osd_h = 0;
+    double seek_t0 = 0, seek_ms = 1500;   // when mpv was last asked to load or seek, and what that took
 };
 static int g_serial;
 static Video *V(Tab *t) { return t ? (Video *)t->video : nullptr; }
 static HWND g_msg;   // a window of its own for mpv's events (they come from mpv's threads) and the timers
 static const UINT WM_VIDEO_EVENTS = WM_APP + 60, WM_VIDEO_FAILED = WM_APP + 61, WM_VIDEO_GONE = WM_APP + 62;
-static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000;
+static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000,
+                      kStartTimer = 0x400000;
 
 // ---------------------------------------------------------------- drawing: YouTube's look
 static ComPtr<ID2D1Factory> g_d2d;
@@ -453,6 +456,15 @@ static void mpv_cmd(Video *v, std::initializer_list<const char *> args) {
     a.push_back(NULL);
     M.command(v->mpv, a.data());
 }
+static double refresh_pos(Video *v) {
+    // where the video is (and how much is loaded ahead), asked to mpv now
+    double d = 0;
+    if (v && v->mpv && v->loaded && !g_drag_seek) {
+        if (M.get_property(v->mpv, "time-pos", MPV_FORMAT_DOUBLE, &d) >= 0) v->pos = d;
+        if (M.get_property(v->mpv, "demuxer-cache-time", MPV_FORMAT_DOUBLE, &d) >= 0) v->cached = std::max(0.0, d - v->pos);
+    }
+    return v ? v->pos : 0;
+}
 static void set_flag(Video *v, const char *name, bool on) { if (v && v->mpv) { int f = on ? 1 : 0; M.set_property(v->mpv, name, MPV_FORMAT_FLAG, &f); } }
 static void set_double(Video *v, const char *name, double d) { if (v && v->mpv) M.set_property(v->mpv, name, MPV_FORMAT_DOUBLE, &d); }
 static void apply_volume(Video *v) {
@@ -474,6 +486,7 @@ static void load_streams(Video *v, double start, bool paused) {
     long long mb = std::max(4LL, (vf.br / 8 * 10) >> 20);
     opts += ",demuxer-max-bytes=" + std::to_string(mb) + "MiB";
     v->restarted = v->loaded = false;
+    v->seek_t0 = now_ms();
     mpv_cmd(v, { "loadfile", (vf.local.empty() ? vf.url : vf.local).c_str(), "replace", "-1", opts.c_str() });
 }
 static bool http_get(const std::wstring &url, std::string &out);
@@ -546,6 +559,9 @@ static bool start_player(Video *v, double start) {
         // YouTube serves these streams only in closed ranges (an open "bytes=0-" gets a 403, seen 25/10): pieces of
         // 10 MB, as yt-dlp asks for them
         { "curl-max-request-size", "10MiB" }, { "curl-buffer-size", "1MiB" },
+        // and short waits: the user's line has a Google cache server that now and then does not answer (25/10); a
+        // stalled download is tried again after 10 s, not 60, and a silent server left after 4 s, not 30
+        { "network-timeout", "10" }, { "curl-connect-timeout", "4" },
         { "keep-open", "yes" }, { "idle", "yes" }, { "background-color", "#000000" }, { "sub-auto", "no" },
         // (no looking around the folder; and not autoload-files=no, which leaves the audio file unselected: mute)
         { "audio-file-auto", "no" }, { "cover-art-auto", "no" },
@@ -559,7 +575,9 @@ static bool start_player(Video *v, double start) {
                                    "osd-width", "osd-height" };
     static const int fmt[] = { MPV_FORMAT_DOUBLE, MPV_FORMAT_DOUBLE, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_DOUBLE,
                                MPV_FORMAT_FLAG, MPV_FORMAT_DOUBLE, MPV_FORMAT_INT64, MPV_FORMAT_INT64 };
-    for (int i = 0; i < 10; i++) M.observe_property(v->mpv, (uint64_t)i, props[i], fmt[i]);
+    // (not the position nor the buffer: they change with every frame, and kept the window's queue busy all the time,
+    // which left its timers without a turn; they are asked for when needed, refresh_pos)
+    for (int i = 0; i < 10; i++) if (i != 0 && i != 5) M.observe_property(v->mpv, (uint64_t)i, props[i], fmt[i]);
     M.set_wakeup_callback(v->mpv, post_events, (void *)(INT_PTR)v->tab);
     apply_volume(v);
     set_flag(v, "mute", v->muted);
@@ -676,7 +694,7 @@ static std::vector<Fmt> parse_master(const std::string &m3u8) {
             f.br = _atoi64(attr(pending, "BANDWIDTH").c_str());
             std::string res = attr(pending, "RESOLUTION");
             size_t x = res.find('x');
-            if (x != std::string::npos) f.h = atoi(res.c_str() + x + 1);
+            if (x != std::string::npos) { f.w = atoi(res.c_str()); f.h = atoi(res.c_str() + x + 1); }
             f.fps = (int)lround(atof(attr(pending, "FRAME-RATE").c_str()));
             std::string codecs = attr(pending, "CODECS");
             std::string first = codecs.substr(0, codecs.find(','));
@@ -699,6 +717,7 @@ static bool http_get(const std::wstring &url, std::string &out) {
     std::wstring path = std::wstring(uc.lpszUrlPath, uc.dwUrlPathLength) + (uc.lpszExtraInfo ? std::wstring(uc.lpszExtraInfo, uc.dwExtraInfoLength) : L"");
     HINTERNET s = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) return false;
+    WinHttpSetTimeouts(s, 4000, 4000, 8000, 10000);   // (not a minute waiting for a server that does not answer)
     bool ok = false;
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
@@ -1043,9 +1062,10 @@ static void toggle_pause(Video *v) {
 }
 static void seek_abs(Video *v, double t, bool exact) {
     char s[32]; sprintf_s(s, "%.3f", std::max(0.0, std::min(t, v->dur > 1 ? v->dur - 0.2 : t)));
+    v->seek_t0 = now_ms();
     mpv_cmd(v, { "seek", s, exact ? "absolute+exact" : "absolute+keyframes" });
 }
-static void seek_rel(Video *v, double d) { seek_abs(v, v->pos + d, true); v->pos = std::max(0.0, v->pos + d); show_controls(v); }
+static void seek_rel(Video *v, double d) { double p = refresh_pos(v) + d; seek_abs(v, p, true); v->pos = std::max(0.0, p); show_controls(v); }
 static void set_volume(Video *v, double vol, bool from_key) {
     v->volume = std::max(0.0, std::min(100.0, vol));
     apply_volume(v);
@@ -1095,7 +1115,7 @@ static void set_quality(Video *v, int h) {
     fetch_playlists(v, { f }, [f](Video *v) {
         v->vf = f;
         int a = pick_audio(v);
-        auto go = [](Video *v) { load_streams(v, v->pos, v->paused); paint_all(v); };
+        auto go = [](Video *v) { load_streams(v, refresh_pos(v), v->paused); paint_all(v); };
         if (a != v->af) { v->af = a; fetch_playlists(v, { a }, go); }
         else go(v);
     });
@@ -1168,7 +1188,7 @@ static void on_property(Video *v, uint64_t code, mpv_event_property *p) {
         if (f && v->stage == ST_ON && t) {
             // the end: back to the page, which shows what YouTube shows there (and plays the next one if it does).
             // An end well before the end is the stream failing: the page takes over at that second
-            if (v->dur > 0 && v->pos < v->dur - 3) PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
+            if (v->dur > 0 && refresh_pos(v) < v->dur - 3) PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
             else PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_ENDED, (LPARAM)v->tab);
         }
         break;
@@ -1190,7 +1210,7 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             mpv_event *e = M.wait_event(v->mpv, 0);
             if (!e || e->event_id == MPV_EVENT_NONE) break;
             if (e->event_id == MPV_EVENT_PROPERTY_CHANGE) on_property(v, e->reply_userdata, (mpv_event_property *)e->data);
-            else if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) { v->restarted = true; tame(v); if (v->stage == ST_WAITING) sync_tick(t, v); }
+            else if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) { v->restarted = true; v->seek_ms = now_ms() - v->seek_t0; tame(v); if (v->stage == ST_WAITING) sync_tick(t, v); }
             else if (e->event_id == MPV_EVENT_FILE_LOADED) { v->loaded = true; tame(v); if (v->sub >= 0) add_sub(v); }
             else if (e->event_id == MPV_EVENT_END_FILE) {
                 auto *ef = (mpv_event_end_file *)e->data;
@@ -1253,8 +1273,24 @@ static void menu_click(Video *v, int row) {
 // release of the second click is ignored: it may even arrive elsewhere, the window having changed size under the
 // mouse (that left the video paused after leaving fullscreen, 25/10)
 static double g_skip_up_until;
+static bool g_click_pending;
+static const UINT_PTR kClickTimer = 9;
+static void click_later() {
+    // a click plays or pauses 250 ms later, as YouTube's (measured on its page: it waits to see whether a second
+    // click comes; within a double click it never pauses)
+    g_click_pending = true;
+    SetTimer(g_msg, kClickTimer, 250, [](HWND, UINT, UINT_PTR tid, DWORD) {
+        KillTimer(g_msg, tid);
+        if (!g_click_pending) return;
+        g_click_pending = false;
+        Video *v = V(active_tab());
+        if (v && v->stage == ST_ON) toggle_pause(v);
+    });
+}
 static void double_click(Video *v) {
-    toggle_pause(v);
+    // the first click does nothing then; if it already did (a slow double click), it is undone
+    if (g_click_pending) { g_click_pending = false; KillTimer(g_msg, kClickTimer); }
+    else toggle_pause(v);
     set_fullscreen(!g_fullscreen);
     g_skip_up_until = now_ms() + 600;
 }
@@ -1347,7 +1383,7 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         else if (c == C_PAGE) { video_back_to_page(active_tab(), VIDEO_ASKED); return 0; }
         else if (c == C_GEAR) { g_menu_page = g_menu_page ? 0 : 1; g_menu_hot = -1; }
         else if (c == C_CC) set_sub(v, v->sub >= 0 ? -1 : 0);
-        else if (c == C_NONE) toggle_pause(v);
+        else if (c == C_NONE) click_later();
         paint_all(v);
         return 0;
     }
@@ -1373,7 +1409,7 @@ static LRESULT CALLBACK video_wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONUP:
         // a click pauses or plays; a double click is fullscreen, and the video goes on as it was (as YouTube)
         if (skip_up()) return 0;
-        if (on) { if (GetPropW(h, L"menu")) RemovePropW(h, L"menu"); else toggle_pause(v); }
+        if (on) { if (GetPropW(h, L"menu")) RemovePropW(h, L"menu"); else click_later(); }
         return 0;
     case WM_LBUTTONDBLCLK:
         if (on) double_click(v);
@@ -1396,6 +1432,12 @@ static void CALLBACK ctl_tick(HWND, UINT, UINT_PTR id, DWORD) {
     // watching, 123 with this; measured 25/10). On a thread of its own, and never the player's process
     static double last_trim = 0;
     if (now_ms() - last_trim > 20000 && active_tab()->suspended) { last_trim = now_ms(); tabs_trim(TRIM_IDLE); }
+    // the time and the bar, while they show: four times a second
+    if (g_ctl.at(now_ms()) > 0 && !g_drag_seek) {
+        double was = v->pos;
+        refresh_pos(v);
+        if ((long long)was != (long long)v->pos || fabs(was - v->pos) >= 0.2) paint_all(v);
+    }
     if (g_ctl.to <= 0 || v->paused || v->eof || g_menu_page || g_drag_seek || g_drag_vol) return;
     POINT pt;
     if (g_test) pt = g_last_cursor;   // tests move the mouse with messages: it rests where they left it
@@ -1429,7 +1471,9 @@ static const wchar_t *kState = LR"JS((() => {
   if (!p || !p.getPlayerState) return 0;
   if (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting')) return 2;
   if (scrollY > 300) return 3;
-  return p.getPlayerState() === 1 && p.getCurrentTime() > 0.3 ? 1 : 0;
+  // playing, or loading to play (the lists are asked for meanwhile: on a slow line they take several seconds)
+  const s = p.getPlayerState();
+  return (s === 1 && p.getCurrentTime() > 0.3) || s === 3 ? 1 : 0;
 })())JS";
 static const wchar_t *kExtract = LR"JS((async () => {
   const id = new URLSearchParams(location.search).get('v');
@@ -1489,8 +1533,19 @@ static void place_window(Video *v, bool on_screen) {
     SetWindowPos(v->wnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     SetWindowPos(g_bar, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
-static void switch_now(Tab *t, Video *v, bool playing) {
-    // the same instant: the page pauses, mpv plays, the player comes up over the page
+static void show_player(Tab *t, Video *v) {
+    // the picture: Pluma's player over the page, which hides
+    if (!t || t != active_tab() || !v->wnd) return;
+    place_window(v, IsWindowVisible(g_win) != FALSE);
+    if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
+    tame(v);
+    focus_video(v);
+    g_ctl.snap(0);
+    show_controls(v);
+}
+static void switch_now(Tab *t, Video *v, bool playing, RECT page_player) {
+    // the sound at the very instant: the page pauses, mpv plays. The picture under a zoom from where the video is
+    // in the page (page_player, on the screen) to the whole page area, so the change is seen and understood
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (p && p.pauseVideo) p.pauseVideo();"
             L" if (document.fullscreenElement) document.exitFullscreen(); return 1; })()", [](const Json &) {});
     v->stage = ST_ON;
@@ -1498,14 +1553,13 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     if (playing) set_flag(v, "pause", false);
     v->paused = !playing;
     t->audible = playing && !v->muted;
-    if (t == active_tab()) {
-        place_window(v, IsWindowVisible(g_win) != FALSE);
-        if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
-        tame(v);
-        focus_video(v);
-        g_ctl.snap(0);
-        show_controls(v);
-    }
+    int id = t->id, serial = v->serial;
+    auto picture = [id, serial] {
+        Tab *t = tab_by_id(id);
+        Video *v = V(t);
+        if (v && v->serial == serial && v->stage == ST_ON) show_player(t, v);
+    };
+    if (t == active_tab() && (IsRectEmpty(&page_player) || !g_motion || !zoom_into_player(page_player, picture))) picture();
     SetTimer(g_msg, kCtlTimer, 250, ctl_tick);
     log_line(L"vídeo propio: " + v->title + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
              L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió");
@@ -1522,32 +1576,45 @@ static void CALLBACK sync_timer(HWND, UINT, UINT_PTR tid, DWORD) {
 static void sync_tick(Tab *t, Video *v) {
     // mpv waits, paused, a second ahead of the page; when the page gets there, the two swap
     if (!t || v->stage != ST_WAITING || !v->restarted) return;
+    if (now_ms() - v->asked > 45000) { video_destroy(t); return; }   // the page never got to play it
     int id = t->id;
-    eval(t, L"(() => { const p = document.getElementById('movie_player'); return p && p.getCurrentTime ? [p.getCurrentTime(), p.getPlayerState()] : null; })()",
+    eval(t, L"(() => { const p = document.getElementById('movie_player'); if (!p || !p.getCurrentTime) return null;"
+            L" const r = p.getBoundingClientRect();"
+            L" return [p.getCurrentTime(), p.getPlayerState(), r.left, r.top, r.width, r.height, devicePixelRatio]; })()",
          [id](const Json &r) {
              Tab *t = tab_by_id(id);
              Video *v = V(t);
              if (!v || v->stage != ST_WAITING) return;
-             if (r.kind != Json::ARR || r.arr.size() < 2) { video_destroy(t); return; }
+             if (r.kind != Json::ARR || r.arr.size() < 7) { video_destroy(t); return; }
              double pt = r.arr[0].n;
              int st = (int)r.arr[1].n;
+             // where the video is in the page, on the screen (its CSS pixels times the page's pixel ratio)
+             RECT area = video_rect();
+             MapWindowPoints(g_win, NULL, (POINT *)&area, 2);
+             double k = r.arr[6].n > 0 ? r.arr[6].n : 1;
+             RECT pp = { area.left + (LONG)(r.arr[2].n * k), area.top + (LONG)(r.arr[3].n * k),
+                         area.left + (LONG)((r.arr[2].n + r.arr[4].n) * k), area.top + (LONG)((r.arr[3].n + r.arr[5].n) * k) };
+             IntersectRect(&pp, &pp, &area);
              if (st == 0) { video_destroy(t); return; }   // the video ended meanwhile
              if (st == 2) {
                  // paused on the page: take over, paused at its second
                  seek_abs(v, pt, true);
                  v->pos = pt;
-                 switch_now(t, v, false);
+                 switch_now(t, v, false, pp);
                  return;
              }
              double gap = v->start_at - pt;
              if (st == 1 && gap <= 0.04) {
                  if (gap < -0.35) {
-                     // mpv was late: ahead again (a seek within the lists already read takes under a second)
-                     v->start_at = pt + 1.5 * v->speed; v->restarted = false; seek_abs(v, v->start_at, true);
-                     if (g_dev) log_line(L"vídeo propio: mpv llegó tarde, otra vez por delante");
+                     // mpv was late: ahead again, by what its last seek took here (and a margin): with a fixed
+                     // 1.5 s, on a slow line it came late again and again, and the change took 15-19 s (25/10)
+                     double ahead = std::max(1.5, v->seek_ms / 1000.0 * 1.5 + 0.4);
+                     v->start_at = pt + ahead * v->speed; v->restarted = false; seek_abs(v, v->start_at, true);
+                     if (g_dev) log_line(L"vídeo propio: mpv llegó tarde (" + std::to_wstring((int)v->seek_ms) + L" ms), ahora " +
+                                         std::to_wstring((int)(ahead * 1000)) + L" ms por delante");
                      return;
                  }
-                 switch_now(t, v, true);
+                 switch_now(t, v, true, pp);
                  return;
              }
              // close (or the page is loading): look again just before the moment
@@ -1594,7 +1661,7 @@ static void video_try(Tab *t) {
         v->gain_db = v->volume > 0 && gain > 0 ? std::max(-30.0, std::min(0.0, 20 * log10(gain / (v->volume / 100.0)))) : 0;
         std::wstring cc = r[L"cc"].s;
         if (!cc.empty()) for (size_t i = 0; i < v->caps.size(); i++) if (v->caps[i].lang == cc) { v->sub = (int)i; break; }   // (added once loaded)
-        double pt = r[L"time"].n, at = now_ms();
+        double pt = r[L"time"].n, at = r[L"state"].n == 1 ? now_ms() : -1;   // (-1: the page was still loading: its time stood still)
         std::wstring hls = r[L"hls"].s;
         if (!google_url(utf8(hls))) { give_up(L"la lista no es de los servidores de Google"); return; }
         int serial = v->serial = ++g_serial;
@@ -1614,8 +1681,10 @@ static void video_try(Tab *t) {
                 if (v->vf < 0 || v->af < 0) { give_up(L"no hay formatos que valgan"); return; }
                 fetch_playlists(v, { v->vf, v->af }, [pt, at](Video *v) {
                     if (v->stage != ST_WAITING || v->mpv) return;
-                    // ahead of where the page is now: mpv takes ~1.5 s to start with the lists already here
-                    v->start_at = pt + ((now_ms() - at) / 1000.0 + 2.0) * v->speed;
+                    // ahead of where the page is now: mpv takes ~1.5 s to start with the lists already here, more on a
+                    // slow line (guessed from what the lists took: up to 10 s on the user's, 25/10)
+                    double lists = (now_ms() - v->asked) / 1000.0, ahead = std::min(5.0, 2.0 + std::max(0.0, lists - 2.0) * 0.5);
+                    v->start_at = pt + ((at < 0 ? 0 : (now_ms() - at) / 1000.0) + ahead) * v->speed;
                     if (!start_player(v, v->start_at)) {
                         log_line(L"vídeo propio: no arrancó el motor");
                         Tab *t = tab_by_id(v->tab);
@@ -1623,6 +1692,21 @@ static void video_try(Tab *t) {
                         return;
                     }
                     log_line(L"vídeo propio: listas en " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms");
+                    // a watchman: mpv ready within 12 s, or it goes and is tried once more (it stood still once
+                    // for minutes, 25/10); the page plays on meanwhile, nothing is lost
+                    SetTimer(g_msg, kStartTimer + v->tab, 12000, [](HWND, UINT, UINT_PTR tid, DWORD) {
+                        KillTimer(g_msg, tid);
+                        Tab *t = tab_by_id((int)(tid - kStartTimer));
+                        Video *v = V(t);
+                        if (!v || v->stage != ST_WAITING || v->restarted) return;
+                        static std::wstring retried;
+                        bool again = retried != v->id;
+                        retried = v->id;
+                        log_line(L"vídeo propio: mpv no estuvo listo en 12 s" + std::wstring(again ? L"; otra vez" : L"; se queda la página"));
+                        std::wstring id = v->id;
+                        video_destroy(t);
+                        if (again) video_page_changed(t); else t->video_declined = id;
+                    });
                 });
             });
         }).detach();
@@ -1659,11 +1743,12 @@ void video_page_changed(Tab *t) {
 void video_back_to_page(Tab *t, int how) {
     Video *v = V(t);
     if (!t || !v) return;
-    double pos = v->pos, vol = v->volume, speed = v->speed;
+    double pos = refresh_pos(v), vol = v->volume, speed = v->speed;
     bool was_on = v->stage == ST_ON, playing = was_on && !v->paused, muted = v->muted;
     if (how == VIDEO_ASKED || how == VIDEO_FAILED) t->video_declined = v->id;
     KillTimer(g_msg, kFreezeTimer + t->id);
     KillTimer(g_msg, kSyncTimer + t->id);
+    KillTimer(g_msg, kStartTimer + t->id);
     stop_player(v);
     if (was_on) hide_controls_now();
     t->video = nullptr;
@@ -1693,9 +1778,10 @@ void video_destroy(Tab *t) {
     // the tab goes, or its page: the player goes with it (without touching the page)
     Video *v = V(t);
     if (!v) return;
-    if (v->stage == ST_ON) t->saved_media = v->pos;
+    if (v->stage == ST_ON) t->saved_media = refresh_pos(v);
     KillTimer(g_msg, kFreezeTimer + t->id);
     KillTimer(g_msg, kSyncTimer + t->id);
+    KillTimer(g_msg, kStartTimer + t->id);
     bool was_on = v->stage == ST_ON;
     stop_player(v);
     if (was_on && (t == active_tab())) hide_controls_now();
@@ -1749,10 +1835,8 @@ void video_debug_shot(const std::wstring &path) {
                 for (int k = 0; k < 3; k++) d[k] = (BYTE)std::min(255.0f, s[k] * l->alpha + d[k] * (1 - a));
             }
     }
-    float ca = curtain_alpha();   // the fullscreen curtain, over everything
     for (int i = 0; i < w * h; i++) {
         BYTE *d = (BYTE *)bits + i * 4;
-        if (ca > 0) for (int k = 0; k < 3; k++) d[k] = (BYTE)(d[k] * (1 - ca));
         d[3] = 255;
     }
     ComPtr<IWICImagingFactory> wic; ComPtr<IWICBitmap> wb; ComPtr<IWICStream> st; ComPtr<IWICBitmapEncoder> enc; ComPtr<IWICBitmapFrameEncode> fr;
@@ -1769,14 +1853,19 @@ void video_debug_shot(const std::wstring &path) {
     DeleteObject(bmp); DeleteDC(mdc);
 }
 bool video_settled() {
-    // the player on screen already draws at its window's size (the fullscreen curtain waits for it)
+    // the player on screen already draws at its window's size (the fullscreen zoom waits for it)
     Video *v = V(active_tab());
     if (!v || v->stage != ST_ON || !v->wnd || !v->mpv) return true;
     RECT r; GetClientRect(v->wnd, &r);
     return abs(v->osd_w - r.right) <= 2 && abs(v->osd_h - r.bottom) <= 2;
 }
+double video_aspect() {
+    Video *v = V(active_tab());
+    if (!v || v->stage != ST_ON || v->vf < 0 || v->fmts[v->vf].w <= 0 || v->fmts[v->vf].h <= 0) return 0;
+    return (double)v->fmts[v->vf].w / v->fmts[v->vf].h;
+}
 bool video_on(Tab *t) { Video *v = V(t); return v && v->stage == ST_ON; }
-double video_position(Tab *t) { Video *v = V(t); return v ? v->pos : 0; }
+double video_position(Tab *t) { Video *v = V(t); return v ? refresh_pos(v) : 0; }
 bool video_focus() { Video *v = V(active_tab()); if (!v || v->stage != ST_ON || !v->wnd) return false; SetFocus(v->wnd); return true; }
 void video_toggle_mute(Tab *t) { Video *v = V(t); if (v && v->stage == ST_ON) toggle_mute(v); }
 void video_settings_changed() {
