@@ -306,6 +306,9 @@ void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j) {
             if (r.passwords < 0) return;   // cancelled
             std::wstring m = L"{\"op\":\"passwords\",\"n\":" + std::to_wstring(r.passwords) + L",\"note\":" + json_escape(r.note) + L"}";
             v->PostWebMessageAsJson(m.c_str());
+        } else if (op == L"deleteCsv") {
+            std::wstring m = std::wstring(L"{\"op\":\"csvDeleted\",\"ok\":") + (passwords_delete_csv() ? L"true" : L"false") + L"}";
+            v->PostWebMessageAsJson(m.c_str());
         } else if (op == L"restart") app_restart(false);
         return;
     }

@@ -68,6 +68,7 @@ button:disabled { opacity:.5; }
     <div class="card">
       <div class="opt"><span class="t"><div class="n" data-t="Importar contraseñas desde un CSV">Importar contraseñas desde un CSV</div><div class="d" data-t="El navegador guarda las contraseñas protegidas, así que no se pueden leer directamente. Expórtalas a un archivo CSV y Pluma las añade a su propio almacén.">El navegador guarda las contraseñas protegidas, así que no se pueden leer directamente. Expórtalas a un archivo CSV y Pluma las añade a su propio almacén.</div></span></div>
       <div class="opt" style="gap:10px"><button id="edge" data-t="Abrir Edge para exportar">Abrir Edge para exportar</button><button class="primary" id="csv" data-t="Elegir CSV e importar">Elegir CSV e importar</button><div class="spin hidden" id="pwspin"></div><span id="pwstatus" class="note" style="margin:0"></span></div>
+      <div class="opt hidden" id="pwcsv"><span class="t"><div class="n" data-t="¿Borrar el CSV?">¿Borrar el CSV?</div><div class="d" id="pwcsvd" data-t="Tiene tus contraseñas sin cifrar. Pluma lo sobrescribe y lo borra.">Tiene tus contraseñas sin cifrar. Pluma lo sobrescribe y lo borra.</div></span><button id="delcsv" data-t="Borrar el CSV">Borrar el CSV</button></div>
       <div class="opt hidden" id="pwrestart"><span class="t"><div class="n" id="pwdone"></div><div class="d" data-t="Reinicia Pluma para que las contraseñas estén disponibles">Reinicia Pluma para que las contraseñas estén disponibles</div></span><button class="primary" id="restart" data-t="Reiniciar Pluma">Reiniciar Pluma</button></div>
     </div>
   </div>
@@ -119,6 +120,7 @@ $('go').onclick = () => {
   send({ op: 'import', profile: chosen, bookmarks: $('bm').checked, history: $('hi').checked });
 };
 $('edge').onclick = () => send({ op: 'openEdgePasswords' });
+$('delcsv').onclick = () => send({ op: 'deleteCsv' });
 $('csv').onclick = () => { $('pwspin').classList.remove('hidden'); $('pwstatus').textContent = tr('Importando...'); send({ op: 'importPasswords' }); };
 $('restart').onclick = () => send({ op: 'restart' });
 $('bookmarks').onclick = () => send({ op: 'open', url: 'https://pluma.local/bookmarks', background: false });
@@ -126,7 +128,7 @@ $('again').onclick = () => { $('step2').classList.add('hidden'); $('step1').clas
 function ask() {
   const all = new Set();
   document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
-  ['marcadores', 'con historial', 'abierto', 'Importando...', 'contraseñas importadas', 'contraseña importada',
+  ['marcadores', 'con historial', 'abierto', 'Importando...', 'contraseñas importadas', 'contraseña importada', 'CSV borrado', 'No se pudo borrar el CSV',
    'marcadores añadidos', 'páginas al historial', 'Importar'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
@@ -137,8 +139,13 @@ if (W) W.addEventListener('message', e => {
     $('pwspin').classList.add('hidden');
     if (m.note) { $('pwstatus').textContent = m.note; return; }
     $('pwstatus').textContent = '';
+    $('pwcsv').classList.remove('hidden'); $('delcsv').classList.remove('hidden');
     $('pwdone').textContent = m.n + ' ' + tr(m.n === 1 ? 'contraseña importada' : 'contraseñas importadas');
-    $('pwrestart').classList.remove('hidden');
+    if (m.n > 0) $('pwrestart').classList.remove('hidden');
+  }
+  else if (m.op === 'csvDeleted') {
+    $('pwcsvd').textContent = tr(m.ok ? 'CSV borrado' : 'No se pudo borrar el CSV');
+    if (m.ok) $('delcsv').classList.add('hidden');
   }
   else if (m.op === 'done') {
     $('spin').classList.add('hidden'); $('status').textContent = '';

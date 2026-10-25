@@ -210,6 +210,8 @@ static void shred(const std::wstring &path) {
     DeleteFileW(path.c_str());
 }
 
+static std::wstring g_last_csv;   // the CSV just read, so the page can offer to delete it
+
 // import a chosen CSV: encrypt the new rows now, leave them pending for the next start
 static ImportResult import_file(const std::wstring &path) {
     ImportResult r;
@@ -234,8 +236,16 @@ static ImportResult import_file(const std::wstring &path) {
         std::string existing; read_file(pending_file(), existing);
         write_file(pending_file(), existing + utf8(out));
     }
-    shred(path);
+    g_last_csv = path;
     return r;
+}
+
+bool passwords_delete_csv() {
+    if (g_last_csv.empty()) return false;
+    shred(g_last_csv);
+    bool gone = GetFileAttributesW(g_last_csv.c_str()) == INVALID_FILE_ATTRIBUTES;
+    if (gone) g_last_csv.clear();
+    return gone;
 }
 
 // ---------------------------------------------------------------- wizard entry points (UI thread)
