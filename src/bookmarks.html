@@ -127,7 +127,7 @@ function render() {
     if (n.role === 0) {
       const mv = document.createElement('select');
       const o0 = document.createElement('option'); o0.textContent = tr('Mover a...'); o0.value = ''; mv.append(o0);
-      for (const f of folders) { if (f.id === n.id) continue; const o = document.createElement('option'); o.value = f.id; o.textContent = '— '.repeat(f.depth) + f.title; mv.append(o); }
+      for (const f of folders) { if (f.id === n.id) continue; const o = document.createElement('option'); o.value = f.id; o.textContent = '\u00a0\u00a0\u00a0'.repeat(f.depth) + f.title; mv.append(o); }
       mv.onchange = () => { if (mv.value) send({ op: 'move', id: n.id, parent: +mv.value, at: 0 }); };
       acts.append(mv);
       const rn = document.createElement('button'); rn.textContent = tr('Renombrar'); rn.onclick = () => { const v = prompt(tr('Nuevo nombre'), n.title); if (v) send({ op: 'rename', id: n.id, title: v }); }; acts.append(rn);

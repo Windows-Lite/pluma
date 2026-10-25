@@ -60,10 +60,16 @@ button:disabled { opacity:.5; }
     <div class="card">
       <label class="opt"><input type="checkbox" id="bm" checked><span class="t"><div class="n" data-t="Marcadores">Marcadores</div><div class="d" data-t="En una carpeta nueva con el nombre del navegador">En una carpeta nueva con el nombre del navegador</div></span></label>
       <label class="opt"><input type="checkbox" id="hi" checked><span class="t"><div class="n" data-t="Historial">Historial</div><div class="d" data-t="Se une a tu historial, sin duplicados">Se une a tu historial, sin duplicados</div></span></label>
-      <label class="opt off"><input type="checkbox" id="pw" disabled><span class="t"><div class="n" data-t="Contraseñas">Contraseñas</div><div class="d" id="pwd" data-t="El navegador las guarda protegidas y no se pueden importar">El navegador las guarda protegidas y no se pueden importar</div></span></label>
     </div>
 
     <div class="actions"><button class="primary" id="go" disabled data-t="Importar">Importar</button><div class="spin hidden" id="spin"></div><span id="status" class="note" style="margin:0"></span></div>
+
+    <h2 data-t="Contraseñas">Contraseñas</h2>
+    <div class="card">
+      <div class="opt"><span class="t"><div class="n" data-t="Importar contraseñas desde un CSV">Importar contraseñas desde un CSV</div><div class="d" data-t="El navegador guarda las contraseñas protegidas, así que no se pueden leer directamente. Expórtalas a un archivo CSV y Pluma las añade a su propio almacén.">El navegador guarda las contraseñas protegidas, así que no se pueden leer directamente. Expórtalas a un archivo CSV y Pluma las añade a su propio almacén.</div></span></div>
+      <div class="opt" style="gap:10px"><button id="edge" data-t="Abrir Edge para exportar">Abrir Edge para exportar</button><button class="primary" id="csv" data-t="Elegir CSV e importar">Elegir CSV e importar</button><div class="spin hidden" id="pwspin"></div><span id="pwstatus" class="note" style="margin:0"></span></div>
+      <div class="opt hidden" id="pwrestart"><span class="t"><div class="n" id="pwdone"></div><div class="d" data-t="Reinicia Pluma para que las contraseñas estén disponibles">Reinicia Pluma para que las contraseñas estén disponibles</div></span><button class="primary" id="restart" data-t="Reiniciar Pluma">Reiniciar Pluma</button></div>
+    </div>
   </div>
 
   <div id="step2" class="hidden">
@@ -94,7 +100,7 @@ function render() {
     const r = document.createElement('input'); r.type = 'radio'; r.name = 'prof'; r.value = p.i;
     r.onchange = () => { chosen = p.i; $('go').disabled = false; };
     const t = document.createElement('div'); t.className = 't';
-    const n = document.createElement('div'); n.className = 'n'; n.textContent = p.browser + ' — ' + p.name;
+    const n = document.createElement('div'); n.className = 'n'; n.textContent = p.browser + ' (' + p.name + ')';
     const d = document.createElement('div'); d.className = 'd';
     const bits = [];
     if (p.bookmarks >= 0) bits.push(p.bookmarks + ' ' + tr('marcadores'));
@@ -106,25 +112,34 @@ function render() {
     box.append(l);
   });
   $('none').classList.toggle('hidden', (S.profiles || []).length > 0);
-  if (S.passwordKind === 10) { $('pwd').textContent = tr('No disponible en esta versión'); }
 }
 $('go').onclick = () => {
   if (chosen < 0) return;
   $('go').disabled = true; $('spin').classList.remove('hidden'); $('status').textContent = tr('Importando...');
   send({ op: 'import', profile: chosen, bookmarks: $('bm').checked, history: $('hi').checked });
 };
+$('edge').onclick = () => send({ op: 'openEdgePasswords' });
+$('csv').onclick = () => { $('pwspin').classList.remove('hidden'); $('pwstatus').textContent = tr('Importando...'); send({ op: 'importPasswords' }); };
+$('restart').onclick = () => send({ op: 'restart' });
 $('bookmarks').onclick = () => send({ op: 'open', url: 'https://pluma.local/bookmarks', background: false });
 $('again').onclick = () => { $('step2').classList.add('hidden'); $('step1').classList.remove('hidden'); chosen = -1; $('go').disabled = true; ask(); };
 function ask() {
   const all = new Set();
   document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
-  ['marcadores', 'con historial', 'abierto', 'Importando...', 'No disponible en esta versión',
+  ['marcadores', 'con historial', 'abierto', 'Importando...', 'contraseñas importadas', 'contraseña importada',
    'marcadores añadidos', 'páginas al historial', 'Importar'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {
   const m = e.data; if (!m) return;
   if (m.op === 'state') { if (m.t) { texts = m.t; translate(); } S = m; render(); }
+  else if (m.op === 'passwords') {
+    $('pwspin').classList.add('hidden');
+    if (m.note) { $('pwstatus').textContent = m.note; return; }
+    $('pwstatus').textContent = '';
+    $('pwdone').textContent = m.n + ' ' + tr(m.n === 1 ? 'contraseña importada' : 'contraseñas importadas');
+    $('pwrestart').classList.remove('hidden');
+  }
   else if (m.op === 'done') {
     $('spin').classList.add('hidden'); $('status').textContent = '';
     const s = $('summary'); s.textContent = '';

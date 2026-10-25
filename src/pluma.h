@@ -180,8 +180,11 @@ struct ImportProfile {
 std::vector<ImportProfile> import_scan();           // the browsers and profiles found
 struct ImportResult { int bookmarks = 0, history = 0, passwords = 0; std::wstring note; };
 ImportResult import_do(const ImportProfile &p, bool bookmarks, bool history, bool passwords);
-ImportResult import_passwords_csv(const std::wstring &path);   // a CSV exported by another browser
 int passwords_store_kind();          // 0 unknown, 10 writable (v10/DPAPI), 20 app-bound (not writable)
+// passwords come from a CSV the other browser exports (its own store is app-bound and cannot be read)
+void passwords_open_edge_export();   // opens edge://settings/passwords in Edge, for the user to export
+ImportResult passwords_import_pick();   // a file picker, then import the chosen CSV (passwords = how many; -1 cancelled)
+int passwords_apply_pending();       // at the next start, before the engine runs: writes the ready rows into Login Data
 
 void set_fullscreen(bool on);
 void app_quit();                          // closes Pluma for good (not just the window)

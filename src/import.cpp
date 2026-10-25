@@ -263,12 +263,6 @@ ImportResult import_do(const ImportProfile &p, bool want_bookmarks, bool want_hi
     if (p.passwords != 0) r.note = T(L"Las contraseñas no se pueden importar: el navegador las guarda protegidas.");
     return r;
 }
-ImportResult import_passwords_csv(const std::wstring & /*path*/) {
-    // not supported: Pluma's engine stores passwords app-bound, so a written password would not be used (see
-    // passwords_store_kind). Kept as a stub so the plan's shape is clear.
-    ImportResult r; r.note = L"No disponible"; return r;
-}
-
 // ---------------------------------------------------------------- can Pluma's engine take written passwords?
 int passwords_store_kind() {
     std::wstring prof = g_state + L"\\webview2\\EBWebView\\Default";

@@ -871,6 +871,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     hidden_load();
     bookmarks_load();
     scripts_load();
+    passwords_apply_pending();   // imported passwords waiting from last time: in before the engine opens Login Data
     env_create([] {
         g_env_ready = true;
         log_line(L"motor listo en " + std::to_wstring((int)now_ms()) + L" ms");

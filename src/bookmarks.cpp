@@ -300,7 +300,13 @@ void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j) {
             ImportResult r = import_do(ps[i], j[L"bookmarks"].b, j[L"history"].b, false);
             std::wstring m = L"{\"op\":\"done\",\"bookmarks\":" + std::to_wstring(r.bookmarks) + L",\"history\":" + std::to_wstring(r.history) + L",\"note\":" + json_escape(r.note) + L"}";
             v->PostWebMessageAsJson(m.c_str());
-        }
+        } else if (op == L"openEdgePasswords") passwords_open_edge_export();
+        else if (op == L"importPasswords") {
+            ImportResult r = passwords_import_pick();
+            if (r.passwords < 0) return;   // cancelled
+            std::wstring m = L"{\"op\":\"passwords\",\"n\":" + std::to_wstring(r.passwords) + L",\"note\":" + json_escape(r.note) + L"}";
+            v->PostWebMessageAsJson(m.c_str());
+        } else if (op == L"restart") app_restart(false);
         return;
     }
     // the bookmarks manager
