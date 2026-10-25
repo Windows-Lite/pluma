@@ -1603,16 +1603,19 @@ static void check_picture(Video *v) {
     // the picture ending before the sound: playing, not loading, well before the end, and the video's buffer ending
     // 1.5 s behind the time for 2 s. Pieces of the video that never came: mpv holds the last frame and the audio (a
     // file of its own) goes on; a 2:20 video stood at 2:07 to the end, 25/10. Its list is read again and mpv goes on
-    // from that second; a second time, the page takes over at that second
+    // from that second; a second time, the page takes over at that second. No buffer end at all 5 s after a load is
+    // the same: not one piece of the video came (mpv still shows the last frame of the file before)
     double now = now_ms();
+    bool none = v->cache_end < 0 && now - v->seek_t0 > 5000;
     bool behind = v->loaded && v->restarted && !v->paused && !v->buffering && !v->eof && !v->rereading && now - v->seek_t0 > 1500 &&
-                  v->dur > 0 && v->pos < v->dur - 3 && v->cache_end >= 0 && v->cache_end < v->pos - 1.5;
+                  v->dur > 0 && v->pos < v->dur - 3 && (none || (v->cache_end >= 0 && v->cache_end < v->pos - 1.5));
     if (!behind) { v->behind_since = 0; return; }
     if (!v->behind_since) { v->behind_since = now; return; }
     if (now - v->behind_since < 2000) return;
     v->behind_since = 0;
     wchar_t b[160];
-    swprintf_s(b, L"vídeo propio: la imagen se acabó en %.1f s (audio en %.1f, duración %.1f)", v->cache_end, v->pos, v->dur);
+    if (none) swprintf_s(b, L"vídeo propio: no llegó nada de la imagen (audio en %.1f, duración %.1f)", v->pos, v->dur);
+    else swprintf_s(b, L"vídeo propio: la imagen se acabó en %.1f s (audio en %.1f, duración %.1f)", v->cache_end, v->pos, v->dur);
     log_line(b);
     if (v->reread) {
         log_line(L"vídeo propio: otra vez en este vídeo; sigue la página");
