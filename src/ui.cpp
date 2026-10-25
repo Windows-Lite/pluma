@@ -41,7 +41,8 @@ static D2D1_COLOR_F mix(D2D1_COLOR_F a, D2D1_COLOR_F b, float k) {
     return { a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k, a.a + (b.a - a.a) * k };
 }
 static D2D1_COLOR_F alpha(D2D1_COLOR_F c, float a) { c.a *= a; return c; }
-bool dark_theme() {
+bool dark_theme() { return g_incognito || user_dark_theme(); }   // (incognito: dark, bar and pages)
+bool user_dark_theme() {
     if (g_set.theme == 1) return true;
     if (g_set.theme == 0) return false;
     DWORD v = 1, sz = sizeof(v);
@@ -538,8 +539,8 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         float ix = compact && !active ? (r.left + r.right) / 2 : r.left + S(18);
         if (t->loading && t->view) { draw_spinner(rt, g_br.Get(), ix, cy, S(6.5f), now, p.accent); busy = true; }
         else if (settings_page_url(t->url)) glyph(rt, g_br.Get(), g_f.icon.Get(), G_GEAR, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.text);
-        else if (t->incognito) {
-            // incognito: Edge's InPrivate sign instead of the site's icon, in the accent
+        else if (t->incognito && t->url.empty()) {
+            // incognito's new tab: Edge's InPrivate sign, in the accent (pages keep their icon, as in Edge)
             glyph(rt, g_br.Get(), g_f.icon.Get(), G_INPRIVATE, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.accent);
         } else {
             auto b = tab_icon(t);
@@ -1408,7 +1409,7 @@ static std::vector<MItem> build_page(int page) {
     std::vector<MItem> v;
     if (page == PAGE_MAIN) {
         v.push_back(item(T(L"Pestaña nueva"), G_NEWTAB, T(L"Ctrl+T"), [] { after_menu([] { tab_new(L"", true); }); }));
-        v.push_back(item(T(L"Pestaña de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { tab_new(L"", true, -1, true); }); }));
+        v.push_back(item(T(L"Nueva ventana de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { app_open_incognito(); }); }));
         MItem re = item(T(L"Reabrir pestaña cerrada"), G_UNDO, T(L"Ctrl+Mayús+T"), [] { after_menu([] { tab_reopen_closed(); }); });
         v.push_back(re);
         v.push_back(sep());
@@ -1905,7 +1906,7 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
     if (ctrl && !alt) {
         if (vk == 'T' && shift) { tab_reopen_closed(); return true; }
-        if (vk == 'N' && shift) { tab_new(L"", true, -1, true); return true; }   // incognito, as in Chrome
+        if (vk == 'N' && shift) { app_open_incognito(); return true; }   // the incognito window, as in Chrome
         if (vk == 'T' || vk == 'N') { tab_new(L"", true); return true; }
         if (vk == 'W' || vk == VK_F4) { tab_close(g_active); return true; }
         if (vk == VK_TAB || vk == VK_PRIOR || vk == VK_NEXT) {

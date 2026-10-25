@@ -133,6 +133,8 @@ void history_hide_site(const std::wstring &url, bool hide);           // off the
 void set_fullscreen(bool on);
 void app_quit();                          // closes Pluma for good (not just the window)
 void app_close_window();                  // what the window's X does
+std::wstring app_name();                  // "Pluma", or "Pluma (Incógnito)": the window's title
+void app_open_incognito(const std::wstring &url = L"");   // the incognito window (or a tab in it, from there)
 void app_restart(bool hidden);            // starts Pluma.exe again (after an update) and closes this one
 std::wstring fixup_input(const std::wstring &typed);   // what was typed in the address bar -> the url to load
 
@@ -140,6 +142,7 @@ extern HINSTANCE g_inst;
 extern HWND g_win, g_bar, g_edit;
 extern std::wstring g_root, g_state;   // the exe's folder; %LOCALAPPDATA%\Pluma (or its test folder)
 extern bool g_test, g_dev, g_quitting, g_fullscreen;
+extern bool g_incognito;   // the incognito window (--incognito): every tab InPrivate, all dark, nothing kept
 extern bool g_test_visible;   // a test instance on the screen (PLUMA_A_LA_VISTA), to record what the user would see
 extern double g_open_asked;               // when a page was asked for (start, or from memory): for the log
 extern ComPtr<ICoreWebView2Environment> g_env;
@@ -238,7 +241,8 @@ void ui_toggle_pin();                      // the page on screen onto the new ta
 // colours (Mapea's tokens)
 struct Palette { D2D1_COLOR_F bg, surface, text, sub, line, line_strong, accent, accent_soft, error, hover, press; };
 const Palette &pal();
-bool dark_theme();
+bool dark_theme();       // the bar (always dark in the incognito window)
+bool user_dark_theme();  // what the settings say (ordinary pages follow this one)
 
 // ---------------------------------------------------------------- YouTube in Pluma's own player (video.cpp)
 void video_init();
