@@ -45,6 +45,8 @@ std::wstring fixup_input(const std::wstring &typed) {
     std::wstring s = trim(typed);
     if (s.empty()) return L"";
     std::wstring l = lower(s);
+    std::wstring own = settings_page_from_typed(s);   // pluma://settings (and edge://settings by habit)
+    if (!own.empty()) return own;
     static const wchar_t *kSchemes[] = { L"http://", L"https://", L"file:", L"about:", L"edge:", L"chrome-extension:",
                                          L"view-source:", L"data:", L"blob:", L"mailto:" };
     for (auto p : kSchemes) if (starts_with(l, p)) return s;
@@ -301,6 +303,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     t->suspended = false;
     EventRegistrationToken tok;
     ICoreWebView2 *v = t->view.Get();
+    settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
@@ -362,7 +365,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             t->title = s ? s : L"";
             CoTaskMemFree(s);
             if (t == active_tab()) SetWindowTextW(g_win, (t->title.empty() ? std::wstring(L"Pluma") : t->title + L" - Pluma").c_str());
-            if (!t->incognito) history_title(t->url, t->title);
+            if (!t->incognito && !settings_page_url(t->url)) history_title(t->url, t->title);
             session_save_soon();
             ui_invalidate();
             return S_OK;
@@ -376,7 +379,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             t->progress = 1;
             t->load_done = now_ms();
             t->crashed = false;
-            if (ok && tab_index(t->id) >= 0 && !t->incognito) history_add(t->url, t->title);   // (incognito: no history)
+            if (ok && tab_index(t->id) >= 0 && !t->incognito && !settings_page_url(t->url)) history_add(t->url, t->title);   // (incognito: no history)
             if (ok && t == active_tab()) trim_after_load();
             // a reload keeps the address (no SourceChanged): Pluma's player takes the video again (it stayed on the
             // page after reloading, in the user's recording, 25/10)
@@ -658,7 +661,7 @@ void tabs_layout_views() {
 Tab *tab_new(const std::wstring &url, bool activate, int at, bool incognito) {
     auto t = std::make_unique<Tab>();
     t->id = g_next_id++;
-    t->url = url;
+    t->url = starts_with(url, L"pluma://") ? settings_page_from_typed(url) : url;   // (Pluma's own pages, from outside)
     t->incognito = incognito;
     if (!url.empty()) t->icon_png = cached_icon(url);
     Tab *raw = t.get();
