@@ -1,0 +1,909 @@
+<!doctype html>
+<!-- Pluma's light YouTube page (youtube.cpp serves it at YouTube's own addresses, inside the exe). It asks YouTube's
+     API (/youtubei/v1) as YouTube's page does, with the person's cookies, and draws the answer. Written in Spanish, as
+     the code: Pluma writes the texts in the chosen language into CFG.t as it serves it (t('...')). Anything that
+     fails goes to YouTube's own page (pluma_normal=1: youtube.cpp takes the mark off). -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>YouTube</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+:root {
+  --bg: #f4f6f9; --card: #ffffff; --text: #1d2733; --sub: #5c6976; --line: #e2e7ed; --strong: #b9c4cf;
+  --accent: #2f6fed; --hover: rgba(29, 39, 51, .06); --press: rgba(29, 39, 51, .11); --red: #ff0033; --chip: #e9edf2;
+  color-scheme: light;
+}
+:root.dark {
+  --bg: #1b1f24; --card: #242a31; --text: #e7eaee; --sub: #95a0ab; --line: #313840; --strong: #56616d;
+  --accent: #6596fa; --hover: rgba(255, 255, 255, .07); --press: rgba(255, 255, 255, .12); --chip: #2c333b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; color: var(--text); font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+img { display: block; }
+#top { position: sticky; top: 0; z-index: 5; height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  background: var(--bg); border-bottom: 1px solid var(--line); }
+.logo { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 17px; letter-spacing: -.2px; flex: none; }
+.logo svg { width: 28px; height: 20px; }
+.logo small { font-weight: 500; font-size: 11px; color: var(--sub); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; }
+#sf { position: relative; flex: 1; max-width: 620px; margin: 0 auto; display: flex; }
+#q { flex: 1; min-width: 0; height: 36px; border: 1px solid var(--line); border-right: 0; border-radius: 10px 0 0 10px; background: var(--card);
+  color: var(--text); font: inherit; padding: 0 14px; outline: none; }
+#q:focus { border-color: var(--accent); }
+#sf > button { width: 56px; height: 36px; border: 1px solid var(--line); border-radius: 0 10px 10px 0; background: var(--chip); }
+#sf > button svg { width: 18px; height: 18px; fill: var(--text); vertical-align: middle; }
+#sug { position: absolute; top: 40px; left: 0; right: 56px; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  padding: 6px 0; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); display: none; z-index: 6; }
+#sug.on { display: block; }
+#sug a { display: block; padding: 6px 14px; }
+#sug a.sel, #sug a:hover { background: var(--hover); }
+.links { display: flex; gap: 2px; flex: none; }
+.links a, .btn { height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 10px; white-space: nowrap; cursor: pointer; }
+.links a:hover, .btn:hover { background: var(--hover); }
+.links a.on { background: var(--press); }
+.btn { border: 1px solid var(--line); background: var(--card); }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn.on { background: var(--press); }
+.btn svg { width: 18px; height: 18px; fill: currentColor; }
+main { padding: 18px 22px 60px; max-width: 1760px; margin: 0 auto; }
+.note { color: var(--sub); text-align: center; padding: 60px 20px; font-size: 15px; }
+.note b { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 26px 16px; }
+.item .th { position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: var(--chip); }
+.item .th img { width: 100%; height: 100%; object-fit: cover; }
+.badge { position: absolute; right: 6px; bottom: 6px; background: rgba(0, 0, 0, .78); color: #fff; font-size: 12px; font-weight: 500;
+  padding: 1px 5px; border-radius: 5px; }
+.badge.live { background: var(--red); }
+.item .row { display: flex; gap: 10px; margin-top: 10px; }
+.av { width: 36px; height: 36px; border-radius: 50%; flex: none; background: var(--chip); object-fit: cover; }
+.tt { font-weight: 600; font-size: 15px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sub { color: var(--sub); font-size: 13px; margin-top: 2px; }
+.sub a:hover { color: var(--text); }
+.list .item { display: flex; gap: 16px; margin-bottom: 16px; }
+.list .item .th { width: 360px; flex: none; }
+.list .item .row { margin-top: 0; }
+.list .item .desc { color: var(--sub); font-size: 12.5px; margin-top: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.list .chan .th { background: none; display: flex; justify-content: center; align-items: center; }
+.list .chan .th img { width: 136px; height: 136px; border-radius: 50%; }
+.list { max-width: 1100px; margin: 0 auto; }
+.more { height: 40px; }
+.ch-banner { aspect-ratio: 6.2 / 1; max-height: 170px; border-radius: 14px; overflow: hidden; background: var(--chip) center / cover; margin-bottom: 18px; }
+.ch-head { display: flex; align-items: center; gap: 20px; margin-bottom: 14px; }
+.ch-head .big { width: 120px; height: 120px; border-radius: 50%; object-fit: cover; background: var(--chip); }
+.ch-head h1 { font-size: 30px; margin: 0 0 4px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+.tabs a { padding: 10px 14px; color: var(--sub); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs a.on { color: var(--text); border-color: var(--text); font-weight: 600; }
+.tabs a:hover { color: var(--text); }
+/* the watch page: the player stays where it is (Pluma's player is a window in its place), the page scrolls under it */
+.watch { display: flex; gap: 24px; align-items: flex-start; }
+.watch .col { flex: 1; min-width: 0; }
+.pwrap { position: sticky; top: 56px; z-index: 4; background: var(--bg); padding: 0 0 12px; margin-top: -18px; padding-top: 18px; }
+#movie_player { position: relative; width: min(100%, calc((100vh - 56px) * .64 * 16 / 9)); aspect-ratio: 16 / 9; margin: 0 auto;
+  background: #000 center / cover no-repeat; border-radius: 12px; overflow: hidden; color: #fff; }
+#movie_player .veil { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: rgba(0, 0, 0, .35); text-align: center; padding: 20px; }
+.spin { width: 44px; height: 44px; border-radius: 50%; border: 4px solid rgba(255, 255, 255, .25); border-top-color: #fff; animation: r 0.9s linear infinite; }
+@keyframes r { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+.veil .btn { background: rgba(255, 255, 255, .14); border-color: transparent; color: #fff; }
+.veil .btn:hover { background: rgba(255, 255, 255, .24); }
+.veil .next { display: flex; gap: 14px; align-items: center; text-align: left; max-width: 520px; }
+.veil .next img { width: 160px; border-radius: 8px; }
+h1.vt { font-size: 20px; margin: 4px 0 10px; line-height: 1.3; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.bar .owner { display: flex; align-items: center; gap: 10px; margin-right: 8px; }
+.bar .owner .name { font-weight: 600; }
+.bar .spacer { flex: 1; }
+.descbox { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-top: 14px; white-space: pre-wrap;
+  word-wrap: break-word; }
+.descbox.short { max-height: 7.5em; overflow: hidden; cursor: pointer; position: relative; }
+.descbox .head { font-weight: 600; margin-bottom: 4px; white-space: normal; }
+.descbox a, .ctext a { color: var(--accent); }
+.descbox a:hover, .ctext a:hover { text-decoration: underline; }
+#comments { margin-top: 22px; min-height: 60px; }
+#comments h2 { font-size: 18px; margin: 0 0 16px; }
+.cm { display: flex; gap: 12px; margin-bottom: 18px; }
+.cm .who { font-size: 13px; font-weight: 600; }
+.cm .who span { font-weight: 400; color: var(--sub); margin-left: 6px; }
+.cm .who .creator { background: var(--chip); border-radius: 10px; padding: 0 6px; color: var(--text); }
+.ctext { white-space: pre-wrap; word-wrap: break-word; margin-top: 2px; }
+.cm .acts { color: var(--sub); font-size: 12.5px; margin-top: 4px; display: flex; gap: 14px; align-items: center; }
+.cm .acts button { background: none; border: 0; color: var(--accent); padding: 4px 0; cursor: pointer; font-weight: 600; }
+.cm .replies { margin-top: 10px; }
+.cm .replies .av { width: 26px; height: 26px; }
+aside.side { width: 402px; flex: none; }
+aside.side .item { display: flex; gap: 8px; margin-bottom: 10px; }
+aside.side .item .th { width: 168px; flex: none; border-radius: 8px; }
+aside.side .item .row { margin: 0; }
+aside.side .tt { font-size: 14px; }
+aside.side .sub { font-size: 12px; }
+.plist { border: 1px solid var(--line); border-radius: 12px; margin-bottom: 14px; max-height: 420px; overflow: auto; background: var(--card); }
+.plist h3 { margin: 0; padding: 12px 14px 8px; font-size: 16px; }
+.plist .item { padding: 4px 10px; margin: 0; }
+.plist .item.cur { background: var(--press); }
+@media (max-width: 1100px) { .watch { display: block; } aside.side { width: auto; margin-top: 26px; } .list .item .th { width: 240px; } }
+@media (max-width: 760px) { .links { display: none; } .list .item { display: block; } .list .item .th { width: 100%; margin-bottom: 8px; } }
+</style>
+</head>
+<body>
+<header id="top">
+  <a class="logo" href="/"><svg viewBox="0 0 28 20"><rect width="28" height="20" rx="6" fill="#ff0033"/><path d="m11 5.6 7.5 4.4-7.5 4.4z" fill="#fff"/></svg>YouTube <small id="lite"></small></a>
+  <form id="sf" action="/results" autocomplete="off"><input id="q" name="search_query" spellcheck="false"><button aria-label="buscar" type="submit"><svg viewBox="0 0 24 24"><path d="M10 3a7 7 0 0 1 5.6 11.2l4.6 4.6-1.4 1.4-4.6-4.6A7 7 0 1 1 10 3Zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z"/></svg></button><div id="sug"></div></form>
+  <nav class="links" id="links"></nav>
+  <a class="btn" id="normal"></a>
+  <a class="btn primary" id="login" hidden></a>
+</header>
+<main id="main"></main>
+<script>
+const CFG = /*PLUMA_CFG*/{"dark":false,"hl":"es","t":{}}/*PLUMA_CFG_FIN*/;
+const t = (s) => (CFG.t && CFG.t[s]) || s;
+if (CFG.dark) document.documentElement.classList.add('dark');
+document.documentElement.lang = CFG.hl;
+
+// PARSER: YouTube's answers -> plain objects (no page here: tools/youtube-test.js runs this part alone)
+const txt = (x) => !x ? '' : typeof x === 'string' ? x : x.simpleText != null ? x.simpleText : x.content != null ? x.content :
+  Array.isArray(x.runs) ? x.runs.map((r) => r.text || '').join('') : '';
+function find(o, key, depth = 0) {
+  // the first value of that key, anywhere inside (YouTube moves things about; the names stay)
+  if (!o || typeof o !== 'object' || depth > 40) return undefined;
+  if (Object.prototype.hasOwnProperty.call(o, key)) return o[key];
+  for (const k in o) { const r = find(o[k], key, depth + 1); if (r !== undefined) return r; }
+  return undefined;
+}
+function findAll(o, key, out = [], depth = 0) {
+  if (!o || typeof o !== 'object' || depth > 40) return out;
+  if (Object.prototype.hasOwnProperty.call(o, key)) out.push(o[key]);
+  for (const k in o) if (k !== key) findAll(o[k], key, out, depth + 1);
+  return out;
+}
+const fixUrl = (u) => !u ? '' : u.startsWith('//') ? 'https:' + u : u;
+function best(th) {
+  const l = (th && (th.thumbnails || th.sources)) || [];
+  if (!l.length) return '';
+  const ok = l.filter((x) => (x.width || 0) <= 720);
+  return fixUrl((ok.length ? ok[ok.length - 1] : l[0]).url || '');
+}
+const cmdUrl = (c) => (c && ((c.commandMetadata && c.commandMetadata.webCommandMetadata && c.commandMetadata.webCommandMetadata.url) ||
+  (c.browseEndpoint && c.browseEndpoint.canonicalBaseUrl) || (c.urlEndpoint && c.urlEndpoint.url))) || '';
+const liveUrl = (u) => u + (u.includes('?') ? '&' : '?') + 'pluma_normal=1';   // lives: YouTube's own page
+function contToken(c) {
+  if (!c) return null;
+  const cc = find(c, 'continuationCommand');
+  return (cc && cc.token) || null;
+}
+function link(cmd, current) {
+  // a link of a text: where it goes, unwrapped (YouTube's /redirect?q=), and if it is a second of this same video
+  if (!cmd) return null;
+  const w = cmd.watchEndpoint;
+  let url = cmdUrl(cmd);
+  if (w && w.videoId) {
+    if (!url) url = '/watch?v=' + w.videoId + (w.startTimeSeconds ? '&t=' + w.startTimeSeconds + 's' : '');
+    if (w.videoId === current && w.startTimeSeconds != null) return { url, seek: w.startTimeSeconds };
+    return { url };
+  }
+  if (!url) return null;
+  if (/^https?:\/\/(www\.)?youtube\.com\/redirect\?/.test(url) || url.startsWith('/redirect?')) {
+    try { const q = new URL(url, 'https://www.youtube.com').searchParams.get('q'); if (q) url = q; } catch (e) {}
+  }
+  const external = /^https?:\/\//.test(url) && !/^https:\/\/www\.youtube\.com\//.test(url);
+  return { url, external };
+}
+function attributed(a, current) {
+  // {content, commandRuns:[{startIndex, length, onTap}]} -> [{text, link}] (the indexes count UTF-16, as JS strings)
+  if (!a) return [];
+  if (Array.isArray(a.runs)) return a.runs.map((r) => ({ text: r.text || '', link: link(r.navigationEndpoint, current) }));
+  const s = a.content || '', runs = (a.commandRuns || []).slice().sort((x, y) => (x.startIndex || 0) - (y.startIndex || 0)), out = [];
+  let i = 0;
+  for (const r of runs) {
+    const st = r.startIndex || 0, len = r.length || 0;
+    if (st < i || !len) continue;
+    if (st > i) out.push({ text: s.slice(i, st), link: null });
+    out.push({ text: s.slice(st, st + len), link: link(r.onTap && r.onTap.innertubeCommand, current) });
+    i = st + len;
+  }
+  if (i < s.length) out.push({ text: s.slice(i), link: null });
+  return out;
+}
+function fromVideo(r) {
+  if (!r || !r.videoId) return null;
+  const ep = r.navigationEndpoint || {};
+  if (ep.reelWatchEndpoint) return null;   // (Shorts: not here)
+  let url = cmdUrl(ep) || '/watch?v=' + r.videoId;
+  if (url.startsWith('/shorts/')) return null;
+  const owner = ((r.ownerText || r.longBylineText || r.shortBylineText || {}).runs || [])[0] || {};
+  const over = r.thumbnailOverlays || [];
+  const tstat = over.map((o) => o.thumbnailOverlayTimeStatusRenderer).find(Boolean);
+  const live = (r.badges || []).some((b) => /LIVE/.test((b.metadataBadgeRenderer || {}).style || '')) || (tstat && tstat.style === 'LIVE') || !!r.upcomingEventData;
+  if (live) url = liveUrl(url);
+  const av = find(r.channelThumbnailSupportedRenderers || r.channelThumbnail || {}, 'thumbnails');
+  return {
+    kind: 'video', id: r.videoId, title: txt(r.title), url, thumb: best(r.thumbnail), live,
+    duration: live ? t('EN DIRECTO') : txt(r.lengthText) || (tstat ? txt(tstat.text) : ''),
+    channel: owner.text || '', channelUrl: cmdUrl(owner.navigationEndpoint),
+    avatar: av && av[0] ? fixUrl(av[0].url) : '',
+    meta: r.videoInfo ? [txt(r.videoInfo)] : [txt(r.shortViewCountText || r.viewCountText), txt(r.publishedTimeText)].filter(Boolean),
+    desc: r.detailedMetadataSnippets ? txt((r.detailedMetadataSnippets[0] || {}).snippetText) : txt(r.descriptionSnippet),
+  };
+}
+function fromLockup(l) {
+  if (!l) return null;
+  const m = (l.metadata && l.metadata.lockupMetadataViewModel) || {};
+  const cmd = ((l.rendererContext || {}).commandContext || {}).onTap;
+  let url = cmdUrl(cmd && cmd.innertubeCommand);
+  const img = l.contentImage || {};
+  const tv = img.thumbnailViewModel || find(img, 'thumbnailViewModel') || {};
+  const badges = findAll(img, 'thumbnailBadgeViewModel');
+  const live = badges.some((b) => /LIVE/.test(b.badgeStyle || '') || /LIVE/.test(JSON.stringify(b.icon || '')));
+  const rows = (((m.metadata || {}).contentMetadataViewModel || {}).metadataRows || []).map((r) => (r.metadataParts || []).map((p) => txt(p.text)).filter(Boolean));
+  const dav = (m.image || {}).decoratedAvatarViewModel || {};
+  const avs = find(dav, 'sources');
+  const chUrl = cmdUrl(find(dav.rendererContext || {}, 'innertubeCommand'));
+  const type = l.contentType || '';
+  const isVideo = type === 'LOCKUP_CONTENT_TYPE_VIDEO';
+  if (!url && isVideo && l.contentId) url = '/watch?v=' + l.contentId;
+  if (!url || url.startsWith('/shorts/')) return null;
+  if (live && isVideo) url = liveUrl(url);
+  const hasChannel = rows.length >= 2;
+  return {
+    kind: isVideo ? 'video' : 'playlist', id: l.contentId || '', title: txt(m.title), url, thumb: best(tv.image), live,
+    duration: live ? t('EN DIRECTO') : badges.length ? badges[0].text || '' : '',
+    channel: hasChannel ? (rows[0][0] || '') : '', channelUrl: chUrl, avatar: avs && avs[0] ? fixUrl(avs[0].url) : '',
+    meta: (hasChannel ? rows.slice(1) : rows).map((r) => r.join(' · ')).filter(Boolean),
+  };
+}
+function fromChannel(r) {
+  if (!r || !r.channelId) return null;
+  return { kind: 'channel', id: r.channelId, title: txt(r.title), url: cmdUrl(r.navigationEndpoint) || '/channel/' + r.channelId,
+           thumb: best(r.thumbnail), meta: [txt(r.videoCountText), txt(r.subscriberCountText)].filter(Boolean), desc: txt(r.descriptionSnippet) };
+}
+function fromPlaylist(r) {
+  if (!r || !r.playlistId) return null;
+  const th = (r.thumbnails || [])[0] || r.thumbnail;
+  const owner = ((r.longBylineText || r.shortBylineText || {}).runs || [])[0] || {};
+  return { kind: 'playlist', id: r.playlistId, title: txt(r.title), url: '/playlist?list=' + r.playlistId, thumb: best(th),
+           duration: txt(r.videoCountShortText) || txt(r.videoCountText), channel: owner.text || '', channelUrl: cmdUrl(owner.navigationEndpoint), meta: [] };
+}
+function collect(list, out) {
+  // the items of a list, whatever wraps them, and the token for more
+  out = out || { items: [], cont: null };
+  for (const x of list || []) {
+    if (!x || typeof x !== 'object') continue;
+    const push = (it) => { if (it) out.items.push(it); };
+    if (x.richItemRenderer) collect([x.richItemRenderer.content], out);
+    else if (x.videoRenderer) push(fromVideo(x.videoRenderer));
+    else if (x.compactVideoRenderer) push(fromVideo(x.compactVideoRenderer));
+    else if (x.gridVideoRenderer) push(fromVideo(x.gridVideoRenderer));
+    else if (x.playlistVideoRenderer) push(fromVideo(x.playlistVideoRenderer));
+    else if (x.playlistPanelVideoRenderer) push(fromVideo(x.playlistPanelVideoRenderer));
+    else if (x.lockupViewModel) push(fromLockup(x.lockupViewModel));
+    else if (x.channelRenderer) push(fromChannel(x.channelRenderer));
+    else if (x.playlistRenderer) push(fromPlaylist(x.playlistRenderer));
+    else if (x.itemSectionRenderer) collect(x.itemSectionRenderer.contents, out);
+    else if (x.playlistVideoListRenderer) collect(x.playlistVideoListRenderer.contents, out);
+    else if (x.gridRenderer) collect(x.gridRenderer.items, out);
+    else if (x.shelfRenderer) { const c = x.shelfRenderer.content || {}; collect((c.verticalListRenderer || c.horizontalListRenderer || c.expandedShelfContentsRenderer || c.gridRenderer || {}).items, out); }
+    else if (x.richSectionRenderer) { const s = (x.richSectionRenderer.content || {}).richShelfRenderer; if (s) collect(s.contents, out); }
+    else if (x.continuationItemRenderer) out.cont = contToken(x.continuationItemRenderer) || out.cont;
+  }
+  return out;
+}
+function appended(j) {
+  // a continuation's items (browse, search, next)
+  const acts = [].concat(j.onResponseReceivedActions || [], j.onResponseReceivedCommands || [], j.onResponseReceivedEndpoints || []);
+  const list = [];
+  for (const a of acts) {
+    const c = a.appendContinuationItemsAction || a.reloadContinuationItemsCommand;
+    if (c && c.continuationItems) list.push(...c.continuationItems);
+  }
+  return collect(list);
+}
+function parseBrowse(j) {
+  const tabs = ((j.contents || {}).twoColumnBrowseResultsRenderer || {}).tabs || [];
+  const sel = tabs.map((x) => x.tabRenderer).find((x) => x && x.selected) || (tabs[0] || {}).tabRenderer || {};
+  const c = sel.content || {};
+  const list = (c.richGridRenderer || {}).contents || (c.sectionListRenderer || {}).contents || [];
+  if (!tabs.length && !j.header) throw new Error('browse sin contenido');
+  const out = collect(list);
+  const nudge = find(c, 'feedNudgeRenderer') || find(c, 'messageRenderer');
+  out.note = nudge ? { title: txt(nudge.title || nudge.text), sub: txt(nudge.subtitle) } : null;
+  out.tabs = tabs.map((x) => x.tabRenderer || x.expandableTabRenderer).filter(Boolean)
+    .map((x) => ({ title: x.title || '', url: cmdUrl(x.endpoint), selected: !!x.selected }));
+  out.header = parseHeader(j);
+  return out;
+}
+function parseHeader(j) {
+  const h = j.header || {};
+  const md = (j.metadata || {}).channelMetadataRenderer || {};
+  const ph = find(h, 'pageHeaderViewModel');
+  const subscribed = find(h, 'subscribed');
+  if (ph) {
+    const rows = ((find(ph.metadata || {}, 'metadataRows')) || []).map((r) => (r.metadataParts || []).map((p) => txt(p.text)).filter(Boolean).join(' · '));
+    return { title: txt(find(ph.title || {}, 'text')) || md.title || '', avatar: fixUrl((find(ph.image || {}, 'sources') || [{}])[0].url),
+             banner: fixUrl(((find(ph.banner || {}, 'sources')) || []).slice(-1).map((x) => x.url)[0] || ''), meta: rows.filter(Boolean),
+             channelId: md.externalId || '', subscribed: subscribed === true };
+  }
+  const c4 = h.c4TabbedHeaderRenderer;
+  if (c4) return { title: c4.title || '', avatar: best(c4.avatar), banner: best(c4.banner), meta: [txt(c4.subscriberCountText)].filter(Boolean),
+                   channelId: c4.channelId || md.externalId || '', subscribed: subscribed === true };
+  const pl = h.playlistHeaderRenderer;
+  if (pl) return { title: txt(pl.title), meta: [txt(pl.ownerText), txt(pl.numVideosText)].filter(Boolean), playlist: true };
+  const title = txt(find(h, 'pageTitle')) || txt(find(h, 'title')) || md.title || '';
+  return title ? { title, meta: [], channelId: md.externalId || '' } : null;
+}
+function parseSearch(j) {
+  const sl = find((j.contents || {}).twoColumnSearchResultsRenderer || {}, 'sectionListRenderer');
+  if (!sl) throw new Error('búsqueda sin resultados');
+  return collect(sl.contents);
+}
+function parseNext(j, id) {
+  const r = (j.contents || {}).twoColumnWatchNextResults;
+  if (!r) throw new Error('next sin contenido');
+  const main = ((r.results || {}).results || {}).contents || [];
+  const prim = main.map((x) => x.videoPrimaryInfoRenderer).find(Boolean) || {};
+  const sec = main.map((x) => x.videoSecondaryInfoRenderer).find(Boolean) || {};
+  const own = (sec.owner || {}).videoOwnerRenderer || {};
+  const ownRun = ((own.title || {}).runs || [])[0] || {};
+  const seg = find(prim.videoActions || {}, 'segmentedLikeDislikeButtonViewModel') || {};
+  const likeVm = seg.likeButtonViewModel || {};
+  const likeEps = findAll(likeVm, 'likeEndpoint');
+  const subR = (sec.subscribeButton || {}).subscribeButtonRenderer || {};
+  const comments = main.map((x) => x.itemSectionRenderer).find((s) => s && (s.targetId === 'comments-section' || s.sectionIdentifier === 'comment-item-section'));
+  const sideList = ((r.secondaryResults || {}).secondaryResults || {}).results || [];
+  const related = collect(sideList);
+  const pl = (r.playlist || {}).playlist;
+  const auto = find(r.autoplay || {}, 'autoplayVideo');
+  return {
+    id, title: txt(prim.title),
+    views: txt(find(prim.viewCount || {}, 'viewCount')) || txt(find(prim.viewCount || {}, 'shortViewCount')),
+    date: txt(prim.dateText), ago: txt(prim.relativeDateText),
+    likes: (find(likeVm, 'defaultButtonViewModel') || {}).buttonViewModel ? (find(likeVm, 'defaultButtonViewModel').buttonViewModel.title || '') : '',
+    likeStatus: (find(likeVm, 'likeStatusEntity') || {}).likeStatus || 'INDIFFERENT',
+    likeParams: (likeEps.find((e) => e.status === 'LIKE') || {}).likeParams || '',
+    removeLikeParams: (likeEps.find((e) => e.status === 'INDIFFERENT') || {}).removeLikeParams || '',
+    channel: txt(own.title), channelUrl: cmdUrl(ownRun.navigationEndpoint), channelId: ((ownRun.navigationEndpoint || {}).browseEndpoint || {}).browseId || subR.channelId || '',
+    avatar: best(own.thumbnail), subs: txt(own.subscriberCountText),
+    subscribed: !!subR.subscribed, canSubscribe: subR.enabled !== false && !!(subR.channelId || own.title),
+    subParams: ((findAll(subR, 'subscribeEndpoint')[0]) || {}).params || '', unsubParams: ((findAll(subR, 'unsubscribeEndpoint')[0]) || {}).params || '',
+    desc: attributed(sec.attributedDescription || sec.description, id),
+    commentsToken: comments ? contToken(comments) : null,
+    related: related.items, relatedCont: related.cont,
+    playlist: pl ? { title: pl.title || '', index: pl.currentIndex || 0, items: collect(pl.contents).items } : null,
+    autoplay: auto && auto.watchEndpoint ? auto.watchEndpoint.videoId : '',
+  };
+}
+function parseComments(j, id) {
+  // new format: each comment's view model points (commentKey) at its data among the frameworkUpdates
+  const ents = {};
+  for (const m of ((j.frameworkUpdates || {}).entityBatchUpdate || {}).mutations || []) if (m.entityKey && m.payload) ents[m.entityKey] = m.payload;
+  const acts = [].concat(j.onResponseReceivedEndpoints || [], j.onResponseReceivedActions || []);
+  const out = { items: [], cont: null, count: '' };
+  const one = (vm, thread) => {
+    const p = (ents[vm.commentKey] || {}).commentEntityPayload;
+    if (!p) return null;
+    const pr = p.properties || {}, au = p.author || {}, tb = p.toolbar || {};
+    return { id: pr.commentId || '', author: au.displayName || '', avatar: fixUrl(au.avatarThumbnailUrl || ''),
+             channelUrl: cmdUrl((au.channelCommand || {}).innertubeCommand), creator: !!au.isCreator, verified: !!au.isVerified,
+             text: attributed(pr.content, id), time: pr.publishedTime || '', likes: tb.likeCountNotliked || '',
+             replies: tb.replyCount || '', repliesToken: thread ? contToken((thread.replies || {}).commentRepliesRenderer) : null };
+  };
+  for (const a of acts) {
+    const c = a.appendContinuationItemsAction || a.reloadContinuationItemsCommand;
+    for (const x of (c && c.continuationItems) || []) {
+      if (x.commentsHeaderRenderer) out.count = txt(x.commentsHeaderRenderer.countText);
+      else if (x.commentThreadRenderer) {
+        const vm = find(x.commentThreadRenderer, 'commentViewModel');
+        const it = vm && one(vm.commentViewModel || vm, x.commentThreadRenderer);
+        if (it) out.items.push(it);
+      } else if (x.commentViewModel) { const it = one(x.commentViewModel, null); if (it) out.items.push(it); }
+      else if (x.continuationItemRenderer) out.cont = contToken(x.continuationItemRenderer) || out.cont;
+    }
+  }
+  return out;
+}
+function parseSuggest(j) { return ((j && j[1]) || []).map((x) => (Array.isArray(x) ? x[0] : x)).filter((x) => typeof x === 'string').slice(0, 10); }
+function startSeconds(v) {
+  // &t=: 90, 90s, 1m30s, 1h2m3s
+  if (!v) return 0;
+  if (/^\d+(\.\d+)?$/.test(v)) return +v;
+  let s = 0;
+  for (const [, n, u] of v.matchAll(/(\d+)([hms])/g)) s += +n * (u === 'h' ? 3600 : u === 'm' ? 60 : 1);
+  return s;
+}
+// PARSER_FIN
+if (typeof module !== 'undefined') module.exports = { collect, appended, parseBrowse, parseSearch, parseNext, parseComments, parseSuggest, attributed, startSeconds };
+
+// ---------------------------------------------------------------- YouTube's API, as its page calls it
+const ORIGIN = 'https://www.youtube.com', CV = '2.20260623.01.00', HL = CFG.hl || 'es';
+const $ = (id) => document.getElementById(id);
+const P = location.pathname.replace(/\/+$/, '') || '/', Q = new URLSearchParams(location.search);
+function cookies() {
+  const o = {};
+  for (const c of document.cookie.split('; ')) { const i = c.indexOf('='); if (i > 0) o[c.slice(0, i)] = c.slice(i + 1); }
+  return o;
+}
+const signedIn = () => !!cookies().SAPISID;
+const store = { get: (k) => { try { return localStorage.getItem('pluma.' + k); } catch (e) { return null; } },
+                set: (k, v) => { try { localStorage.setItem('pluma.' + k, v); } catch (e) {} } };
+async function sha1(s) {
+  const b = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+async function authHeader() {
+  // SAPISIDHASH <ts>_<sha1(ts SAPISID origin)>, and the 1P/3P ones next to it, as YouTube's page sends them
+  const c = cookies(), ts = Math.floor(Date.now() / 1000), parts = [];
+  for (const [name, label] of [['SAPISID', 'SAPISIDHASH'], ['__Secure-1PAPISID', 'SAPISID1PHASH'], ['__Secure-3PAPISID', 'SAPISID3PHASH']])
+    if (c[name]) parts.push(label + ' ' + ts + '_' + await sha1(ts + ' ' + c[name] + ' ' + ORIGIN));
+  return parts.join(' ');
+}
+function context() {
+  const visitor = store.get('visitor');
+  return { client: { clientName: 'WEB', clientVersion: CV, hl: HL, platform: 'DESKTOP', originalUrl: location.href,
+                     userInterfaceTheme: CFG.dark ? 'USER_INTERFACE_THEME_DARK' : 'USER_INTERFACE_THEME_LIGHT', ...(visitor ? { visitorData: visitor } : {}) },
+           user: { lockedSafetyMode: false }, request: { useSsl: true } };
+}
+async function api(ep, body) {
+  const h = { 'Content-Type': 'application/json', 'X-Youtube-Client-Name': '1', 'X-Youtube-Client-Version': CV, 'X-Origin': ORIGIN };
+  const visitor = store.get('visitor');
+  if (visitor) h['X-Goog-Visitor-Id'] = visitor;
+  const a = await authHeader();
+  if (a) { h.Authorization = a; h['X-Goog-AuthUser'] = '0'; }
+  const r = await fetch('/youtubei/v1/' + ep + '?prettyPrint=false', { method: 'POST', credentials: 'include', headers: h, body: JSON.stringify({ context: context(), ...body }) });
+  if (!r.ok) throw new Error(ep + ' ' + r.status);
+  const j = await r.json();
+  const vd = (j.responseContext || {}).visitorData;
+  if (vd) store.set('visitor', vd);
+  return j;
+}
+function normalUrl(kind, extra) {
+  const u = new URL(location.href);
+  for (const [k, v] of Object.entries(extra || {})) u.searchParams.set(k, v);
+  u.searchParams.set('pluma_normal', String(kind));
+  return u.pathname + u.search + u.hash;
+}
+let leaving = false;
+function fallback(why) {
+  // something did not work: YouTube's own page, for this address
+  if (leaving) return;
+  leaving = true;
+  console.warn('YouTube ligero:', why);
+  location.replace(normalUrl(1));
+}
+
+// ---------------------------------------------------------------- drawing
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const safeHref = (u) => /^(https?:\/\/|\/)/.test(u || '') ? u : '#';
+function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; }
+function card(it) {
+  const badge = it.duration ? `<span class="badge${it.live ? ' live' : ''}">${esc(it.duration)}</span>` : '';
+  const ch = it.channel ? `<div class="sub">${it.channelUrl ? `<a href="${esc(safeHref(it.channelUrl))}">${esc(it.channel)}</a>` : esc(it.channel)}</div>` : '';
+  const meta = (it.meta || []).length ? `<div class="sub">${esc(it.meta.join(' · '))}</div>` : '';
+  const av = it.avatar ? `<a href="${esc(safeHref(it.channelUrl || it.url))}"><img class="av" loading="lazy" src="${esc(it.avatar)}" alt=""></a>` : '';
+  const desc = it.desc ? `<div class="desc">${esc(it.desc)}</div>` : '';
+  return `<div class="item${it.kind === 'channel' ? ' chan' : ''}"><a class="th" href="${esc(safeHref(it.url))}"><img loading="lazy" src="${esc(it.thumb)}" alt="">${badge}</a>` +
+         `<div class="row">${av}<div><a href="${esc(safeHref(it.url))}" class="tt" title="${esc(it.title)}">${esc(it.title)}</a>${ch}${meta}${desc}</div></div></div>`;
+}
+function runsHtml(segs) {
+  return segs.map((s) => {
+    if (!s.link) return esc(s.text);
+    if (s.link.seek != null) return `<a href="${esc(safeHref(s.link.url))}" data-seek="${+s.link.seek}">${esc(s.text)}</a>`;
+    return `<a href="${esc(safeHref(s.link.url))}"${s.link.external ? ' target="_blank" rel="noopener"' : ''}>${esc(s.text)}</a>`;
+  }).join('');
+}
+function note(title, sub, button) {
+  $('main').innerHTML = `<div class="note"><b>${esc(title)}</b>${esc(sub || '')}${button || ''}</div>`;
+}
+function loginButton() { return `<p><a class="btn primary" href="${esc(loginUrl())}">${esc(t('Iniciar sesión'))}</a></p>`; }
+const loginUrl = () => 'https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&continue=' +
+  encodeURIComponent('https://www.youtube.com/signin?action_handle_signin=true&app=desktop&hl=' + HL + '&next=' + encodeURIComponent(location.pathname + location.search));
+function more(box, token, ep, keyName, parse) {
+  // more of a list as it is scrolled to its end
+  if (!token) return;
+  const s = el('<div class="more"></div>');
+  box.after(s);
+  let busy = false;
+  const io = new IntersectionObserver(async (e) => {
+    if (!e[0].isIntersecting || busy || !token) return;
+    busy = true;
+    try {
+      const r = (parse || appended)(await api(ep, { [keyName || 'continuation']: token }));
+      box.insertAdjacentHTML('beforeend', r.items.map(card).join(''));
+      token = r.cont;
+    } catch (err) { token = null; console.warn(err); }
+    busy = false;
+    if (!token) { io.disconnect(); s.remove(); }
+  }, { rootMargin: '1200px' });
+  io.observe(s);
+}
+function grid(items, cls) { return `<div class="${cls || 'grid'}">${items.map(card).join('')}</div>`; }
+
+// ---------------------------------------------------------------- the pages
+async function home() {
+  const r = parseBrowse(await api('browse', { browseId: 'FEwhat_to_watch' }));
+  if (!r.items.length) {
+    note((r.note && r.note.title) || t('Busca algo para empezar'), (r.note && r.note.sub) || t('Aquí saldrán los vídeos que te recomiende YouTube.'), signedIn() ? '' : loginButton());
+    return;
+  }
+  $('main').innerHTML = grid(r.items);
+  more($('main').firstChild, r.cont, 'browse');
+}
+async function feed(id, needsLogin) {
+  if (!signedIn()) { note(t('Inicia sesión para verlo'), t('Lo que sigues y lo que has visto, con tu cuenta de YouTube.'), loginButton()); return; }
+  const r = parseBrowse(await api('browse', { browseId: id }));
+  if (!r.items.length) { note((r.note && r.note.title) || t('No hay nada aquí todavía'), (r.note && r.note.sub) || ''); return; }
+  $('main').innerHTML = (r.header && r.header.title ? `<h2>${esc(r.header.title)}</h2>` : '') + grid(r.items, id === 'FEhistory' ? 'list' : 'grid');
+  more($('main').lastChild, r.cont, 'browse');
+}
+async function search() {
+  const q = Q.get('search_query') || '';
+  $('q').value = q;
+  document.title = q + ' - YouTube';
+  const r = parseSearch(await api('search', { query: q, ...(Q.get('sp') ? { params: Q.get('sp') } : {}) }));
+  if (!r.items.length) { note(t('Sin resultados'), t('Prueba con otras palabras.')); return; }
+  $('main').innerHTML = grid(r.items, 'list');
+  more($('main').firstChild, r.cont, 'search');
+}
+async function playlist() {
+  const list = Q.get('list');
+  const r = parseBrowse(await api('browse', { browseId: 'VL' + list }));
+  const h = r.header || {};
+  document.title = (h.title || t('Lista')) + ' - YouTube';
+  $('main').innerHTML = `<div class="list"><h1 class="vt">${esc(h.title || '')}</h1><div class="sub">${esc((h.meta || []).join(' · '))}</div><br>` +
+                        `<div>${r.items.map((it) => card({ ...it, url: it.url })).join('')}</div></div>`;
+  more($('main').querySelector('.list > div:last-child'), r.cont, 'browse');
+}
+async function channel() {
+  // /@name, /channel/UC..., /c/x, /user/x (their home or videos): its videos, newest first, as its Videos tab
+  const parts = P.split('/').filter(Boolean);
+  let id = parts[0] === 'channel' ? parts[1] : '';
+  if (!id) {
+    const r = await api('navigation/resolve_url', { url: ORIGIN + '/' + parts.slice(0, parts[0].startsWith('@') ? 1 : 2).join('/') });
+    id = ((r.endpoint || {}).browseEndpoint || {}).browseId;
+    if (!id) throw new Error('canal sin id');
+  }
+  const r = parseBrowse(await api('browse', { browseId: id, params: 'EgZ2aWRlb3PyBgQKAjoA' }));
+  const h = r.header || { title: '' };
+  document.title = (h.title || '') + ' - YouTube';
+  const base = '/' + parts.slice(0, parts[0].startsWith('@') ? 1 : 2).join('/');
+  const tabs = [[t('Vídeos'), base + '/videos', true], ['Shorts', base + '/shorts'], [t('En directo'), base + '/streams'], [t('Listas'), base + '/playlists'],
+                [t('Publicaciones'), base + '/posts']];
+  $('main').innerHTML = (h.banner ? `<div class="ch-banner" style="background-image:url('${esc(h.banner)}')"></div>` : '') +
+    `<div class="ch-head">${h.avatar ? `<img class="big" src="${esc(h.avatar)}" alt="">` : ''}<div><h1>${esc(h.title)}</h1>` +
+    `<div class="sub">${esc((h.meta || []).join(' · '))}</div><p id="subbox"></p></div></div>` +
+    `<nav class="tabs">${tabs.map(([n, u, on]) => `<a href="${esc(u)}"${on ? ' class="on"' : ''}>${esc(n)}</a>`).join('')}</nav>` +
+    (r.items.length ? grid(r.items) : `<div class="note">${esc(t('Este canal no tiene vídeos.'))}</div>`);
+  subscribeButton($('subbox'), id, h.subscribed, '', '');
+  if (r.items.length) more($('main').querySelector('.grid'), r.cont, 'browse');
+}
+function subscribeButton(box, channelId, subscribed, subParams, unsubParams) {
+  if (!box || !channelId) return;
+  const b = el(`<a class="btn${subscribed ? '' : ' primary'}"></a>`);
+  const draw = () => { b.textContent = subscribed ? t('Suscrito') : t('Suscribirse'); b.className = 'btn' + (subscribed ? ' on' : ' primary'); };
+  draw();
+  b.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!signedIn()) { location.href = loginUrl(); return; }
+    const was = subscribed;
+    subscribed = !subscribed; draw();
+    try {
+      await api(was ? 'subscription/unsubscribe' : 'subscription/subscribe',
+                { channelIds: [channelId], ...((was ? unsubParams : subParams) ? { params: was ? unsubParams : subParams } : {}) });
+    } catch (err) { subscribed = was; draw(); console.warn(err); }
+  });
+  box.append(b);
+}
+
+// ---------------------------------------------------------------- the watch page
+// No player of YouTube's here: Pluma's own (video.cpp) goes into #movie_player as soon as the page is loaded. It asks
+// with __pluma.extract() (the visionOS answer with the HLS list, as video.cpp asks YouTube's page), then __pluma.tick()
+// four times a second: the player's time in, the box's place and a timestamp's second out.
+const W = { id: '', start: 0, state: 'wait', seek: -1, next: null, info: null, tracking: null, cpn: '', pinged: false, lastWatch: 0,
+            lastPos: 0, dur: 0, extracted: 0, ticked: 0, playlist: '', cover: false };
+function veil(html) {
+  const p = $('movie_player');
+  if (!p) return;
+  let v = p.querySelector('.veil');
+  if (!html) { if (v) v.remove(); return; }
+  if (!v) { v = el('<div class="veil"></div>'); p.append(v); }
+  v.innerHTML = html;
+}
+async function watch() {
+  W.id = Q.get('v') || '';
+  W.start = startSeconds(Q.get('t') || Q.get('start'));
+  W.playlist = Q.get('list') || '';
+  W.cpn = Array.from(crypto.getRandomValues(new Uint8Array(16)), (x) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'[x & 63]).join('');
+  $('main').innerHTML = `<div class="watch"><div class="col"><div class="pwrap"><div id="movie_player"></div></div><div id="info"></div><div id="comments"></div></div>` +
+                        `<aside class="side" id="side"></aside></div>`;
+  const p = $('movie_player');
+  // what scrolls into view (find in page, an anchor) stops below the player, not behind it
+  const pad = () => { document.documentElement.style.scrollPaddingTop = Math.round(document.querySelector('.pwrap').getBoundingClientRect().bottom + 8) + 'px'; };
+  pad();
+  addEventListener('resize', pad);
+  p.style.backgroundImage = `url('https://i.ytimg.com/vi/${encodeURIComponent(W.id)}/hqdefault.jpg')`;
+  veil('<div class="spin"></div>');
+  W.next = api('next', { videoId: W.id, ...(W.playlist ? { playlistId: W.playlist } : {}), ...(Q.get('index') ? { playlistIndex: +Q.get('index') } : {}) })
+    .then((j) => { W.info = parseNext(j, W.id); return W.info; });
+  let info;
+  try { info = await W.next; } catch (e) { fallback(e.message); return; }
+  if (!info.title) { fallback('vídeo sin título'); return; }
+  document.title = info.title + ' - YouTube';
+  drawInfo(info);
+  drawSide(info);
+  comments(info.commentsToken);
+  // Pluma's player answers within seconds; if it never does, YouTube's own page
+  setTimeout(() => { if (!W.extracted && W.state === 'wait') fallback('el reproductor de Pluma no llegó'); }, 15000);
+}
+function drawInfo(i) {
+  const like = `<a class="btn${i.likeStatus === 'LIKE' ? ' on' : ''}" id="like"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h4v11Zm2 0V10l4.5-7.5a1.8 1.8 0 0 1 3.3 1.3L18 9h2.4a2 2 0 0 1 2 2.4l-1.4 7.5a2.5 2.5 0 0 1-2.5 2.1H11Z"/></svg><span>${esc(i.likes || t('Me gusta'))}</span></a>`;
+  const share = `<a class="btn" id="share"><svg viewBox="0 0 24 24"><path d="M14 4v4C7 9 4 14 3 20c2.5-3.5 6-5.1 11-5.1V19l7-7.5L14 4Z"/></svg>${esc(t('Compartir'))}</a>`;
+  $('info').innerHTML = `<h1 class="vt">${esc(i.title)}</h1><div class="bar"><div class="owner">` +
+    `<a href="${esc(safeHref(i.channelUrl))}">${i.avatar ? `<img class="av" src="${esc(i.avatar)}" alt="">` : ''}</a>` +
+    `<div><a class="name" href="${esc(safeHref(i.channelUrl))}">${esc(i.channel)}</a><div class="sub">${esc(i.subs)}</div></div></div>` +
+    `<span id="subbox"></span><span class="spacer"></span>${like}${share}</div>` +
+    `<div class="descbox short" id="desc"><div class="head">${esc([i.views, i.ago || i.date].filter(Boolean).join('  '))}</div>${runsHtml(i.desc)}</div>`;
+  subscribeButton($('subbox'), i.channelId, i.subscribed, i.subParams, i.unsubParams);
+  const d = $('desc');
+  d.addEventListener('click', (e) => { if (!e.target.closest('a')) d.classList.toggle('short'); });
+  let liked = i.likeStatus === 'LIKE';
+  $('like').addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!signedIn()) { location.href = loginUrl(); return; }
+    const was = liked;
+    liked = !liked; $('like').classList.toggle('on', liked);
+    try {
+      if (was) await api('like/removelike', { target: { videoId: W.id }, ...(i.removeLikeParams ? { params: i.removeLikeParams } : {}) });
+      else await api('like/like', { target: { videoId: W.id }, ...(i.likeParams ? { params: i.likeParams } : {}) });
+    } catch (err) { liked = was; $('like').classList.toggle('on', liked); console.warn(err); }
+  });
+  $('share').addEventListener('click', (e) => {
+    e.preventDefault();
+    navigator.clipboard.writeText('https://youtu.be/' + W.id).then(() => { $('share').lastChild.textContent = t('Enlace copiado'); }, () => {});
+  });
+}
+function drawSide(i) {
+  let html = '';
+  if (i.playlist && i.playlist.items.length) {
+    html += `<div class="plist"><h3>${esc(i.playlist.title)}</h3>${i.playlist.items.map((it, k) =>
+      card({ ...it, url: '/watch?v=' + it.id + '&list=' + encodeURIComponent(W.playlist) + '&index=' + (k + 1) })
+        .replace('class="item', k === i.playlist.index ? 'class="item cur' : 'class="item')).join('')}</div>`;
+  }
+  html += `<div id="rel">${i.related.map(card).join('')}</div>`;
+  $('side').innerHTML = html;
+  more($('rel'), i.relatedCont, 'next');
+}
+function nextVideo() {
+  const i = W.info;
+  if (!i) return null;
+  if (i.playlist && i.playlist.items[i.playlist.index + 1]) {
+    const it = i.playlist.items[i.playlist.index + 1];
+    return { ...it, url: '/watch?v=' + it.id + '&list=' + encodeURIComponent(W.playlist) + '&index=' + (i.playlist.index + 2) };
+  }
+  const r = i.related.filter((x) => x.kind === 'video' && !x.live);
+  return r.find((x) => x.id === i.autoplay) || r[0] || null;
+}
+function commentHtml(c) {
+  return `<div class="cm"><a href="${esc(safeHref(c.channelUrl))}"><img class="av" loading="lazy" src="${esc(c.avatar)}" alt=""></a><div>` +
+    `<div class="who">${c.creator ? `<span class="creator">${esc(c.author)}</span>` : esc(c.author)}<span>${esc(c.time)}</span></div>` +
+    `<div class="ctext">${runsHtml(c.text)}</div><div class="acts">${c.likes ? `<span>&#128077; ${esc(c.likes)}</span>` : ''}` +
+    (c.repliesToken && c.replies ? `<button data-rep="${esc(c.repliesToken)}">${esc(c.replies)} ${esc(t('respuestas'))}</button>` : '') + `</div></div></div>`;
+}
+function comments(token) {
+  // loaded once the reader gets near them, and more as they scroll
+  const box = $('comments');
+  if (!token) { box.innerHTML = `<div class="sub">${esc(t('Los comentarios están desactivados.'))}</div>`; return; }
+  let busy = false, first = true;
+  const list = el('<div></div>'), end = el('<div class="more"></div>');
+  box.append(list, end);
+  const io = new IntersectionObserver(async (e) => {
+    if (!e[0].isIntersecting || busy || !token) return;
+    busy = true;
+    try {
+      const r = parseComments(await api('next', { continuation: token }), W.id);
+      if (first && r.count) box.insertAdjacentHTML('afterbegin', `<h2>${esc(/\p{L}/u.test(r.count) ? r.count : r.count + ' ' + t('comentarios'))}</h2>`);
+      if (first && !r.count && !r.items.length) list.innerHTML = `<div class="sub">${esc(t('Todavía no hay comentarios.'))}</div>`;
+      first = false;
+      list.insertAdjacentHTML('beforeend', r.items.map(commentHtml).join(''));
+      token = r.cont;
+    } catch (err) { token = null; list.insertAdjacentHTML('beforeend', `<div class="sub">${esc(t('No se pudieron cargar los comentarios.'))}</div>`); }
+    busy = false;
+    if (!token) { io.disconnect(); end.remove(); }
+  }, { rootMargin: '600px' });
+  io.observe(end);
+  box.addEventListener('click', async (e) => {
+    const b = e.target.closest('button[data-rep]');
+    if (!b) return;
+    let tok = b.dataset.rep;
+    b.disabled = true;
+    const rep = el('<div class="replies"></div>');
+    b.closest('.cm > div').append(rep);
+    b.remove();
+    try {
+      const r = parseComments(await api('next', { continuation: tok }), W.id);
+      rep.innerHTML = r.items.map(commentHtml).join('');
+    } catch (err) { rep.innerHTML = `<div class="sub">${esc(t('No se pudieron cargar los comentarios.'))}</div>`; }
+  });
+}
+// a timestamp (description, comments) of this video: Pluma's player goes there
+document.addEventListener('click', (e) => {
+  const a = e.target.closest && e.target.closest('a[data-seek]');
+  if (!a || e.ctrlKey || e.shiftKey || e.metaKey || e.button) return;
+  e.preventDefault();
+  W.seek = +a.dataset.seek;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+function track(kind, extra) {
+  // as YouTube's page counts a view and keeps the place in the history (YouTube.js's format)
+  const tr = W.tracking || {};
+  const base = ((kind === 'playback' ? tr.videostatsPlaybackUrl : tr.videostatsWatchtimeUrl) || {}).baseUrl;
+  if (!base) return;
+  try {
+    const u = new URL(base.replace('https://s.youtube.com', ORIGIN));
+    const q = { ver: '2', c: 'web', cbrver: CV, cver: CV, cpn: W.cpn, ...extra };
+    for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
+    fetch(u.pathname + u.search, { credentials: 'include', keepalive: true }).catch(() => {});
+  } catch (e) {}
+}
+addEventListener('pagehide', () => {
+  if (W.pinged && W.lastPos > 0) track('watchtime', { st: W.lastWatch.toFixed(3), et: W.lastPos.toFixed(3), cmt: W.lastPos.toFixed(3), len: W.dur.toFixed(3), final: '1' });
+});
+window.__pluma = {
+  state: () => ({ state: W.state, pos: W.lastPos }),   // (tests)
+  async extract() {
+    if (W.state !== 'wait' || !W.id) return { quiet: true, error: 'ya' };
+    W.state = 'asked';
+    W.extracted = Date.now();
+    try { await W.next; } catch (e) {}
+    const visitor = store.get('visitor') || '';
+    const client = { clientName: 'VISIONOS', clientVersion: '1.02', deviceMake: 'Apple', deviceModel: 'RealityDevice17,1',
+                     osName: 'visionOS', osVersion: '26.5.23O471', hl: HL, visitorData: visitor };
+    const ask = async (credentials) => {
+      const r = await fetch('/youtubei/v1/player?prettyPrint=false', { method: 'POST', credentials,
+        headers: { 'Content-Type': 'application/json', 'X-YouTube-Client-Name': '101', 'X-YouTube-Client-Version': '1.02', 'X-Goog-Visitor-Id': visitor },
+        body: JSON.stringify({ context: { client }, videoId: W.id, contentCheckOk: true, racyCheckOk: true }) });
+      return r.json();
+    };
+    let j;
+    try {
+      j = await ask('include');
+      if ((j.playabilityStatus || {}).status !== 'OK') j = await ask('omit');
+    } catch (e) { return { error: 'sin respuesta del reproductor' }; }
+    const ps = j.playabilityStatus || {}, vd = j.videoDetails || {};
+    if (ps.status !== 'OK') return { error: ps.status || 'sin estado' };
+    if (vd.isLive || vd.isPostLiveDvr || vd.isUpcoming) return { error: 'directo' };
+    const hls = (j.streamingData || {}).hlsManifestUrl || '';
+    if (!hls) return { error: 'sin lista HLS' };
+    W.tracking = j.playbackTracking || null;
+    W.dur = +vd.lengthSeconds || 0;
+    const tracks = (((j.captions || {}).playerCaptionsTracklistRenderer || {}).captionTracks || []).map((x) => ({
+      url: x.baseUrl, lang: x.languageCode || '', name: (x.name && (x.name.simpleText || (x.name.runs || []).map((r) => r.text).join(''))) || x.languageCode }));
+    const b = $('movie_player').getBoundingClientRect();
+    const vol = +(store.get('volume') || 100);
+    return { id: W.id, title: vd.title || document.title, author: vd.author || '', length: W.dur, hls, tracks, time: W.start, state: 1,
+             volume: vol, muted: store.get('muted') === '1', gain: 1, speed: 1, cc: '', box: [b.left, b.top, b.width, b.height], dpr: devicePixelRatio };
+  },
+  tick(pos, dur, paused, vol, muted) {
+    if (W.state !== 'on') { W.state = 'on'; veil(''); $('movie_player').style.backgroundImage = 'none'; }
+    W.ticked = Date.now();
+    if (dur > 0) W.dur = dur;
+    store.set('volume', String(vol)); store.set('muted', muted ? '1' : '0');
+    if (!W.pinged && pos > 0.5) { W.pinged = true; W.lastWatch = W.start; track('playback', { fmt: '251', rtn: '0', rt: '0' }); }
+    if (W.pinged && !paused) {
+      if (pos - W.lastWatch >= 30 || pos < W.lastWatch) {
+        track('watchtime', { st: W.lastWatch.toFixed(3), et: pos.toFixed(3), cmt: pos.toFixed(3), len: W.dur.toFixed(3), state: 'playing' });
+        W.lastWatch = pos;
+      }
+    }
+    W.lastPos = pos;
+    const b = $('movie_player').getBoundingClientRect();
+    const s = W.seek;
+    W.seek = -1;
+    return [b.left, b.top, b.width, b.height, devicePixelRatio, s, W.cover ? 1 : 0];
+  },
+  ended() {
+    W.state = 'ended';
+    $('movie_player').style.backgroundImage = `url('https://i.ytimg.com/vi/${encodeURIComponent(W.id)}/hqdefault.jpg')`;
+    const n = nextVideo();
+    const replay = `<a class="btn" href="/watch?v=${encodeURIComponent(W.id)}">${esc(t('Volver a ver'))}</a>`;
+    if (!n) { veil(replay); return; }
+    let left = 8;
+    veil(`<div class="next"><img src="${esc(n.thumb)}" alt=""><div><div class="sub" style="color:#ddd">${esc(t('A continuación'))} <span id="cd">${left}</span></div>` +
+         `<div class="tt">${esc(n.title)}</div><div class="sub" style="color:#ddd">${esc(n.channel || '')}</div></div></div>` +
+         `<div><a class="btn" id="stop">${esc(t('Cancelar'))}</a> <a class="btn" href="${esc(safeHref(n.url))}">${esc(t('Reproducir ahora'))}</a> ${replay}</div>`);
+    const tm = setInterval(() => {
+      left--;
+      if ($('cd')) $('cd').textContent = left;
+      if (left <= 0) { clearInterval(tm); location.href = n.url; }
+    }, 1000);
+    $('stop').addEventListener('click', (e) => { e.preventDefault(); clearInterval(tm); $('stop').remove(); if ($('cd')) $('cd').parentNode.remove(); });
+  },
+  normal(pos, failed) {
+    // the person asked for YouTube's page (or Pluma's player failed): there, at the same second
+    if (leaving) return;
+    leaving = true;
+    location.replace(normalUrl(1, { t: Math.floor(pos) + 's' }));
+  },
+  fail(why) {
+    veil(`<div>${esc(t('Este vídeo se abre en el YouTube normal.'))}</div>`);
+    setTimeout(() => fallback(why), 600);
+  },
+};
+setInterval(() => {
+  // the player started and then went quiet (Pluma closed it, the tab went elsewhere): nothing to do; it never
+  // started: YouTube's own page
+  if (W.state === 'asked' && Date.now() - W.extracted > 25000) fallback('el reproductor de Pluma no empezó');
+}, 5000);
+
+// ---------------------------------------------------------------- the bar: search with YouTube's suggestions
+function bar() {
+  $('lite').textContent = t('ligero');
+  $('q').placeholder = t('Buscar');
+  $('normal').textContent = t('YouTube normal');
+  $('normal').title = t('Abre esta página en el YouTube de siempre, en esta pestaña');
+  $('normal').href = normalUrl(2);
+  $('normal').addEventListener('click', (e) => {
+    e.preventDefault();
+    leaving = true;
+    const extra = W.lastPos > 1 ? { t: Math.floor(W.lastPos) + 's' } : {};
+    location.href = normalUrl(2, extra);
+  });
+  if (!signedIn()) { $('login').hidden = false; $('login').textContent = t('Iniciar sesión'); $('login').href = loginUrl(); }
+  const links = [['/', t('Inicio')], ['/feed/subscriptions', t('Suscripciones')], ['/feed/history', t('Historial')]];
+  $('links').innerHTML = links.map(([u, n]) => `<a href="${u}"${P === u ? ' class="on"' : ''}>${esc(n)}</a>`).join('');
+  const q = $('q'), box = $('sug');
+  let sel = -1, items = [], seq = 0;
+  const show = (on) => { box.classList.toggle('on', on && items.length > 0); W.cover = box.classList.contains('on'); };
+  const draw = () => {
+    box.innerHTML = items.map((s, k) => `<a href="/results?search_query=${encodeURIComponent(s)}"${k === sel ? ' class="sel"' : ''}>${esc(s)}</a>`).join('');
+    show(true);
+  };
+  q.addEventListener('input', async () => {
+    const v = q.value.trim(), n = ++seq;
+    sel = -1;
+    if (!v) { items = []; show(false); return; }
+    try {
+      const r = await fetch('https://suggestqueries-clients6.youtube.com/complete/search?client=youtube&ds=yt&xhr=t&oe=utf-8&hl=' + HL + '&q=' + encodeURIComponent(v), { credentials: 'include' });
+      const j = await r.json();
+      if (n !== seq) return;
+      items = parseSuggest(j);
+      draw();
+    } catch (e) { items = []; show(false); }
+  });
+  q.addEventListener('keydown', (e) => {
+    if (!items.length || !box.classList.contains('on')) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      // (-1: what was typed)
+      sel = sel + (e.key === 'ArrowDown' ? 1 : -1);
+      if (sel >= items.length) sel = -1;
+      if (sel < -1) sel = items.length - 1;
+      if (sel >= 0) q.value = items[sel];
+      draw();
+    } else if (e.key === 'Escape') show(false);
+  });
+  q.addEventListener('blur', () => setTimeout(() => show(false), 150));
+  q.addEventListener('focus', () => { if (items.length) show(true); });
+  $('sf').addEventListener('submit', (e) => { if (!q.value.trim()) e.preventDefault(); });
+}
+
+// ---------------------------------------------------------------- start
+(async () => {
+  bar();
+  try {
+    if (P === '/') await home();
+    else if (P === '/results') await search();
+    else if (P === '/feed/subscriptions') await feed('FEsubscriptions');
+    else if (P === '/feed/history') await feed('FEhistory');
+    else if (P === '/playlist') await playlist();
+    else if (P === '/watch') await watch();
+    else await channel();
+  } catch (e) { fallback(e && e.message); }
+})();
+</script>
+</body>
+</html>

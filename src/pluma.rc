@@ -4,6 +4,7 @@
 200 RCDATA "settings.html"
 201 RCDATA "bookmarks.html"
 202 RCDATA "import.html"
+203 RCDATA "youtube.html"
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 1,0,0,0
 PRODUCTVERSION 1,0,0,0

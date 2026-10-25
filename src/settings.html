@@ -197,6 +197,10 @@ button.danger { color: var(--danger); }
           <div class="txt"><div class="name" data-t="YouTube en el reproductor de Pluma">YouTube en el reproductor de Pluma</div><div class="desc" id="videodesc" data-t="Los vídeos usan mucha menos memoria que en la página">Los vídeos usan mucha menos memoria que en la página</div></div>
           <label class="toggle"><input type="checkbox" id="video-on"><span></span></label>
         </div>
+        <div class="row" data-k="youtube ligero rapido memoria">
+          <div class="txt"><div class="name" data-t="YouTube ligero">YouTube ligero</div><div class="desc" data-t="Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta">Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta</div></div>
+          <label class="toggle"><input type="checkbox" id="ytlite"><span></span></label>
+        </div>
       </div>
     </section>
 
@@ -297,6 +301,7 @@ function render() {
   fill($('engine'), S.engines, S.engine);
   fill($('idioma-sel'), S.langs, S.idioma);
   $('suggest').checked = S.suggest;
+  $('ytlite').checked = S.ytlite;
   $('video-on').checked = S.video; $('video-on').disabled = !S.videoAvailable;
   if (!S.videoAvailable) $('videodesc').textContent = tr('Falta el motor de vídeo de Pluma (motor-video)');
   $('startup').checked = S.startup; $('resident').checked = S.resident; $('spare').checked = S.spare;
@@ -335,7 +340,7 @@ $('engine').onchange = e => set('engine', e.target.value);
 $('idioma-sel').onchange = e => { set('idioma', e.target.value); setTimeout(ask, 100); };
 $('update').onchange = e => set('update', +e.target.value);
 $('sleep').onchange = e => set('sleep', +e.target.value);
-for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
+for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
   $(id).onchange = e => set(key, e.target.checked);
 document.querySelectorAll('[data-do]').forEach(b => b.addEventListener('click', () => send({ op: 'do', what: b.dataset.do })));
 // the side list: where each section is, and the one in view

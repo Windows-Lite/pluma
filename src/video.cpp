@@ -110,13 +110,16 @@ struct Video {
     double photo_at = 0;
     bool photo_asked = false;
     double warm_at = 0;   // when its page was last awake behind the photo (it sleeps once left alone a while)
+    // on Pluma's light YouTube page (youtube.cpp): no page player to meet nor a page to put to sleep, see lite_tick
+    bool lite = false, lite_cover = false;
+    double lite_asked = 0;
 };
 static int g_serial;
 static Video *V(Tab *t) { return t ? (Video *)t->video : nullptr; }
 static HWND g_msg;   // a window of its own for mpv's events (they come from mpv's threads) and the timers
 static const UINT WM_VIDEO_EVENTS = WM_APP + 60, WM_VIDEO_FAILED = WM_APP + 61, WM_VIDEO_GONE = WM_APP + 62;
 static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWarmTimer = 13, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000,
-                      kStartTimer = 0x400000;
+                      kStartTimer = 0x400000, kLiteTimer = 0x500000;
 
 // ---------------------------------------------------------------- drawing: YouTube's look
 static ComPtr<ID2D1Factory> g_d2d;
@@ -1757,6 +1760,7 @@ static void paint_photo(HWND h, HDC dc) {
 }
 static struct { int tab = 0; std::vector<std::wstring> events; } g_poke;   // the click or wheel the page gets once awake
 static const UINT_PTR kPokeTimer = 12;
+static void lite_wheel(Tab *t, UINT msg, double x, double y, int delta);
 static void wake_page(Tab *t, UINT msg, POINT at, int delta) {
     // the person goes to the page (a click on it, the wheel): it wakes where it was and plays the video itself, and
     // gets that click or turn of the wheel; Pluma's player takes it again once the page is left alone (watch_tick)
@@ -1764,6 +1768,7 @@ static void wake_page(Tab *t, UINT msg, POINT at, int delta) {
     if (!t || !v || v->stage != ST_ON || g_fullscreen || zoom_busy()) return;
     RECT a = page_area();
     double k = v->dpr > 0 ? v->dpr : 1, x = (at.x - a.left) / k, y = (at.y - a.top) / k;
+    if (v->lite) { lite_wheel(t, msg, x, y, delta); return; }
     video_back_to_page(t, VIDEO_WOKEN);
     if (!t->view || !t->ctrl) return;
     t->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
@@ -1846,7 +1851,7 @@ static void check_page(Tab *t) {
     // in the window, the player needs its page around it as it is now: else the page wakes (a window resized, a
     // video taken in fullscreen...), and Pluma's player comes back with a new photo once it is left alone
     Video *v = V(t);
-    if (!t || !v || v->stage != ST_ON || t != active_tab() || g_fullscreen || zoom_busy() || !IsWindowVisible(g_win) || IsIconic(g_win)) return;
+    if (!t || !v || v->lite || v->stage != ST_ON || t != active_tab() || g_fullscreen || zoom_busy() || !IsWindowVisible(g_win) || IsIconic(g_win)) return;
     if (!photo_fits(v)) PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_WOKEN, (LPARAM)t->id);
 }
 static bool set_box(Tab *t, Video *v, double x, double y, double w, double h, double dpr) {
@@ -1988,7 +1993,7 @@ static void show_player(Tab *t, Video *v) {
     bool vis = IsWindowVisible(g_win) != FALSE;
     place_window(v, vis);
     place_photo(v, vis);
-    if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
+    if (t->ctrl && !v->lite) t->ctrl->put_IsVisible(FALSE);
     tame(v);
     focus_video(v);
     g_ctl.snap(0);
@@ -1996,13 +2001,14 @@ static void show_player(Tab *t, Video *v) {
     POINT pt; GetCursorPos(&pt);
     if (g_fullscreen || WindowFromPoint(pt) == v->wnd) show_controls(v);
 }
+static void CALLBACK lite_tick(HWND, UINT, UINT_PTR tid, DWORD);
 static void switch_now(Tab *t, Video *v, bool playing) {
     // at the very instant: the page pauses, mpv plays, in the same place (the change is not seen: only the controls
     // are Pluma's from then on)
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (p && p.pauseVideo) p.pauseVideo();"
             L" if (document.fullscreenElement) document.exitFullscreen(); return 1; })()", [](const Json &) {});
     v->stage = ST_ON;
-    t->video_mode = true;
+    t->video_mode = !v->lite;   // (the light page stays awake and on screen around the player)
     if (playing) set_flag(v, "pause", false);
     v->paused = !playing;
     t->audible = playing && !v->muted;
@@ -2011,7 +2017,8 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     log_line(L"vídeo propio: " + (t->incognito ? std::wstring(L"(incógnito)") : v->title) + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
              L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió");
     v->warm_at = now_ms();
-    SetTimer(g_msg, kFreezeTimer + t->id, 2500, freeze_check);
+    if (v->lite) SetTimer(g_msg, kLiteTimer + t->id, 250, lite_tick);
+    else SetTimer(g_msg, kFreezeTimer + t->id, 2500, freeze_check);
     // the other qualities' lists, ahead (YouTube's list server takes 1-3 s for each)
     fetch_playlists(v, each_quality(v), [](Video *) {});
     // and mpv's first frame taken once, ahead, on a thread: the first takes ~230 ms (the next ones ~25), and the
@@ -2029,9 +2036,11 @@ static void CALLBACK sync_timer(HWND, UINT, UINT_PTR tid, DWORD) {
     Tab *t = tab_by_id((int)(tid - kSyncTimer));
     if (V(t)) sync_tick(t, V(t));
 }
+static void lite_start(Tab *t, Video *v);
 static void sync_tick(Tab *t, Video *v) {
     // mpv waits, paused, a second ahead of the page; when the page gets there, the two swap
     if (!t || v->stage != ST_WAITING || !v->restarted) return;
+    if (v->lite) { lite_start(t, v); return; }
     if (now_ms() - v->asked > 45000) { video_destroy(t); video_page_changed(t); return; }   // the page did not play it: later, then
     int id = t->id;
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (!p || !p.getCurrentTime) return null;"
@@ -2102,6 +2111,8 @@ static std::wstring watch_id(const std::wstring &url) {
 static std::map<int, double> g_watch;   // tabs on a YouTube video, waiting for it to play: until when
 static std::map<int, std::wstring> g_woken;   // tabs whose page the person woke up, and on which video
 static void watch(Tab *t);
+static const wchar_t *kLiteExtract = L"window.__pluma ? __pluma.extract() : { error: 'sin página ligera' }";
+static void lite_fail(Tab *t, const std::wstring &why);
 static void video_try(Tab *t) {
     if (!t || !t->view || t->video || !g_set.native_video) return;
     std::wstring vid = watch_id(t->url);
@@ -2110,13 +2121,15 @@ static void video_try(Tab *t) {
     v->tab = t->id;
     v->id = vid;
     v->asked = now_ms();
+    v->lite = t->yt_lite;
     t->video = v;
     int id = t->id;
-    eval(t, kExtract, [id](const Json &r) {
+    eval(t, v->lite ? kLiteExtract : kExtract, [id](const Json &r) {
         Tab *t = tab_by_id(id);
         Video *v = V(t);
         if (!v || v->stage != ST_WAITING || v->mpv) return;
-        auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); t->video = nullptr; delete v; };
+        auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); if (v->lite) lite_fail(t, why); t->video = nullptr; delete v; };
+        if (r[L"quiet"].b) { t->video = nullptr; delete v; return; }   // (the light page wants no player now: its video ended)
         if (r.kind != Json::OBJ) { give_up(L"sin respuesta"); return; }
         if (r[L"error"].is_str()) { give_up(r[L"error"].s); return; }
         if (r[L"id"].s != v->id) { give_up(L"la página ya está en otro vídeo"); return; }
@@ -2146,7 +2159,7 @@ static void video_try(Tab *t) {
                 Tab *t = tab_by_id(id);
                 Video *v = V(t);
                 if (!v || v->serial != serial || v->stage != ST_WAITING || v->mpv) return;
-                auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); t->video = nullptr; delete v; };
+                auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); if (v->lite) lite_fail(t, why); t->video = nullptr; delete v; };
                 if (!ok) { give_up(L"no se pudo leer la lista HLS"); return; }
                 v->fmts = parse_master(m3u8);
                 v->vf = pick_video(v, target_height(v));
@@ -2157,10 +2170,11 @@ static void video_try(Tab *t) {
                     // ahead of where the page is now: mpv takes ~1.5 s to start with the lists already here, more on a
                     // slow line (guessed from what the lists took: up to 10 s on the user's, 25/10)
                     double lists = (now_ms() - v->asked) / 1000.0, ahead = std::min(5.0, 2.0 + std::max(0.0, lists - 2.0) * 0.5);
-                    v->start_at = pt + ((at < 0 ? 0 : (now_ms() - at) / 1000.0) + ahead) * v->speed;
+                    v->start_at = v->lite ? pt : pt + ((at < 0 ? 0 : (now_ms() - at) / 1000.0) + ahead) * v->speed;   // (light: no page playing meanwhile)
                     if (!start_player(v, v->start_at)) {
                         log_line(L"vídeo propio: no arrancó el motor");
                         Tab *t = tab_by_id(v->tab);
+                        if (t && v->lite) lite_fail(t, L"no arrancó el motor");
                         stop_player(v); if (t) t->video = nullptr; delete v;
                         return;
                     }
@@ -2177,8 +2191,10 @@ static void video_try(Tab *t) {
                         retried = v->id;
                         log_line(L"vídeo propio: mpv no estuvo listo en 12 s" + std::wstring(again ? L"; otra vez" : L"; se queda la página"));
                         std::wstring id = v->id;
+                        bool lite = v->lite;
                         video_destroy(t);
-                        if (again) video_page_changed(t); else t->video_declined = id;
+                        if (again) video_page_changed(t);
+                        else { t->video_declined = id; if (lite) lite_fail(t, L"mpv no estuvo listo"); }
                     });
                 });
             });
@@ -2213,20 +2229,28 @@ void video_page_changed(Tab *t) {
     if (!t || !g_msg) return;
     std::wstring id = watch_id(t->url);
     Video *v = V(t);
+    if (t->yt_lite) {
+        // Pluma's light page: no page player to wait for; Pluma's goes in as soon as the page has loaded
+        if (v && v->id != id) video_destroy(t);
+        if (!id.empty() && !t->video && !t->loading && t->view && g_set.native_video && id != t->video_declined) video_try(t);
+        return;
+    }
     if (v && v->id != id && v->stage == ST_WAITING) video_destroy(t);
     if (id.empty() || t->video || !g_set.native_video || !video_available() || id == t->video_declined) return;
     if (!g_watch.count(t->id)) watch(t);
 }
+static void lite_back(Tab *t, int how, double pos);
 void video_back_to_page(Tab *t, int how) {
     Video *v = V(t);
     if (!t || !v) return;
     double pos = refresh_pos(v), vol = v->volume, speed = v->speed;
-    bool was_on = v->stage == ST_ON, playing = was_on && !v->paused, muted = v->muted;
+    bool was_on = v->stage == ST_ON, playing = was_on && !v->paused, muted = v->muted, lite = v->lite;
     std::wstring vid = v->id;
     if (how == VIDEO_ASKED || how == VIDEO_FAILED) t->video_declined = v->id;
     KillTimer(g_msg, kFreezeTimer + t->id);
     KillTimer(g_msg, kSyncTimer + t->id);
     KillTimer(g_msg, kStartTimer + t->id);
+    KillTimer(g_msg, kLiteTimer + t->id);
     stop_player(v);
     if (was_on) hide_controls_now();
     if (t == active_tab()) hide_photo(how != VIDEO_LEAVE);
@@ -2234,6 +2258,7 @@ void video_back_to_page(Tab *t, int how) {
     t->video_mode = false;
     delete v;
     if (!t->view) return;
+    if (lite) { lite_back(t, how, pos); t->audible = false; ui_invalidate(); return; }
     if (was_on) {
         if (t->suspended) { ComPtr<ICoreWebView2_3> v3; if (SUCCEEDED(t->view.As(&v3))) v3->Resume(); t->suspended = false; }
         ComPtr<ICoreWebView2_19> v19;
@@ -2267,6 +2292,7 @@ void video_destroy(Tab *t) {
     KillTimer(g_msg, kFreezeTimer + t->id);
     KillTimer(g_msg, kSyncTimer + t->id);
     KillTimer(g_msg, kStartTimer + t->id);
+    KillTimer(g_msg, kLiteTimer + t->id);
     bool was_on = v->stage == ST_ON;
     stop_player(v);
     if (was_on && (t == active_tab())) { hide_controls_now(); hide_photo(false); }
@@ -2296,7 +2322,7 @@ void video_layout() {
     for (auto &up : g_tabs) {
         Video *v = V(up.get());
         if (!v || !v->wnd) continue;
-        if (v->stage == ST_ON) place_window(v, up.get() == act && visible);
+        if (v->stage == ST_ON) place_window(v, up.get() == act && visible && !v->lite_cover);
         else if (up.get() != act) ShowWindow(v->wnd, SW_HIDE);
         else {
             RECT r = player_rect(v);
@@ -2308,6 +2334,73 @@ void video_layout() {
     if (v && v->stage == ST_ON && visible) { paint_all(v); SetTimer(g_msg, kCtlTimer, 250, ctl_tick); }
     else hide_controls_now();
     check_page(act);
+}
+// ---------------------------------------------------------------- Pluma's light YouTube page (youtube.cpp)
+// Its watch page has no player of its own: Pluma's goes in at once, in the page's player box, and the page (light)
+// stays awake and on screen around it. Four times a second the page gets the player's time and says where its box
+// is, which second a timestamp asked for, and whether something of the page (the search suggestions) needs the box.
+static void lite_fail(Tab *t, const std::wstring &why) {
+    // Pluma's player cannot play it (a live, a video that needs YouTube's page): the page goes to YouTube's own
+    eval(t, L"window.__pluma && __pluma.fail(" + json_escape(why) + L")", [](const Json &) {});
+}
+static void lite_back(Tab *t, int how, double pos) {
+    if (how == VIDEO_ENDED) eval(t, L"window.__pluma && __pluma.ended()", [](const Json &) {});
+    else if (how == VIDEO_ASKED || how == VIDEO_FAILED) {
+        wchar_t js[120];
+        swprintf_s(js, L"window.__pluma && __pluma.normal(%.1f, %d)", std::max(0.0, pos), how == VIDEO_FAILED ? 1 : 0);
+        eval(t, js, [](const Json &) {});
+    }
+}
+static void lite_start(Tab *t, Video *v) {
+    // nothing to meet: the change as soon as mpv draws at the size of its place (or a moment later anyway)
+    RECT pr = player_rect(v);
+    bool drawn = abs(v->osd_w - (pr.right - pr.left)) <= 2 && abs(v->osd_h - (pr.bottom - pr.top)) <= 2;
+    if (!drawn && now_ms() - v->seek_t0 < v->seek_ms + 1500) { SetTimer(g_msg, kSyncTimer + t->id, 20, sync_timer); return; }
+    switch_now(t, v, true);
+}
+static void lite_wheel(Tab *t, UINT msg, double x, double y, int delta) {
+    // the wheel over the video scrolls the page under it
+    if (msg != WM_MOUSEWHEEL || !t->view) return;
+    wchar_t p[220];
+    swprintf_s(p, L"{\"type\":\"mouseWheel\",\"x\":%.1f,\"y\":%.1f,\"deltaX\":0,\"deltaY\":%d}", x, y, -delta * 100 / WHEEL_DELTA);
+    t->view->CallDevToolsProtocolMethod(L"Input.dispatchMouseEvent", p, NULL);
+}
+static void CALLBACK lite_tick(HWND, UINT, UINT_PTR tid, DWORD) {
+    int id = (int)(tid - kLiteTimer);
+    Tab *t = tab_by_id(id);
+    Video *v = V(t);
+    if (!t || !v || !v->lite || v->stage != ST_ON) { KillTimer(g_msg, tid); return; }
+    SetTimer(g_msg, tid, t == active_tab() ? 250 : 1000, lite_tick);
+    if (now_ms() - v->lite_asked < 3000) return;   // (the last one not answered yet: a page busy or asleep)
+    v->lite_asked = now_ms();
+    wchar_t js[160];
+    // (the time read here, not kept: ctl_tick's watchman compares what it read last with now)
+    double pos = v->pos;
+    if (!v->mpv || !v->loaded || M.get_property(v->mpv, "time-pos", MPV_FORMAT_DOUBLE, &pos) < 0) pos = v->pos;
+    swprintf_s(js, L"window.__pluma ? __pluma.tick(%.2f, %.2f, %d, %d, %d) : null", pos, v->dur, v->paused ? 1 : 0,
+               (int)lround(v->volume), v->muted ? 1 : 0);
+    int serial = v->serial;
+    eval(t, js, [id, serial](const Json &r) {
+        Tab *t = tab_by_id(id);
+        Video *v = V(t);
+        if (!v || v->serial != serial || v->stage != ST_ON) return;
+        v->lite_asked = 0;
+        if (r.kind != Json::ARR || r.arr.size() < 7) return;   // (another page coming: NavigationStarting ends the player)
+        bool cover = r.arr[6].n != 0;
+        if (t == active_tab() && !g_fullscreen && !zoom_busy()) {
+            RECT old = v->box;
+            set_box(t, v, r.arr[0].n, r.arr[1].n, r.arr[2].n, r.arr[3].n, r.arr[4].n);
+            if (!EqualRect(&old, &v->box) || cover != v->lite_cover) { v->lite_cover = cover; video_layout(); }
+        }
+        double seek = r.arr[5].n;
+        if (seek >= 0) {
+            // a timestamp of the description or the comments: there, playing
+            seek_abs(v, seek, true);
+            v->pos = seek;
+            if (v->paused) set_flag(v, "pause", false);
+            show_controls(v);
+        }
+    });
 }
 void video_debug_shot(const std::wstring &path) {
     // tests: the window as the screen shows it, the player's controls blended in with their real transparency (a
