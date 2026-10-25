@@ -114,6 +114,11 @@ ya tenga esa funcionalidad»).
   Teclas: k/espacio, j/l, flechas, m, f, c, 0-9, Inicio/Fin, < y >, Esc; las de Pluma siguen funcionando.
 - «Página de YouTube» vuelve a la página en el mismo segundo (y ese vídeo se queda ya en la página). Al acabar, vuelve
   a la página para que salga su pantalla final y pase al siguiente. Si mpv falla, la página sigue donde iba.
+- Calidad: «Automática» como la de YouTube (la menor que llena el reproductor: 1080p en una pantalla de 1080p);
+  el menú llega a lo que dé la lista (2160p a 60 fps en vídeos 4K; prefiere VP9 normal al HDR). Las listas de todas
+  las calidades se bajan nada más empezar, para que el cambio no espere al servidor de listas (1-3 s cada una). El
+  búfer es de ~10 s del vídeo elegido, como poco 4 MB: 4K a 60 fps (28 Mb/s, aquí bajan 24-30 Mb/s por conexión) se
+  paraba a cargar con 4 MB; con 33 MB no se para. 4K: 196 MB en total, la gráfica Intel al 57 %, la CPU al 3 %.
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
   en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
 
@@ -138,5 +143,9 @@ ya tenga esa funcionalidad»).
 - Recortar memoria (EmptyWorkingSet) tarda 9-90 ms: nunca en el hilo de la ventana, que comparte la entrada con las
   páginas (un hilo de la ventana ocupado retrasa los clics en la web). Va en un hilo aparte; y la interfaz de Pluma no
   se recorta a sí misma mientras se ve. Medido con `clics.js` en YouTube: mediana 6 ms hasta verse el clic.
+- Pantalla completa: se entra y se sale con un fundido a negro (un «telón» por encima de todo, como Firefox: 80 ms,
+  el cambio debajo, 80 ms para que se dibuje y 170 ms de salida). De golpe, la página se veía colocada dos veces
+  (en la ventana y luego en la pantalla): «tosco, laggy» (25/10). Sin telón en las pruebas (taparía la pantalla del
+  usuario) ni con las animaciones de Windows apagadas; a los 2 s se quita pase lo que pase.
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.

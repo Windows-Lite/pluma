@@ -469,6 +469,10 @@ static void load_streams(Video *v, double start, bool paused) {
     std::string opts = std::string("start=") + st + ",pause=" + (paused ? "yes" : "no");
     const Fmt &vf = v->fmts[v->vf];
     if (v->af >= 0) { const Fmt &af = v->fmts[v->af]; opts += ",audio-file=" + escaped(af.local.empty() ? af.url : af.local); }
+    // ~10 s of video ahead, at least 4 MB: at 1080p that is the 4 MB measured; 4K at 60 fps (28 Mb/s, pieces of
+    // 12 MB, which download here at 24-30 Mb/s) stopped to load with 4 MB (25/10)
+    long long mb = std::max(4LL, (vf.br / 8 * 10) >> 20);
+    opts += ",demuxer-max-bytes=" + std::to_string(mb) + "MiB";
     v->restarted = v->loaded = false;
     mpv_cmd(v, { "loadfile", (vf.local.empty() ? vf.url : vf.local).c_str(), "replace", "-1", opts.c_str() });
 }
@@ -710,11 +714,33 @@ static bool http_get(const std::wstring &url, std::string &out) {
     WinHttpCloseHandle(s);
     return ok;
 }
-static int target_height() {
-    // as YouTube does: what the player is shown at, at most 1080 to start (the menu goes higher)
+static int target_height(const Video *v) {
+    // as YouTube's "automatic": the smallest quality that fills the player (1080p on a 1080p screen, 1440p on a 2K
+    // one...), or the best there is. Higher ones, from the menu
     RECT r = video_rect();
-    int h = r.bottom - r.top;
-    return h > 720 ? 1080 : h > 480 ? 720 : h > 360 ? 480 : 360;
+    int h = (int)((r.bottom - r.top) * 0.9), best = 0, fit = 0;
+    for (auto &f : v->fmts) {
+        if (f.audio || f.h <= 0) continue;
+        best = std::max(best, f.h);
+        if (f.h >= h && (!fit || f.h < fit)) fit = f.h;
+    }
+    return fit ? fit : best ? best : 1080;
+}
+static std::vector<int> each_quality(const Video *v) {
+    // the variant each quality would play, and its audio: their lists are read ahead, so a change does not wait
+    std::vector<int> out;
+    std::vector<int> hs;
+    for (auto &f : v->fmts) if (!f.audio && f.h > 0 && std::find(hs.begin(), hs.end(), f.h) == hs.end()) hs.push_back(f.h);
+    Video tmp;
+    tmp.fmts = v->fmts;
+    for (int h : hs) {
+        tmp.vf = pick_video(&tmp, h);
+        if (tmp.vf < 0 || tmp.fmts[tmp.vf].h != h) continue;
+        out.push_back(tmp.vf);
+        int a = pick_audio(&tmp);
+        if (a >= 0 && std::find(out.begin(), out.end(), a) == out.end()) out.push_back(a);
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------- painting
@@ -1061,7 +1087,7 @@ static void set_sub(Video *v, int i) {
     paint_all(v);
 }
 static void set_quality(Video *v, int h) {
-    int f = h > 0 ? pick_video(v, h) : pick_video(v, target_height());
+    int f = h > 0 ? pick_video(v, h) : pick_video(v, target_height(v));
     v->auto_quality = h <= 0;
     if (f < 0 || f == v->vf) { paint_all(v); return; }
     // the new list first, while this one goes on playing; then the same second in the new quality
@@ -1465,6 +1491,8 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     log_line(L"vídeo propio: " + v->title + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
              L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió");
     SetTimer(g_msg, kFreezeTimer + t->id, 2500, [](HWND, UINT, UINT_PTR tid, DWORD) { KillTimer(g_msg, tid); freeze_page((int)(tid - kFreezeTimer)); });
+    // the other qualities' lists, ahead (YouTube's list server takes 1-3 s for each)
+    fetch_playlists(v, each_quality(v), [](Video *) {});
     ui_invalidate();
 }
 static void CALLBACK sync_timer(HWND, UINT, UINT_PTR tid, DWORD) {
@@ -1562,7 +1590,7 @@ static void video_try(Tab *t) {
                 auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); t->video = nullptr; delete v; };
                 if (!ok) { give_up(L"no se pudo leer la lista HLS"); return; }
                 v->fmts = parse_master(m3u8);
-                v->vf = pick_video(v, target_height());
+                v->vf = pick_video(v, target_height(v));
                 v->af = pick_audio(v);
                 if (v->vf < 0 || v->af < 0) { give_up(L"no hay formatos que valgan"); return; }
                 fetch_playlists(v, { v->vf, v->af }, [pt, at](Video *v) {

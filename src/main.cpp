@@ -385,7 +385,7 @@ static void restore_placement() {
     SetWindowPlacement(g_win, &wp);
     if (show == SW_SHOWMAXIMIZED) SetPropW(g_win, L"max", (HANDLE)1);
 }
-void set_fullscreen(bool on) {
+static void apply_fullscreen(bool on) {
     if (on == g_fullscreen) return;
     if (on) {
         g_before_fs.length = sizeof(g_before_fs);
@@ -405,6 +405,64 @@ void set_fullscreen(bool on) {
     ui_layout();
     tabs_layout_views();
 }
+// Into fullscreen and out through black, as Firefox does: a curtain over the screen darkens in 80 ms, the window
+// changes under it, and it lifts in 170 ms once the page (or the player) has drawn itself at its new size. Changed
+// at once, the page was seen laid out twice, first in the window, then on the screen ("tosco, laggy", 25/10).
+static HWND g_curtain;
+static int g_curtain_phase;            // 0 none, 1 darkening, 2 waiting for the new size to draw, 3 lifting
+static bool g_curtain_want;
+static double g_curtain_t0, g_curtain_began;
+static const double kCurtainIn = 80, kCurtainHold = 80, kCurtainOut = 170;
+static LRESULT CALLBACK curtain_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg != WM_TIMER) return DefWindowProcW(h, msg, wp, lp);
+    double now = now_ms(), k;
+    BYTE a = 255;
+    if (now - g_curtain_began > 2000) g_curtain_phase = 4;   // whatever happened, never a black screen
+    if (g_curtain_phase == 1) {
+        k = std::min(1.0, (now - g_curtain_t0) / kCurtainIn);
+        a = (BYTE)lround(255 * (1 - (1 - k) * (1 - k)));
+        if (k >= 1) { apply_fullscreen(g_curtain_want); g_curtain_phase = 2; g_curtain_t0 = now_ms(); }
+    } else if (g_curtain_phase == 2) {
+        if (now - g_curtain_t0 >= kCurtainHold) { g_curtain_phase = 3; g_curtain_t0 = now; }
+    } else if (g_curtain_phase == 3) {
+        k = std::min(1.0, (now - g_curtain_t0) / kCurtainOut);
+        a = (BYTE)lround(255 * (1 - k) * (1 - k));
+        if (k >= 1) g_curtain_phase = 4;
+    }
+    if (g_curtain_phase == 4) {
+        KillTimer(h, 1);
+        ShowWindow(h, SW_HIDE);
+        g_curtain_phase = 0;
+        if (g_fullscreen != g_curtain_want) apply_fullscreen(g_curtain_want);
+        return 0;
+    }
+    SetLayeredWindowAttributes(h, 0, a, LWA_ALPHA);
+    return 0;
+}
+void set_fullscreen(bool on) {
+    if (g_curtain_phase) { g_curtain_want = on; return; }   // on its way: it ends where asked last
+    if (on == g_fullscreen) return;
+    // (tests run off the screen: a curtain would cover the user's; no curtain without Windows' animations either)
+    if (!g_motion || g_test || !IsWindowVisible(g_win) || IsIconic(g_win)) { apply_fullscreen(on); return; }
+    if (!g_curtain) {
+        WNDCLASSEXW wc = { sizeof(wc) };
+        wc.lpfnWndProc = curtain_proc; wc.hInstance = g_inst; wc.lpszClassName = L"PlumaTelon";
+        wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        RegisterClassExW(&wc);
+        g_curtain = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+                                    L"PlumaTelon", L"", WS_POPUP, 0, 0, 0, 0, NULL, NULL, g_inst, NULL);
+        if (!g_curtain) { apply_fullscreen(on); return; }
+    }
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoW(MonitorFromWindow(g_win, MONITOR_DEFAULTTONEAREST), &mi);
+    SetLayeredWindowAttributes(g_curtain, 0, 0, LWA_ALPHA);
+    SetWindowPos(g_curtain, HWND_TOPMOST, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                 mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    g_curtain_want = on;
+    g_curtain_phase = 1;
+    g_curtain_t0 = g_curtain_began = now_ms();
+    SetTimer(g_curtain, 1, 8, NULL);
+}
 static void show_window() {
     g_start_hidden = false;
     if (g_test) {
@@ -422,7 +480,8 @@ static void show_window() {
 static void hide_window() {
     // closed but kept warm: the session is saved, the pages frozen and the memory given back (tabs_on_hide)
     ui_close_popups();
-    if (g_fullscreen) set_fullscreen(false);
+    if (g_curtain_phase) { KillTimer(g_curtain, 1); ShowWindow(g_curtain, SW_HIDE); g_curtain_phase = 0; }
+    if (g_fullscreen) apply_fullscreen(false);   // (at once: the window goes)
     save_placement();
     if (IsZoomed(g_win)) SetPropW(g_win, L"max", (HANDLE)1); else RemovePropW(g_win, L"max");
     session_save();
