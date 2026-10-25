@@ -1,0 +1,211 @@
+// Pluma: a light, fast web browser for Windows.
+//
+// One native window (C++, Win32) whose bar is drawn with Direct2D, and one WebView2 (Edge's engine, part of Windows
+// and kept up to date by it) per tab that is actually in use. Nothing of the interface is a web page, so the bar costs
+// no extra process. Fast like Zas: a single instance stays in memory, hidden, with the engine warm.
+//   Pluma.exe [url]        opens the url (or the window) in the one in memory, starting it if needed
+//   Pluma.exe --oculto     starts it hidden, ready (for Windows startup)
+//   Pluma.exe --salir      closes the one in memory for good
+// PLUMA_INSTANCIA=<name> runs a separate instance (own mutex, window class and data), off the screen, for tests;
+// PLUMA_DEPURAR=<port> opens the DevTools protocol on that port.
+#pragma once
+#include <windows.h>
+#include <windowsx.h>
+#include <dwmapi.h>
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <shellapi.h>
+#include <wrl.h>
+#include <d2d1.h>
+#include <dwrite.h>
+#include <wincodec.h>
+#include <string>
+#include <vector>
+#include <memory>
+#include <functional>
+#include <algorithm>
+#include <cmath>
+#include "WebView2.h"
+#include "WebView2EnvironmentOptions.h"
+
+using Microsoft::WRL::Callback;
+using Microsoft::WRL::ComPtr;
+
+// ---------------------------------------------------------------- small things (main.cpp)
+double now_ms();
+std::string utf8(const std::wstring &s);
+std::wstring wide(const std::string &s);
+void log_line(const std::wstring &s);
+bool read_file(const std::wstring &p, std::string &out);
+bool write_file(const std::wstring &p, const std::string &data);
+std::wstring lower(std::wstring s);
+std::wstring trim(const std::wstring &s);
+std::wstring url_host(const std::wstring &url);   // "https://www.x.com/a" -> "www.x.com"
+std::wstring url_decode(const std::wstring &s);
+std::wstring url_encode(const std::wstring &s);
+std::wstring json_escape(const std::wstring &s);  // a JSON string literal, quotes included
+std::wstring hash_hex(const std::wstring &s);
+bool starts_with(const std::wstring &s, const wchar_t *p);
+bool ends_with_i(const std::wstring &s, const wchar_t *p);
+
+// One value that moves towards a target with ease-out (no overshoot). Everything that moves in the bar is one of these.
+struct Anim {
+    float from = 0, to = 0;
+    double t0 = 0, dur = 0;
+    float at(double t) const {
+        if (dur <= 0 || t >= t0 + dur) return to;
+        double k = (t - t0) / dur;
+        k = 1 - (1 - k) * (1 - k) * (1 - k);
+        return from + (to - from) * (float)k;
+    }
+    bool running(double t) const { return dur > 0 && t < t0 + dur; }
+    void go(float target, double d);   // d: ms at full motion (scaled down to 0 when Windows animations are off)
+    void snap(float v) { from = to = v; dur = 0; }
+};
+extern bool g_motion;   // Windows "Show animations"
+
+// ---------------------------------------------------------------- settings and app state
+struct Settings {
+    std::wstring engine = L"google";   // google, duckduckgo, bing, startpage, brave
+    int theme = 1;                     // 0 light (as Mapea), 1 dark (the default), 2 as Windows
+    int sleep_s = 45;                  // a hidden tab is frozen after this
+    int discard_min = 20;              // ... and unloaded after this (0 = never)
+    bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
+    std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
+};
+extern Settings g_set;
+void settings_load();
+void settings_save();
+std::wstring search_url(const std::wstring &q);
+std::wstring engine_name(const std::wstring &id);
+
+struct HistoryEntry { std::wstring url, title; int visits = 0; long long last = 0; };
+extern std::vector<HistoryEntry> g_history;
+void history_load();
+void history_add(const std::wstring &url, const std::wstring &title);
+void history_title(const std::wstring &url, const std::wstring &title);
+void history_flush();
+void history_clear();
+struct Suggestion { std::wstring url, title; bool search = false; };
+std::vector<Suggestion> history_suggest(const std::wstring &typed, std::wstring *inline_completion);
+std::vector<HistoryEntry> history_top(int n);
+
+void set_fullscreen(bool on);
+void app_quit();                          // closes Pluma for good (not just the window)
+void app_close_window();                  // what the window's X does
+std::wstring fixup_input(const std::wstring &typed);   // what was typed in the address bar -> the url to load
+
+extern HINSTANCE g_inst;
+extern HWND g_win, g_bar, g_edit;
+extern std::wstring g_root, g_state;   // the exe's folder; %LOCALAPPDATA%\Pluma (or its test folder)
+extern bool g_test, g_dev, g_quitting, g_fullscreen;
+extern double g_open_asked;               // when a page was asked for (start, or from memory): for the log
+extern ComPtr<ICoreWebView2Environment> g_env;
+
+// ---------------------------------------------------------------- tabs (tabs.cpp)
+struct Tab {
+    int id = 0;
+    std::wstring url, title;
+    ComPtr<ICoreWebView2Controller> ctrl;
+    ComPtr<ICoreWebView2> view;
+    std::string icon_png;              // favicon, PNG bytes (the bar decodes them)
+    void *icon_bmp = nullptr;          // ID2D1Bitmap owned by the bar
+    bool loading = false, audible = false, muted = false, suspended = false, creating = false;
+    bool can_back = false, can_fwd = false, crashed = false;
+    double hidden_since = 0;           // 0 while it is the one on screen
+    std::wstring pending;              // a url to load as soon as the view exists
+    std::vector<std::wstring> scripts_ids;   // the injected userscripts, to swap them
+    float progress = 0;                // loading line, 0..1 (estimated: WebView2 does not give one)
+    double load_started = 0, load_done = 0;
+    // the bar's geometry, animated
+    Anim x, w, hover, close_hover;
+    bool placed = false;
+};
+extern std::vector<std::unique_ptr<Tab>> g_tabs;
+void with_profile(std::function<void(ICoreWebView2Profile *)> f);   // the browser profile, once a view exists
+extern int g_active;
+
+Tab *active_tab();
+Tab *tab_by_id(int id);
+int tab_index(int id);
+Tab *tab_new(const std::wstring &url, bool activate, int at = -1);   // url "" = the empty new tab
+void tab_close(int index, bool from_mouse = false);
+void tab_activate(int index);
+void tab_navigate(Tab *t, const std::wstring &url);
+void tab_reopen_closed();
+void tabs_layout_views();                 // put the active view where the page goes
+void tabs_tick();                         // every few seconds: freeze, unload
+void tabs_discard_all();
+void tabs_on_hide();                      // the window closed (kept in memory): freeze the pages, then give memory back
+enum { TRIM_FROZEN, TRIM_IDLE, TRIM_ALL };
+void tabs_trim(int mode);                 // processes with nothing on screen give their unused memory back to Windows
+void tabs_set_scripts();                  // userscripts changed: refresh them in every view
+void tabs_apply_theme();
+void tab_mute(Tab *t);
+void tab_go_back(); void tab_go_forward(); void tab_reload(bool hard); void tab_stop();
+void tab_zoom(int dir);                   // -1 out, 0 reset, +1 in
+double tab_zoom_factor();
+void tab_find();
+void tab_print();
+void tab_devtools();
+void tab_downloads();
+void session_save_soon();
+void session_save();
+void session_restore();
+void env_create(std::function<void()> ready);
+void spare_prepare();
+size_t engine_memory_mb();               // private memory of all Pluma processes (as the Task Manager counts it)
+
+// ---------------------------------------------------------------- the bar (ui.cpp)
+void ui_init();
+void ui_layout();                         // window resized, fullscreen, tabs added...
+void ui_invalidate();
+float ui_band_height();                   // px; 0 in fullscreen
+void ui_tab_closing(Tab *t, bool from_mouse);   // keeps a fading copy while the others close the gap
+void ui_tab_icon_changed(Tab *t);
+void ui_release_icon(Tab *t);
+void ui_focus_address(bool select_all = true);
+bool ui_address_focused();
+void ui_set_address_text(const std::wstring &s);
+void ui_theme_changed();
+void ui_dpi_changed();
+void ui_notice(const std::wstring &text, const std::wstring &button, std::function<void()> action, int seconds = 0, int owner_tab = 0);
+void ui_notice_drop(int tab_id);          // the tab a note was about went elsewhere: the note goes
+void ui_toast(const std::wstring &text);
+void ui_open_menu();
+void ui_close_popups();
+void ui_caption_hover(int code);          // HTMINBUTTON/HTMAXBUTTON/HTCLOSE under the mouse, or 0
+void ui_caption_press(int code, bool down);
+int ui_hit_caption(POINT client);         // HTCLIENT over a control; HTCAPTION or a caption button elsewhere in the bar
+void ui_window_activated(bool active);
+void ui_post(std::function<void()> f);    // runs f on the window's thread (from another thread)
+float ui_scale();
+bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt);
+
+// colours (Mapea's tokens)
+struct Palette { D2D1_COLOR_F bg, surface, text, sub, line, line_strong, accent, accent_soft, error, hover, press; };
+const Palette &pal();
+bool dark_theme();
+
+// ---------------------------------------------------------------- userscripts (scripts.cpp)
+struct UserScript { std::wstring file, name, version, description, run_at; bool enabled = true, noframes = false;
+                    std::vector<std::wstring> match, include, exclude; std::string code; };
+extern std::vector<UserScript> g_scripts;
+void scripts_load();
+std::vector<std::wstring> scripts_sources();   // the enabled userscripts, each ready to inject in every page
+const std::wstring &base_script();        // Pluma's own few lines in every page: background tabs, prefetch on hover
+bool script_install(const std::wstring &source, std::wstring &name_out);
+void script_toggle(size_t i);
+std::wstring scripts_folder();
+
+// ---------------------------------------------------------------- extensions (extensions.cpp)
+struct Extension { std::wstring id, name, folder, popup, options, icon_path; bool enabled = true, builtin = false; };
+extern std::vector<Extension> g_exts;
+void ext_sync(std::function<void()> done);   // loads the folders in extensiones\ and reads what is installed
+void ext_toggle(size_t i);
+void ext_remove(size_t i);
+void ext_open_popup(size_t i, RECT anchor);
+void ext_open_options(size_t i);
+bool store_extension_id(const std::wstring &url, std::wstring &id, bool &edge);
+void store_install(const std::wstring &id, bool edge);
+std::wstring extensions_folder();

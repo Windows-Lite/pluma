@@ -1,0 +1,6 @@
+src/sdk/
+src/*.obj
+src/*.res
+src/pluma-32.png
+tmp/
+*.exe.old

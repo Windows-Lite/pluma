@@ -1,0 +1,701 @@
+// Pluma: the window, its frame, settings, history, and starting up. See pluma.h.
+#include "pluma.h"
+#include <unordered_map>
+#include <ctime>
+
+HINSTANCE g_inst;
+HWND g_win, g_bar, g_edit;
+std::wstring g_root, g_state;
+bool g_test, g_dev, g_quitting, g_fullscreen, g_motion = true;
+double g_open_asked = 0;
+ComPtr<ICoreWebView2Environment> g_env;
+Settings g_set;
+std::vector<HistoryEntry> g_history;
+
+static std::wstring g_class = L"PlumaVentana", g_mutex = L"PlumaNavegadorUnico";
+static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_OPEN = WM_APP + 3;
+static const ULONG_PTR kCopyOpen = 0x504C55;   // WM_COPYDATA from a second Pluma.exe: urls, one per line
+static const UINT_PTR kTimerQuit = 1, kTimerHistory = 2, kTimerTabs = 3, kTimerSession = 4;
+static LARGE_INTEGER g_t0, g_freq;
+static bool g_start_hidden, g_env_ready;
+static std::vector<std::wstring> g_waiting_urls;   // asked for before the engine was ready
+static WINDOWPLACEMENT g_before_fs = { sizeof(WINDOWPLACEMENT) };
+static int g_caption_down;
+
+// ---------------------------------------------------------------- small helpers
+double now_ms() {
+    LARGE_INTEGER t; QueryPerformanceCounter(&t);
+    return (t.QuadPart - g_t0.QuadPart) * 1000.0 / g_freq.QuadPart;
+}
+std::string utf8(const std::wstring &s) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0, NULL, NULL);
+    std::string u(n, 0);
+    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), u.data(), n, NULL, NULL);
+    return u;
+}
+std::wstring wide(const std::string &s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
+    std::wstring w(n, 0);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), w.data(), n);
+    return w;
+}
+void log_line(const std::wstring &s) {
+    HANDLE f = CreateFileW((g_state + L"\\pluma.log").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER size;
+    if (GetFileSizeEx(f, &size)) {
+        if (size.QuadPart > (2 << 20)) { CloseHandle(f); DeleteFileW((g_state + L"\\pluma.log").c_str()); return log_line(s); }
+        if (size.QuadPart == 0) { DWORD w; WriteFile(f, "\xEF\xBB\xBF", 3, &w, NULL); }
+    }
+    SYSTEMTIME st; GetLocalTime(&st);
+    wchar_t head[64];
+    swprintf_s(head, L"%04d-%02d-%02d %02d:%02d:%02d.%03d ", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    std::string u = utf8(head + s + L"\r\n");
+    DWORD w; WriteFile(f, u.data(), (DWORD)u.size(), &w, NULL);
+    CloseHandle(f);
+}
+bool read_file(const std::wstring &p, std::string &out) {
+    HANDLE f = CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size; GetFileSizeEx(f, &size);
+    if (size.QuadPart > (256 << 20)) { CloseHandle(f); return false; }
+    out.resize((size_t)size.QuadPart);
+    DWORD r = 0;
+    BOOL ok = size.QuadPart == 0 || ReadFile(f, out.data(), (DWORD)out.size(), &r, NULL);
+    CloseHandle(f);
+    return ok && r == out.size();
+}
+bool write_file(const std::wstring &p, const std::string &data) {
+    // write beside and swap, so a crash never leaves half a file
+    std::wstring tmp = p + L".tmp";
+    HANDLE f = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    DWORD w = 0;
+    BOOL ok = data.empty() || WriteFile(f, data.data(), (DWORD)data.size(), &w, NULL);
+    CloseHandle(f);
+    if (!ok || w != data.size()) { DeleteFileW(tmp.c_str()); return false; }
+    return MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+std::wstring lower(std::wstring s) {
+    if (!s.empty()) CharLowerBuffW(s.data(), (DWORD)s.size());
+    return s;
+}
+std::wstring trim(const std::wstring &s) {
+    size_t a = s.find_first_not_of(L" \t\r\n\x3000\xA0"), b = s.find_last_not_of(L" \t\r\n\x3000\xA0");
+    return a == std::wstring::npos ? L"" : s.substr(a, b - a + 1);
+}
+bool starts_with(const std::wstring &s, const wchar_t *p) { return s.rfind(p, 0) == 0; }
+bool ends_with_i(const std::wstring &s, const wchar_t *p) {
+    size_t n = wcslen(p);
+    return s.size() >= n && !_wcsicmp(s.c_str() + s.size() - n, p);
+}
+std::wstring url_host(const std::wstring &url) {
+    size_t a = url.find(L"://");
+    if (a == std::wstring::npos) return L"";
+    a += 3;
+    size_t b = url.find_first_of(L"/?#", a);
+    std::wstring h = url.substr(a, b == std::wstring::npos ? std::wstring::npos : b - a);
+    size_t at = h.rfind(L'@');
+    if (at != std::wstring::npos) h = h.substr(at + 1);
+    return lower(h);
+}
+std::wstring url_decode(const std::wstring &v) {
+    std::string bytes;
+    for (size_t i = 0; i < v.size(); i++) {
+        if (v[i] == L'%' && i + 2 < v.size() && iswxdigit(v[i + 1]) && iswxdigit(v[i + 2])) {
+            bytes += (char)wcstol(v.substr(i + 1, 2).c_str(), NULL, 16); i += 2;
+        } else bytes += utf8(std::wstring(1, v[i]));
+    }
+    return wide(bytes);
+}
+std::wstring url_encode(const std::wstring &s) {
+    std::string u = utf8(s);
+    std::wstring out;
+    for (unsigned char c : u) {
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += (wchar_t)c;
+        else if (c == ' ') out += L'+';
+        else { wchar_t b[4]; swprintf_s(b, L"%%%02X", c); out += b; }
+    }
+    return out;
+}
+std::wstring json_escape(const std::wstring &s) {
+    std::wstring out = L"\"";
+    for (wchar_t c : s) {
+        if (c == L'"' || c == L'\\') { out += L'\\'; out += c; }
+        else if (c < 0x20 || c == 0x2028 || c == 0x2029) { wchar_t b[8]; swprintf_s(b, L"\\u%04x", (unsigned)c); out += b; }
+        else out += c;
+    }
+    return out + L"\"";
+}
+std::wstring hash_hex(const std::wstring &s) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (wchar_t c : s) { h ^= (unsigned long long)c; h *= 1099511628211ULL; }
+    wchar_t b[24]; swprintf_s(b, L"%016llx", h);
+    return b;
+}
+void Anim::go(float target, double d) {
+    if (target == to) return;
+    double t = now_ms();
+    from = at(t); to = target; t0 = t; dur = g_motion ? d : 0;
+}
+
+// ---------------------------------------------------------------- settings (ajustes.ini)
+static std::wstring ini() { return g_state + L"\\ajustes.ini"; }
+static std::wstring ini_get(const wchar_t *key, const wchar_t *def) {
+    wchar_t buf[1024];
+    GetPrivateProfileStringW(L"pluma", key, def, buf, 1024, ini().c_str());
+    return buf;
+}
+void settings_load() {
+    g_set.engine = ini_get(L"buscador", L"google");
+    std::wstring th = ini_get(L"tema", L"oscuro");   // dark by default: how the user browses
+    g_set.theme = th == L"claro" ? 0 : th == L"sistema" ? 2 : 1;
+    g_set.sleep_s = std::max(10, _wtoi(ini_get(L"dormir_s", L"45").c_str()));
+    g_set.discard_min = std::max(0, _wtoi(ini_get(L"descargar_min", L"20").c_str()));
+    g_set.resident = ini_get(L"residente", L"1") != L"0";
+    g_set.schemes.clear();
+    std::wstring sc = ini_get(L"protocolos", L"ytmp3");
+    size_t pos = 0;
+    while (pos <= sc.size()) {
+        size_t c = sc.find(L',', pos);
+        std::wstring one = lower(trim(sc.substr(pos, c == std::wstring::npos ? std::wstring::npos : c - pos)));
+        if (!one.empty()) g_set.schemes.push_back(one);
+        if (c == std::wstring::npos) break;
+        pos = c + 1;
+    }
+}
+void settings_save() {
+    std::wstring f = ini();
+    WritePrivateProfileStringW(L"pluma", L"buscador", g_set.engine.c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"tema", g_set.theme == 1 ? L"oscuro" : g_set.theme == 2 ? L"sistema" : L"claro", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"dormir_s", std::to_wstring(g_set.sleep_s).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"descargar_min", std::to_wstring(g_set.discard_min).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"residente", g_set.resident ? L"1" : L"0", f.c_str());
+    std::wstring sc;
+    for (auto &s : g_set.schemes) sc += (sc.empty() ? L"" : L",") + s;
+    WritePrivateProfileStringW(L"pluma", L"protocolos", sc.c_str(), f.c_str());
+}
+static const struct { const wchar_t *id, *name, *url; } kEngines[] = {
+    { L"google", L"Google", L"https://www.google.com/search?q=" },
+    { L"duckduckgo", L"DuckDuckGo", L"https://duckduckgo.com/?q=" },
+    { L"bing", L"Bing", L"https://www.bing.com/search?q=" },
+    { L"startpage", L"Startpage", L"https://www.startpage.com/do/search?q=" },
+    { L"brave", L"Brave Search", L"https://search.brave.com/search?q=" } };
+std::wstring search_url(const std::wstring &q) {
+    for (auto &e : kEngines) if (g_set.engine == e.id) return e.url + url_encode(q);
+    return kEngines[0].url + url_encode(q);
+}
+std::wstring engine_name(const std::wstring &id) {
+    for (auto &e : kEngines) if (id == e.id) return e.name;
+    return kEngines[0].name;
+}
+
+// ---------------------------------------------------------------- history (historial.tsv: url, title, visits, last visit)
+static std::unordered_map<std::wstring, size_t> g_hist_index;
+static bool g_hist_dirty;
+static const size_t kHistoryMax = 8000;
+static std::wstring tsv_clean(const std::wstring &s) {
+    std::wstring o = s;
+    for (auto &c : o) if (c == L'\t' || c == L'\r' || c == L'\n') c = L' ';
+    return o;
+}
+void history_load() {
+    std::string data;
+    if (!read_file(g_state + L"\\historial.tsv", data)) return;
+    std::wstring w = wide(data);
+    size_t pos = 0;
+    while (pos < w.size()) {
+        size_t nl = w.find(L'\n', pos);
+        std::wstring line = w.substr(pos, nl == std::wstring::npos ? std::wstring::npos : nl - pos);
+        pos = nl == std::wstring::npos ? w.size() : nl + 1;
+        if (!line.empty() && line.back() == L'\r') line.pop_back();
+        std::vector<std::wstring> f;
+        size_t a = 0;
+        while (true) { size_t t = line.find(L'\t', a); f.push_back(line.substr(a, t == std::wstring::npos ? std::wstring::npos : t - a)); if (t == std::wstring::npos) break; a = t + 1; }
+        if (f.size() < 4 || f[0].empty() || g_hist_index.count(f[0])) continue;
+        HistoryEntry e; e.url = f[0]; e.title = f[1]; e.visits = _wtoi(f[2].c_str()); e.last = _wtoi64(f[3].c_str());
+        g_hist_index[e.url] = g_history.size();
+        g_history.push_back(e);
+    }
+}
+static void history_reindex() {
+    g_hist_index.clear();
+    for (size_t i = 0; i < g_history.size(); i++) g_hist_index[g_history[i].url] = i;
+}
+void history_flush() {
+    if (!g_hist_dirty) return;
+    g_hist_dirty = false;
+    if (g_history.size() > kHistoryMax) {
+        // keep the most recent
+        std::sort(g_history.begin(), g_history.end(), [](const HistoryEntry &a, const HistoryEntry &b) { return a.last > b.last; });
+        g_history.resize(kHistoryMax);
+        history_reindex();
+    }
+    std::wstring out;
+    out.reserve(g_history.size() * 120);
+    for (auto &e : g_history)
+        out += e.url + L"\t" + tsv_clean(e.title) + L"\t" + std::to_wstring(e.visits) + L"\t" + std::to_wstring(e.last) + L"\n";
+    write_file(g_state + L"\\historial.tsv", utf8(out));
+}
+void history_clear() {
+    g_history.clear();
+    g_hist_index.clear();
+    g_hist_dirty = false;
+    DeleteFileW((g_state + L"\\historial.tsv").c_str());
+}
+static bool history_worthy(const std::wstring &url) {
+    return (starts_with(url, L"https://") || starts_with(url, L"http://")) && url.size() < 2048;
+}
+void history_add(const std::wstring &url, const std::wstring &title) {
+    if (!history_worthy(url)) return;
+    auto it = g_hist_index.find(url);
+    if (it == g_hist_index.end()) {
+        g_hist_index[url] = g_history.size();
+        g_history.push_back({ url, title, 0, 0 });
+        it = g_hist_index.find(url);
+    }
+    HistoryEntry &e = g_history[it->second];
+    e.visits++;
+    e.last = (long long)time(NULL);
+    if (!title.empty()) e.title = title;
+    g_hist_dirty = true;
+    SetTimer(g_win, kTimerHistory, 4000, NULL);
+}
+void history_title(const std::wstring &url, const std::wstring &title) {
+    auto it = g_hist_index.find(url);
+    if (it == g_hist_index.end() || title.empty() || g_history[it->second].title == title) return;
+    g_history[it->second].title = title;
+    g_hist_dirty = true;
+    SetTimer(g_win, kTimerHistory, 4000, NULL);
+}
+static std::wstring bare(const std::wstring &url) {
+    // what people type: no scheme, no "www."
+    std::wstring s = lower(url);
+    if (starts_with(s, L"https://")) s = s.substr(8);
+    else if (starts_with(s, L"http://")) s = s.substr(7);
+    if (starts_with(s, L"www.")) s = s.substr(4);
+    return s;
+}
+static double frecency(const HistoryEntry &e, long long now) {
+    double days = (double)(now - e.last) / 86400.0;
+    return e.visits / (1.0 + days / 5.0);
+}
+std::vector<Suggestion> history_suggest(const std::wstring &typed, std::wstring *inline_completion) {
+    std::vector<Suggestion> out;
+    if (inline_completion) inline_completion->clear();
+    std::wstring t = lower(trim(typed));
+    if (t.empty()) return out;
+    std::wstring tb = bare(t);
+    std::vector<std::wstring> words;
+    for (size_t a = 0; a < t.size();) {
+        size_t b = t.find(L' ', a);
+        std::wstring w = t.substr(a, b == std::wstring::npos ? std::wstring::npos : b - a);
+        if (!w.empty()) words.push_back(w);
+        if (b == std::wstring::npos) break;
+        a = b + 1;
+    }
+    long long now = (long long)time(NULL);
+    struct Hit { double score; size_t i; };
+    std::vector<Hit> hits;
+    double best_prefix = -1; size_t best_i = 0;
+    for (size_t i = 0; i < g_history.size(); i++) {
+        const HistoryEntry &e = g_history[i];
+        std::wstring b = bare(e.url);
+        double fr = frecency(e, now);
+        if (!tb.empty() && starts_with(b, tb.c_str())) {
+            // the shorter the address, the more likely it is the one meant ("you" -> youtube.com, not a video)
+            double sc = 1000 + fr * 10 - b.size() * 0.5;
+            hits.push_back({ sc, i });
+            if (sc > best_prefix) { best_prefix = sc; best_i = i; }
+            continue;
+        }
+        std::wstring hay = b + L" " + lower(e.title);
+        bool all = !words.empty();
+        for (auto &w : words) if (hay.find(w) == std::wstring::npos) { all = false; break; }
+        if (all) hits.push_back({ 100 + fr * 10, i });
+    }
+    std::sort(hits.begin(), hits.end(), [](const Hit &a, const Hit &b) { return a.score > b.score; });
+    for (auto &h : hits) {
+        if (out.size() >= 6) break;
+        out.push_back({ g_history[h.i].url, g_history[h.i].title, false });
+    }
+    if (inline_completion && best_prefix > 0 && typed.find(L' ') == std::wstring::npos) {
+        std::wstring b = bare(g_history[best_i].url);
+        size_t slash = b.find(L'/');
+        // complete to the site while typing its name; to the whole address once past it
+        std::wstring site = slash == std::wstring::npos ? b : b.substr(0, slash);
+        std::wstring full = b;
+        while (!full.empty() && full.back() == L'/') full.pop_back();
+        std::wstring c = tb.size() < site.size() ? site : full;
+        if (c.size() > tb.size()) *inline_completion = typed + c.substr(tb.size());
+    }
+    return out;
+}
+std::vector<HistoryEntry> history_top(int n) {
+    // the most visited sites, one entry per site (its front page if it was visited)
+    long long now = (long long)time(NULL);
+    struct Site { double score = 0; size_t best = 0; double best_score = -1; bool front = false; };
+    std::unordered_map<std::wstring, Site> sites;
+    for (size_t i = 0; i < g_history.size(); i++) {
+        const HistoryEntry &e = g_history[i];
+        std::wstring h = url_host(e.url);
+        if (h.empty()) continue;
+        Site &s = sites[h];
+        double fr = frecency(e, now);
+        s.score += fr;
+        std::wstring b = bare(e.url);
+        bool front = b.find(L'/') == std::wstring::npos || b.find(L'/') == b.size() - 1;
+        if ((front && !s.front) || (front == s.front && fr > s.best_score)) { s.best = i; s.best_score = fr; s.front = front; }
+    }
+    std::vector<std::pair<double, size_t>> v;
+    for (auto &kv : sites) v.push_back({ kv.second.score, kv.second.best });
+    std::sort(v.begin(), v.end(), [](auto &a, auto &b) { return a.first > b.first; });
+    std::vector<HistoryEntry> out;
+    for (auto &p : v) { if ((int)out.size() >= n) break; out.push_back(g_history[p.second]); }
+    return out;
+}
+
+// ---------------------------------------------------------------- the window
+static void save_placement() {
+    WINDOWPLACEMENT wp = { sizeof(wp) };
+    if (g_fullscreen) wp = g_before_fs;
+    else if (!GetWindowPlacement(g_win, &wp)) return;
+    write_file(g_state + L"\\ventana.bin", std::string((const char *)&wp, sizeof(wp)));
+}
+static void restore_placement() {
+    std::string s;
+    if (!read_file(g_state + L"\\ventana.bin", s) || s.size() != sizeof(WINDOWPLACEMENT)) {
+        RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+        int w = (wa.right - wa.left) * 86 / 100, h = (wa.bottom - wa.top) * 88 / 100;
+        SetWindowPos(g_win, NULL, wa.left + (wa.right - wa.left - w) / 2, wa.top + (wa.bottom - wa.top - h) / 2, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        return;
+    }
+    WINDOWPLACEMENT wp; memcpy(&wp, s.data(), sizeof(wp));
+    wp.length = sizeof(wp);
+    UINT show = wp.showCmd;
+    wp.showCmd = SW_HIDE;   // placed now, shown later
+    SetWindowPlacement(g_win, &wp);
+    if (show == SW_SHOWMAXIMIZED) SetPropW(g_win, L"max", (HANDLE)1);
+}
+void set_fullscreen(bool on) {
+    if (on == g_fullscreen) return;
+    if (on) {
+        g_before_fs.length = sizeof(g_before_fs);
+        GetWindowPlacement(g_win, &g_before_fs);
+        g_fullscreen = true;
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromWindow(g_win, MONITOR_DEFAULTTONEAREST), &mi);
+        SetWindowLongW(g_win, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
+        SetWindowPos(g_win, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
+    } else {
+        g_fullscreen = false;
+        SetWindowLongW(g_win, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN);
+        SetWindowPlacement(g_win, &g_before_fs);
+        SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+    ui_layout();
+    tabs_layout_views();
+}
+static void show_window() {
+    g_start_hidden = false;
+    if (g_test) {
+        // a test instance draws for real but off the screen, without taking the focus from the user
+        SetWindowPos(g_win, HWND_BOTTOM, -7000, 100, 1400, 900, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        return;
+    }
+    if (!IsWindowVisible(g_win)) ShowWindow(g_win, GetPropW(g_win, L"max") ? SW_SHOWMAXIMIZED : SW_SHOW);
+    else if (IsIconic(g_win)) ShowWindow(g_win, SW_RESTORE);
+    SetForegroundWindow(g_win);
+}
+static void hide_window() {
+    // closed but kept warm: the session is saved, the pages frozen and the memory given back (tabs_on_hide)
+    ui_close_popups();
+    if (g_fullscreen) set_fullscreen(false);
+    save_placement();
+    if (IsZoomed(g_win)) SetPropW(g_win, L"max", (HANDLE)1); else RemovePropW(g_win, L"max");
+    session_save();
+    history_flush();
+    ShowWindow(g_win, SW_HIDE);
+    tabs_on_hide();
+}
+static void open_urls(const std::vector<std::wstring> &urls) {
+    if (!g_env_ready) { for (auto &u : urls) g_waiting_urls.push_back(u); show_window(); return; }
+    bool was_hidden = !IsWindowVisible(g_win);
+    if (was_hidden) g_open_asked = now_ms();
+    if (was_hidden && g_tabs.empty()) session_restore();
+    for (auto &u : urls) tab_new(u, true);
+    if (urls.empty() && g_tabs.empty()) tab_new(L"", true);
+    if (urls.empty() && was_hidden) { Tab *t = active_tab(); if (t) tab_activate(g_active); }
+    show_window();
+    if (urls.empty() && active_tab() && active_tab()->url.empty()) ui_focus_address();
+}
+static void quit_now() {
+    log_line(L"saliendo");
+    g_quitting = true;
+    ui_close_popups();
+    if (IsWindowVisible(g_win)) { save_placement(); session_save(); }
+    history_flush();
+    SetTimer(g_win, kTimerQuit, 150, NULL);
+}
+
+static int frame_y(HWND h) {
+    UINT dpi = GetDpiForWindow(h);
+    return GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+}
+static int frame_x(HWND h) {
+    UINT dpi = GetDpiForWindow(h);
+    return GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+}
+static bool caption_code(int c) { return c == HTMINBUTTON || c == HTMAXBUTTON || c == HTCLOSE; }
+
+static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_NCCALCSIZE:
+        if (wp) {
+            // no title bar: the tabs are the title bar. The side and bottom frames stay (they resize the window).
+            if (g_fullscreen) return 0;
+            auto *p = (NCCALCSIZE_PARAMS *)lp;
+            int fx = frame_x(h), fy = frame_y(h);
+            p->rgrc[0].left += fx; p->rgrc[0].right -= fx; p->rgrc[0].bottom -= fy;
+            if (IsZoomed(h)) p->rgrc[0].top += fy;   // maximized, the frame hangs off the screen
+            return 0;
+        }
+        break;
+    case WM_NCHITTEST: {
+        if (g_fullscreen) return HTCLIENT;
+        LRESULT d = DefWindowProcW(h, msg, wp, lp);
+        if (d != HTCLIENT) return d;
+        POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        ScreenToClient(h, &p);
+        RECT rc; GetClientRect(h, &rc);
+        int fy = frame_y(h);
+        if (!IsZoomed(h) && p.y < fy) {
+            if (p.x < fy * 2) return HTTOPLEFT;
+            if (p.x >= rc.right - fy * 2) return HTTOPRIGHT;
+            return HTTOP;
+        }
+        if (p.y < (LONG)ui_band_height()) return ui_hit_caption(p);
+        return HTCLIENT;
+    }
+    case WM_NCMOUSEMOVE: {
+        ui_caption_hover(caption_code((int)wp) ? (int)wp : 0);
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE | TME_NONCLIENT, h, 0 };
+        TrackMouseEvent(&tme);
+        break;
+    }
+    case WM_NCMOUSELEAVE: ui_caption_hover(0); break;
+    case WM_NCLBUTTONDOWN: case WM_NCLBUTTONDBLCLK:
+        if (caption_code((int)wp)) { g_caption_down = (int)wp; ui_caption_press((int)wp, true); return 0; }
+        ui_close_popups();
+        break;
+    case WM_NCLBUTTONUP:
+        if (caption_code((int)wp) || g_caption_down) {
+            int down = g_caption_down;
+            g_caption_down = 0;
+            ui_caption_press(0, false);
+            if ((int)wp == down) {
+                if (down == HTMINBUTTON) ShowWindow(h, SW_MINIMIZE);
+                else if (down == HTMAXBUTTON) ShowWindow(h, IsZoomed(h) ? SW_RESTORE : SW_MAXIMIZE);
+                else if (down == HTCLOSE) PostMessageW(h, WM_CLOSE, 0, 0);
+            }
+            return 0;
+        }
+        break;
+    case WM_SIZE:
+        ui_layout();
+        tabs_layout_views();
+        return 0;
+    case WM_MOVE: case WM_MOVING:
+        for (auto &t : g_tabs) if (t->ctrl) t->ctrl->NotifyParentWindowPositionChanged();
+        ui_close_popups();
+        break;
+    case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize = { 480, 320 }; return 0;
+    case WM_DPICHANGED: {
+        RECT *r = (RECT *)lp;
+        SetWindowPos(h, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        ui_dpi_changed();
+        return 0;
+    }
+    case WM_ACTIVATE:
+        ui_window_activated(LOWORD(wp) != WA_INACTIVE);
+        break;
+    case WM_SETFOCUS: {
+        Tab *t = active_tab();
+        if (t && t->ctrl && !t->url.empty() && !ui_address_focused()) t->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        else if (t && t->url.empty()) ui_focus_address(false);
+        return 0;
+    }
+    case WM_KEYDOWN: case WM_SYSKEYDOWN:
+        if (handle_shortcut((UINT)wp, GetKeyState(VK_CONTROL) < 0, GetKeyState(VK_SHIFT) < 0, GetKeyState(VK_MENU) < 0)) return 0;
+        break;
+    case WM_SETTINGCHANGE: {
+        BOOL anim = TRUE;
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0);
+        g_motion = anim != FALSE;
+        if (lp && !wcscmp((LPCWSTR)lp, L"ImmersiveColorSet") && g_set.theme == 2) { ui_theme_changed(); tabs_apply_theme(); }
+        break;
+    }
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        const Palette &p = pal();
+        HBRUSH b = CreateSolidBrush(RGB((int)(p.bg.r * 255), (int)(p.bg.g * 255), (int)(p.bg.b * 255)));
+        FillRect(dc, &ps.rcPaint, b);
+        DeleteObject(b);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_CLOSE:
+        if (g_quitting) break;
+        if (g_set.resident) { hide_window(); return 0; }
+        quit_now();
+        return 0;
+    case WM_COPYDATA: {
+        auto cds = (COPYDATASTRUCT *)lp;
+        if (cds->dwData != kCopyOpen || cds->cbData > (1 << 20)) return FALSE;
+        std::wstring all((const wchar_t *)cds->lpData, cds->cbData / sizeof(wchar_t));
+        std::vector<std::wstring> urls;
+        size_t pos = 0;
+        while (pos < all.size()) {
+            size_t nl = all.find(L'\n', pos);
+            std::wstring u = all.substr(pos, nl == std::wstring::npos ? std::wstring::npos : nl - pos);
+            if (!u.empty()) urls.push_back(u);
+            if (nl == std::wstring::npos) break;
+            pos = nl + 1;
+        }
+        open_urls(urls);
+        return TRUE;
+    }
+    case WM_APP_SHOW: open_urls({}); return 0;
+    case WM_APP_QUIT: quit_now(); return 0;
+    case WM_TIMER:
+        if (wp == kTimerQuit) { KillTimer(h, kTimerQuit); DestroyWindow(h); }
+        else if (wp == kTimerHistory) { KillTimer(h, kTimerHistory); history_flush(); }
+        else if (wp == kTimerTabs) tabs_tick();
+        else if (wp == kTimerSession) { KillTimer(h, kTimerSession); session_save(); }
+        return 0;
+    case WM_ENDSESSION:
+        if (wp) { if (IsWindowVisible(h)) { save_placement(); session_save(); } history_flush(); }
+        return 0;
+    case WM_DESTROY:
+        log_line(L"ventana destruida");
+        for (auto &t : g_tabs) if (t->ctrl) t->ctrl->Close();
+        g_tabs.clear();
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(h, msg, wp, lp);
+}
+void session_save_soon() { if (g_win) SetTimer(g_win, kTimerSession, 1500, NULL); }
+void app_quit() { quit_now(); }
+void app_close_window() { PostMessageW(g_win, WM_CLOSE, 0, 0); }
+
+static std::wstring arg_to_url(const std::wstring &a) {
+    // a file from the Explorer becomes a file:// address; anything else is taken as typed
+    if (a.size() > 2 && (a[1] == L':' || starts_with(a, L"\\\\")) && PathFileExistsW(a.c_str())) {
+        wchar_t buf[4096]; DWORD n = 4096;
+        if (SUCCEEDED(UrlCreateFromPathW(a.c_str(), buf, &n, 0))) return buf;
+    }
+    return a;
+}
+
+int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
+    g_inst = inst;
+    QueryPerformanceFrequency(&g_freq); QueryPerformanceCounter(&g_t0);
+    bool quit = false;
+    std::vector<std::wstring> urls;
+    int argc = 0;
+    LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    for (int i = 1; i < argc; i++) {
+        if (!wcscmp(argv[i], L"--oculto")) g_start_hidden = true;
+        else if (!wcscmp(argv[i], L"--salir")) quit = true;
+        else if (argv[i][0] != L'-' || (argv[i][1] && argv[i][1] != L'-')) urls.push_back(arg_to_url(argv[i]));
+    }
+    LocalFree(argv);
+    if (!urls.empty()) g_start_hidden = false;
+    if (urls.empty()) g_open_asked = -1;   // the time to the first page is logged only when one was asked for
+
+    wchar_t inst_name[64] = L"";
+    std::wstring suffix;
+    if (GetEnvironmentVariableW(L"PLUMA_INSTANCIA", inst_name, 64) > 0) { suffix = std::wstring(L".") + inst_name; g_test = true; }
+    g_class += suffix; g_mutex += suffix;
+
+    HANDLE mutex = CreateMutexW(NULL, FALSE, g_mutex.c_str());
+    if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+        // one already in memory: hand over and leave
+        HWND other = NULL;
+        for (int i = 0; i < 150 && !other; i++) { other = FindWindowW(g_class.c_str(), NULL); if (!other) Sleep(20); }
+        if (other) {
+            DWORD pid = 0; GetWindowThreadProcessId(other, &pid);
+            AllowSetForegroundWindow(pid);
+            if (quit) PostMessageW(other, WM_APP_QUIT, 0, 0);
+            else if (!urls.empty()) {
+                std::wstring all;
+                for (auto &u : urls) all += u + L"\n";
+                COPYDATASTRUCT cds = { kCopyOpen, (DWORD)(all.size() * sizeof(wchar_t)), (PVOID)all.c_str() };
+                DWORD_PTR res = 0;
+                SendMessageTimeoutW(other, WM_COPYDATA, 0, (LPARAM)&cds, SMTO_ABORTIFHUNG, 3000, &res);
+            } else if (!g_start_hidden) PostMessageW(other, WM_APP_SHOW, 0, 0);
+        }
+        return 0;
+    }
+    if (quit) return 0;
+
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    wchar_t exe[MAX_PATH]; GetModuleFileNameW(NULL, exe, MAX_PATH);
+    PathRemoveFileSpecW(exe);
+    g_root = exe;
+    PWSTR local = NULL;
+    SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, NULL, &local);
+    g_state = std::wstring(local ? local : L".") + L"\\Pluma" + (suffix.empty() ? L"" : L"\\prueba" + suffix);
+    CoTaskMemFree(local);
+    SHCreateDirectoryExW(NULL, g_state.c_str(), NULL);
+    wchar_t port[16] = L"";
+    if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) g_dev = true;
+    BOOL anim = TRUE;
+    SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0);
+    g_motion = anim != FALSE;
+    settings_load();
+
+    WNDCLASSEXW wc = { sizeof(wc) };
+    wc.style = CS_DBLCLKS;
+    wc.lpfnWndProc = wnd_proc;
+    wc.hInstance = inst;
+    wc.lpszClassName = g_class.c_str();
+    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    wc.hIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
+    wc.hIconSm = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
+    RegisterClassExW(&wc);
+    g_win = CreateWindowExW(0, g_class.c_str(), L"Pluma", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
+                            1200, 800, NULL, NULL, inst, NULL);
+    if (!g_test) restore_placement();
+    SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    ui_init();
+    SetTimer(g_win, kTimerTabs, 5000, NULL);
+    if (!g_start_hidden) {
+        session_restore();   // the tabs are drawn at once; their pages come when the engine is up
+        for (auto &u : urls) tab_new(u, true);
+        if (g_tabs.empty()) tab_new(L"", true);
+        show_window();
+        if (active_tab() && active_tab()->url.empty()) ui_focus_address(false);
+        log_line(L"ventana a la vista en " + std::to_wstring((int)now_ms()) + L" ms");
+    }
+    history_load();
+    scripts_load();
+    env_create([] {
+        g_env_ready = true;
+        log_line(L"motor listo en " + std::to_wstring((int)now_ms()) + L" ms");
+        ext_sync([] { ui_layout(); });
+        if (!g_tabs.empty()) tab_activate(g_active < 0 ? 0 : g_active);   // gives the one on screen its page
+        if (!g_waiting_urls.empty()) { auto u = g_waiting_urls; g_waiting_urls.clear(); open_urls(u); }
+        spare_prepare();
+    });
+
+    MSG m;
+    while (GetMessageW(&m, NULL, 0, 0)) { TranslateMessage(&m); DispatchMessageW(&m); }
+    if (mutex) CloseHandle(mutex);
+    return (int)m.wParam;
+}

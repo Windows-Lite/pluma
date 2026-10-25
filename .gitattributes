@@ -1,0 +1,5 @@
+extensiones/** -text
+fuentes/** binary
+*.exe binary
+*.ico binary
+*.png binary
