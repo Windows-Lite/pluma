@@ -574,6 +574,9 @@ static void fetch_playlists(Video *v, std::vector<int> which, std::function<void
     std::wstring dir = g_state + L"\\cache-video";
     std::wstring vid = v->id;
     std::thread([todo, id, serial, dir, vid, from, then] {
+        // (the folder too: on a fresh profile the first video's lists could not be saved, and mpv read them from the
+        // server itself)
+        SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
         std::vector<std::string> paths(todo.size());
         std::vector<double> broke(todo.size(), -1);
         std::vector<std::wstring> why(todo.size());
