@@ -1,0 +1,20 @@
+name: CI
+on:
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    # MSVC on purpose: the code uses WRL and the WebView2 SDK's MSVC static loader
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: src/sdk
+          key: webview2-sdk-v1
+      - name: Build
+        shell: cmd
+        run: src\compilar.cmd "%GITHUB_WORKSPACE%\Pluma.exe"
