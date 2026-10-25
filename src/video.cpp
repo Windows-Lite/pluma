@@ -1341,13 +1341,18 @@ static std::string no_addresses(const std::string &s) {
     }
     return out.size() > 300 ? out.substr(0, 300) + "..." : out;
 }
-static void mpv_log(const mpv_event_log_message *m) {
-    // mpv's warnings and errors, in pluma.log: each line once a minute, and no more than 20 lines a minute
+static void mpv_log(const Video *v, const Tab *t, const mpv_event_log_message *m) {
+    // mpv's warnings and errors, in pluma.log: each line once a minute, and no more than 20 lines a minute. From an
+    // incognito tab, without the video's id either (the files Pluma saves for it are named after it)
     if (!m || !m->text) return;
     std::string text = m->text;
     while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
     if (text.empty()) return;
     std::string line = std::string("[") + (m->prefix ? m->prefix : "") + "] " + no_addresses(text);
+    if (t && t->incognito && v && !v->id.empty()) {
+        std::string id = utf8(v->id);
+        for (size_t p; (p = line.find(id)) != std::string::npos;) line.replace(p, id.size(), "...");
+    }
     static std::map<std::string, double> seen;
     static double minute = -1e12;
     static int lines = 0;
@@ -1370,7 +1375,7 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             mpv_event *e = M.wait_event(v->mpv, 0);
             if (!e || e->event_id == MPV_EVENT_NONE) break;
             if (e->event_id == MPV_EVENT_PROPERTY_CHANGE) on_property(v, e->reply_userdata, (mpv_event_property *)e->data);
-            else if (e->event_id == MPV_EVENT_LOG_MESSAGE) mpv_log((mpv_event_log_message *)e->data);
+            else if (e->event_id == MPV_EVENT_LOG_MESSAGE) mpv_log(v, t, (mpv_event_log_message *)e->data);
             else if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) { v->restarted = true; v->seek_ms = now_ms() - v->seek_t0; tame(v); if (v->stage == ST_WAITING) sync_tick(t, v); }
             else if (e->event_id == MPV_EVENT_FILE_LOADED) { v->loaded = true; tame(v); if (v->sub >= 0) add_sub(v); }
             else if (e->event_id == MPV_EVENT_END_FILE) {
