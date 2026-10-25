@@ -18,12 +18,13 @@
 // ---------------------------------------------------------------- libmpv, loaded at run time
 typedef struct mpv_handle mpv_handle;
 enum { MPV_FORMAT_NONE = 0, MPV_FORMAT_STRING = 1, MPV_FORMAT_FLAG = 3, MPV_FORMAT_INT64 = 4, MPV_FORMAT_DOUBLE = 5 };
-enum { MPV_EVENT_NONE = 0, MPV_EVENT_SHUTDOWN = 1, MPV_EVENT_END_FILE = 7, MPV_EVENT_FILE_LOADED = 8, MPV_EVENT_PLAYBACK_RESTART = 21,
+enum { MPV_EVENT_NONE = 0, MPV_EVENT_SHUTDOWN = 1, MPV_EVENT_LOG_MESSAGE = 2, MPV_EVENT_END_FILE = 7, MPV_EVENT_FILE_LOADED = 8, MPV_EVENT_PLAYBACK_RESTART = 21,
        MPV_EVENT_PROPERTY_CHANGE = 22 };
 enum { MPV_END_FILE_REASON_ERROR = 4 };
 struct mpv_event { int event_id; int error; uint64_t reply_userdata; void *data; };
 struct mpv_event_property { const char *name; int format; void *data; };
 struct mpv_event_end_file { int reason; int error; };
+struct mpv_event_log_message { const char *prefix; const char *level; const char *text; int log_level; };
 enum { MPV_FORMAT_NODE_MAP = 8, MPV_FORMAT_BYTE_ARRAY = 9 };
 struct mpv_node_list;
 struct mpv_byte_array { void *data; size_t size; };
@@ -45,6 +46,7 @@ static struct {
     void (*free_node_contents)(mpv_node *);
     mpv_handle *(*create_client)(mpv_handle *, const char *);
     void (*destroy)(mpv_handle *);
+    int (*request_log_messages)(mpv_handle *, const char *);
 } M;
 static HMODULE g_mpv;
 static bool g_mpv_failed;
@@ -66,6 +68,7 @@ static bool load_mpv() {
     LOAD(observe_property, "mpv_observe_property"); LOAD(wait_event, "mpv_wait_event"); LOAD(set_wakeup_callback, "mpv_set_wakeup_callback");
     LOAD(command_ret, "mpv_command_ret"); LOAD(free_node_contents, "mpv_free_node_contents");
     LOAD(create_client, "mpv_create_client"); LOAD(destroy, "mpv_destroy");
+    LOAD(request_log_messages, "mpv_request_log_messages");
 #undef LOAD
     if (!M.create || !M.initialize || !M.command || !M.command_async || !M.get_property || !M.wait_event || !M.set_wakeup_callback) {
         g_mpv_failed = true; FreeLibrary(g_mpv); g_mpv = NULL; return false;
@@ -75,7 +78,7 @@ static bool load_mpv() {
 
 // ---------------------------------------------------------------- one video
 // one entry of YouTube's HLS list: a video variant (its own playlist) or an audio rendition, by group
-struct Fmt { std::string url, group, local; int w = 0, h = 0, fps = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec; };
+struct Fmt { std::string url, group, local; int w = 0, h = 0, fps = 0, fetched = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec; };
 struct Cap { std::string url, local; std::wstring name, lang; };
 enum Stage { ST_WAITING, ST_ON };
 struct Video {
@@ -93,6 +96,11 @@ struct Video {
     double asked = 0, last_move = 0, bezel_at = -1e9, vol_text_at = -1e9;
     int bezel_icon = 0, serial = 0, osd_w = 0, osd_h = 0;
     double seek_t0 = 0, seek_ms = 1500;   // when mpv was last asked to load or seek, and what that took
+    // the picture ending before the sound (pieces of the video that never came, and mpv holds its last frame while
+    // the audio, a file of its own, goes on): where the video's buffer ends, since when that is behind the time, and
+    // whether its list was already read again for it
+    double cache_end = -1, behind_since = 0;
+    bool reread = false, rereading = false;
     // the video's own place in the page (window coordinates; empty: all of the page area), and a photo of the page
     // around it (PNG), shown while the page sleeps: the page looks as YouTube's, the video plays in Pluma's player
     RECT box{};
@@ -484,7 +492,7 @@ static double refresh_pos(Video *v) {
     double d = 0;
     if (v && v->mpv && v->loaded && !g_drag_seek) {
         if (M.get_property(v->mpv, "time-pos", MPV_FORMAT_DOUBLE, &d) >= 0) v->pos = d;
-        if (M.get_property(v->mpv, "demuxer-cache-time", MPV_FORMAT_DOUBLE, &d) >= 0) v->cached = std::max(0.0, d - v->pos);
+        if (M.get_property(v->mpv, "demuxer-cache-time", MPV_FORMAT_DOUBLE, &d) >= 0) { v->cache_end = d; v->cached = std::max(0.0, d - v->pos); }
     }
     return v ? v->pos : 0;
 }
@@ -510,33 +518,91 @@ static void load_streams(Video *v, double start, bool paused) {
     opts += ",demuxer-max-bytes=" + std::to_string(mb) + "MiB";
     v->restarted = v->loaded = false;
     v->seek_t0 = now_ms();
+    v->cache_end = -1; v->behind_since = 0;
     mpv_cmd(v, { "loadfile", (vf.local.empty() ? vf.url : vf.local).c_str(), "replace", "-1", opts.c_str() });
 }
 static bool http_get(const std::wstring &url, std::string &out);
 static bool safe_playlist(const std::string &text);
+// tests: PLUMA_PRUEBA_ROMPER_VIDEO=K breaks the pieces of a video list from piece K on (counted from 0), the first
+// time that list is read (K! every time), as when they fail to download near the end: their addresses get a 404
+static int g_break_from = -2;
+static bool g_break_always;
+static int break_from() {
+    if (g_break_from == -2) {
+        wchar_t b[16] = L"";
+        g_break_from = g_test && GetEnvironmentVariableW(L"PLUMA_PRUEBA_ROMPER_VIDEO", b, 16) > 0 ? _wtoi(b) : -1;
+        g_break_always = wcschr(b, L'!') != nullptr;
+    }
+    return g_break_from;
+}
+static std::string break_pieces(const std::string &text, int from, double &at) {
+    std::string out;
+    size_t pos = 0;
+    int n = 0;
+    double t = 0;
+    at = -1;
+    while (pos < text.size()) {
+        size_t nl = text.find('\n', pos);
+        std::string line = text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos + 1);
+        pos = nl == std::string::npos ? text.size() : nl + 1;
+        if (line.rfind("#EXTINF:", 0) == 0) { if (n < from) t += atof(line.c_str() + 8); }
+        else if (!line.empty() && line[0] != '#' && line[0] != '\r' && line[0] != '\n') {
+            if (n++ >= from) {
+                size_t slash = line.find('/', 8);
+                if (slash != std::string::npos) line.insert(slash + 1, "rota/");
+                if (at < 0) at = t;
+            }
+        }
+        out += line;
+    }
+    return out;
+}
 static void fetch_playlists(Video *v, std::vector<int> which, std::function<void(Video *)> then) {
     // YouTube's playlist server takes ~1 s per list: Pluma reads the ones it needs at once, on threads of its own,
-    // and mpv opens them from disk (it starts in ~1.5 s instead of 4-5; measured 25/10)
-    std::vector<std::pair<int, std::string>> todo;
-    for (int i : which) if (i >= 0 && v->fmts[i].local.empty()) todo.push_back({ i, v->fmts[i].url });
-    int id = v->tab, serial = v->serial;
+    // and mpv opens them from disk (it starts in ~1.5 s instead of 4-5; measured 25/10). A list read again goes to
+    // a file of its own (mpv may still have the first one open)
+    struct Todo { int i; std::string url; bool brk; std::wstring name; };
+    std::vector<Todo> todo;
+    for (int i : which)
+        if (i >= 0 && v->fmts[i].local.empty()) {
+            Fmt &f = v->fmts[i];
+            std::wstring name = std::to_wstring(i) + (f.fetched ? L"-" + std::to_wstring(f.fetched + 1) : L"");
+            todo.push_back({ i, f.url, break_from() >= 0 && !f.audio && (g_break_always || f.fetched == 0), name });
+            f.fetched++;
+        }
+    int id = v->tab, serial = v->serial, from = break_from();
     std::wstring dir = g_state + L"\\cache-video";
     std::wstring vid = v->id;
-    std::thread([todo, id, serial, dir, vid, then] {
+    std::thread([todo, id, serial, dir, vid, from, then] {
+        // (the folder too: on a fresh profile the first video's lists could not be saved, and mpv read them from the
+        // server itself)
+        SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
         std::vector<std::string> paths(todo.size());
+        std::vector<double> broke(todo.size(), -1);
+        std::vector<std::wstring> why(todo.size());
         std::vector<std::thread> th;
         for (size_t k = 0; k < todo.size(); k++)
             th.emplace_back([&, k] {
                 std::string text;
-                if (!http_get(wide(todo[k].second), text) || text.rfind("#EXTM3U", 0) != 0 || !safe_playlist(text)) return;
-                std::wstring p = dir + L"\\" + vid + L"-" + std::to_wstring(todo[k].first) + L".m3u8";
+                if (!http_get(wide(todo[k].url), text)) { why[k] = L"no se pudo leer"; return; }
+                if (text.rfind("#EXTM3U", 0) != 0 || !safe_playlist(text)) { why[k] = L"no vale"; return; }
+                // a whole list of a video ends so; one cut short would leave mpv without the last pieces
+                if (text.find("#EXT-X-ENDLIST") == std::string::npos) { why[k] = L"cortada (" + std::to_wstring(text.size()) + L" bytes)"; return; }
+                if (todo[k].brk) text = break_pieces(text, from, broke[k]);
+                std::wstring p = dir + L"\\" + vid + L"-" + todo[k].name + L".m3u8";
                 if (write_file(p, text)) paths[k] = utf8(p);
+                else why[k] = L"no se pudo guardar";
             });
         for (auto &t : th) t.join();
-        ui_post([todo, paths, id, serial, then] {
+        ui_post([todo, paths, broke, why, id, serial, from, then] {
+            for (size_t k = 0; k < todo.size(); k++) {
+                if (!why[k].empty()) log_line(L"vídeo propio: la lista " + std::to_wstring(todo[k].i) + L" " + why[k]);
+                if (broke[k] >= 0) log_line(L"prueba: lista " + std::to_wstring(todo[k].i) + L" rota desde el trozo " + std::to_wstring(from) + L" (" +
+                                            std::to_wstring((int)broke[k]) + L" s)");
+            }
             Video *v = V(tab_by_id(id));
             if (!v || v->serial != serial) return;
-            for (size_t k = 0; k < todo.size(); k++) if (!paths[k].empty()) v->fmts[todo[k].first].local = paths[k];
+            for (size_t k = 0; k < todo.size(); k++) if (!paths[k].empty()) v->fmts[todo[k].i].local = paths[k];
             then(v);
         });
     }).detach();
@@ -593,6 +659,9 @@ static bool start_player(Video *v, double start) {
         // and short waits: the user's line has a Google cache server that now and then does not answer (25/10); a
         // stalled download is tried again after 10 s, not 60, and a silent server left after 4 s, not 30
         { "network-timeout", "10" }, { "curl-connect-timeout", "4" },
+        // a piece that fails is asked for again, 3 times, before FFmpeg's HLS skips it (by default it skips at once:
+        // a 2:20 video lost its picture at 2:07 while the sound went on, 25/10)
+        { "demuxer-lavf-o", "seg_max_retry=3" },
         { "keep-open", "yes" }, { "idle", "yes" }, { "background-color", "#000000" }, { "sub-auto", "no" },
         // (no looking around the folder; and not autoload-files=no, which leaves the audio file unselected: mute)
         { "audio-file-auto", "no" }, { "cover-art-auto", "no" },
@@ -602,8 +671,14 @@ static bool start_player(Video *v, double start) {
         // ... over the picture, as YouTube's (not in the black around it)
         { "sub-use-margins", "no" } };
     for (auto &o : opts) M.set_option_string(v->mpv, o.k, o.v.c_str());
-    if (g_dev) { M.set_option_string(v->mpv, "log-file", utf8(g_state + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v"); }   // tests
+    if (g_test && GetEnvironmentVariableW(L"PLUMA_SIN_SONIDO", NULL, 0) > 0) M.set_option_string(v->mpv, "ao", "null");   // tests: silent
+    // tests: mpv.log with everything (PLUMA_SIN_MPV_LOG=1: as everyone's, only its warnings in pluma.log)
+    if (g_dev && !GetEnvironmentVariableW(L"PLUMA_SIN_MPV_LOG", NULL, 0)) {
+        M.set_option_string(v->mpv, "log-file", utf8(g_state + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v");
+    }
     if (M.initialize(v->mpv) < 0) { M.terminate_destroy(v->mpv); v->mpv = nullptr; return false; }
+    // its warnings and errors go to pluma.log (a picture that stopped at 2:07 left nothing there, 25/10)
+    if (M.request_log_messages) M.request_log_messages(v->mpv, "warn");
     static const char *props[] = { "time-pos", "duration", "pause", "eof-reached", "paused-for-cache", "demuxer-cache-time", "mute", "speed",
                                    "osd-width", "osd-height" };
     static const int fmt[] = { MPV_FORMAT_DOUBLE, MPV_FORMAT_DOUBLE, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_DOUBLE,
@@ -758,9 +833,21 @@ static bool http_get(const std::wstring &url, std::string &out) {
     if (r && WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(r, NULL)) {
         DWORD code = 0, len = sizeof(code);
         WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &len, WINHTTP_NO_HEADER_INDEX);
-        char buf[16384]; DWORD got = 0;
-        while (WinHttpReadData(r, buf, sizeof(buf), &got) && got > 0 && out.size() < (4 << 20)) out.append(buf, got);
-        ok = code == 200 && !out.empty();
+        // all of it or nothing: a read that fails, a body shorter than the server said or past 4 MB is a failure
+        // (a list cut short left mpv without the end of a video)
+        char buf[16384];
+        bool read_ok = true;
+        for (;;) {
+            DWORD got = 0;
+            if (!WinHttpReadData(r, buf, sizeof(buf), &got)) { read_ok = false; break; }
+            if (!got) break;
+            out.append(buf, got);
+            if (out.size() > (4 << 20)) { read_ok = false; break; }
+        }
+        DWORD want = 0; len = sizeof(want);
+        bool has_len = WinHttpQueryHeaders(r, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &want, &len,
+                                           WINHTTP_NO_HEADER_INDEX) != FALSE;
+        ok = code == 200 && read_ok && !out.empty() && (!has_len || out.size() == want);
     }
     if (r) WinHttpCloseHandle(r);
     if (c) WinHttpCloseHandle(c);
@@ -1098,6 +1185,7 @@ static void toggle_pause(Video *v) {
 static void seek_abs(Video *v, double t, bool exact) {
     char s[32]; sprintf_s(s, "%.3f", std::max(0.0, std::min(t, v->dur > 1 ? v->dur - 0.2 : t)));
     v->seek_t0 = now_ms();
+    v->behind_since = 0;
     mpv_cmd(v, { "seek", s, exact ? "absolute+exact" : "absolute+keyframes" });
 }
 static void seek_rel(Video *v, double d) { double p = refresh_pos(v) + d; seek_abs(v, p, true); v->pos = std::max(0.0, p); show_controls(v); }
@@ -1235,6 +1323,48 @@ static void on_property(Video *v, uint64_t code, mpv_event_property *p) {
     case 9: if (p->format == MPV_FORMAT_INT64) v->osd_h = (int)*(int64_t *)p->data; video_resized(); break;
     }
 }
+static std::string no_addresses(const std::string &s) {
+    // an address in one of mpv's lines keeps only its server (its path names the video, and an incognito tab writes
+    // no addresses in pluma.log)
+    std::string out;
+    size_t p = 0;
+    while (p < s.size()) {
+        size_t m = s.find("://", p);
+        if (m == std::string::npos) { out += s.substr(p); break; }
+        size_t host_end = s.find_first_of("/?# \t\"'", m + 3);
+        size_t e = s.find_first_of(" \t\"'", m + 3);
+        if (host_end == std::string::npos) host_end = s.size();
+        if (e == std::string::npos) e = s.size();
+        out += s.substr(p, host_end - p);
+        if (e > host_end) out += "/...";
+        p = e;
+    }
+    return out.size() > 300 ? out.substr(0, 300) + "..." : out;
+}
+static void mpv_log(const Video *v, const Tab *t, const mpv_event_log_message *m) {
+    // mpv's warnings and errors, in pluma.log: each line once a minute, and no more than 20 lines a minute. From an
+    // incognito tab, without the video's id either (the files Pluma saves for it are named after it)
+    if (!m || !m->text) return;
+    std::string text = m->text;
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+    if (text.empty()) return;
+    std::string line = std::string("[") + (m->prefix ? m->prefix : "") + "] " + no_addresses(text);
+    if (t && t->incognito && v && !v->id.empty()) {
+        std::string id = utf8(v->id);
+        for (size_t p; (p = line.find(id)) != std::string::npos;) line.replace(p, id.size(), "...");
+    }
+    static std::map<std::string, double> seen;
+    static double minute = -1e12;
+    static int lines = 0;
+    double now = now_ms();
+    if (now - minute > 60000) { minute = now; lines = 0; }
+    for (auto it = seen.begin(); it != seen.end();) it = now - it->second > 60000 ? seen.erase(it) : std::next(it);
+    if (seen.count(line) || seen.size() > 200) return;
+    seen[line] = now;
+    if (lines > 20) return;
+    if (++lines > 20) { log_line(L"mpv: (más avisos en este minuto, sin escribir)"); return; }
+    log_line(L"mpv: " + wide(line));
+}
 static void sync_tick(Tab *t, Video *v);
 static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_VIDEO_EVENTS) {
@@ -1245,6 +1375,7 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             mpv_event *e = M.wait_event(v->mpv, 0);
             if (!e || e->event_id == MPV_EVENT_NONE) break;
             if (e->event_id == MPV_EVENT_PROPERTY_CHANGE) on_property(v, e->reply_userdata, (mpv_event_property *)e->data);
+            else if (e->event_id == MPV_EVENT_LOG_MESSAGE) mpv_log(v, t, (mpv_event_log_message *)e->data);
             else if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) { v->restarted = true; v->seek_ms = now_ms() - v->seek_t0; tame(v); if (v->stage == ST_WAITING) sync_tick(t, v); }
             else if (e->event_id == MPV_EVENT_FILE_LOADED) { v->loaded = true; tame(v); if (v->sub >= 0) add_sub(v); }
             else if (e->event_id == MPV_EVENT_END_FILE) {
@@ -1473,6 +1604,48 @@ static LRESULT CALLBACK video_wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
+static void check_picture(Video *v) {
+    // the picture ending before the sound: playing, not loading, well before the end, and the video's buffer ending
+    // 1.5 s behind the time for 2 s. Pieces of the video that never came: mpv holds the last frame and the audio (a
+    // file of its own) goes on; a 2:20 video stood at 2:07 to the end, 25/10. Its list is read again and mpv goes on
+    // from that second; a second time, the page takes over at that second. No buffer end at all 5 s after a load is
+    // the same: not one piece of the video came (mpv still shows the last frame of the file before)
+    double now = now_ms();
+    bool none = v->cache_end < 0 && now - v->seek_t0 > 5000;
+    bool behind = v->loaded && v->restarted && !v->paused && !v->buffering && !v->eof && !v->rereading && now - v->seek_t0 > 1500 &&
+                  v->dur > 0 && v->pos < v->dur - 3 && (none || (v->cache_end >= 0 && v->cache_end < v->pos - 1.5));
+    if (!behind) { v->behind_since = 0; return; }
+    if (!v->behind_since) { v->behind_since = now; return; }
+    if (now - v->behind_since < 2000) return;
+    v->behind_since = 0;
+    wchar_t b[160];
+    if (none) swprintf_s(b, L"vídeo propio: no llegó nada de la imagen (audio en %.1f, duración %.1f)", v->pos, v->dur);
+    else swprintf_s(b, L"vídeo propio: la imagen se acabó en %.1f s (audio en %.1f, duración %.1f)", v->cache_end, v->pos, v->dur);
+    log_line(b);
+    if (v->reread) {
+        log_line(L"vídeo propio: otra vez en este vídeo; sigue la página");
+        PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
+        return;
+    }
+    v->reread = v->rereading = true;
+    int f = v->vf;
+    v->fmts[f].local.clear();
+    double t0 = now;
+    fetch_playlists(v, { f }, [f, t0](Video *v) {
+        v->rereading = false;
+        if (v->vf != f) return;   // another quality was chosen meanwhile: it loads its own
+        if (v->fmts[f].local.empty()) {
+            log_line(L"vídeo propio: la lista no se pudo leer otra vez; sigue la página");
+            PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
+            return;
+        }
+        double at = refresh_pos(v);
+        load_streams(v, at, v->paused);
+        wchar_t b[120];
+        swprintf_s(b, L"vídeo propio: lista leída otra vez en %d ms; sigue en %.1f s", (int)(now_ms() - t0), at);
+        log_line(b);
+    });
+}
 static void CALLBACK ctl_tick(HWND, UINT, UINT_PTR id, DWORD) {
     // the controls go a moment after the mouse stops (not while paused, nor over them), and at once when it leaves
     Video *v = V(active_tab());
@@ -1498,6 +1671,7 @@ static void CALLBACK ctl_tick(HWND, UINT, UINT_PTR id, DWORD) {
             PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
             return;
         }
+        check_picture(v);
     }
     if (g_ctl.to <= 0 || v->paused || v->eof || g_menu_page || g_drag_seek || g_drag_vol) return;
     POINT pt;
