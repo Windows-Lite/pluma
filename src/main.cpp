@@ -8,7 +8,7 @@
 HINSTANCE g_inst;
 HWND g_win, g_bar, g_edit;
 std::wstring g_root, g_state;
-bool g_test, g_test_visible, g_dev, g_quitting, g_fullscreen, g_motion = true;
+bool g_incognito, g_test, g_test_visible, g_dev, g_quitting, g_fullscreen, g_motion = true;
 double g_open_asked = 0;
 ComPtr<ICoreWebView2Environment> g_env;
 Settings g_set;
@@ -247,7 +247,7 @@ static void history_reindex() {
     for (size_t i = 0; i < g_history.size(); i++) g_hist_index[g_history[i].url] = i;
 }
 void history_flush() {
-    if (!g_hist_dirty) return;
+    if (!g_hist_dirty || g_incognito) return;
     g_hist_dirty = false;
     if (g_history.size() > kHistoryMax) {
         // keep the most recent
@@ -398,6 +398,7 @@ void pins_load() {
     for (auto &f : tsv_read(L"ocultas.tsv")) if (!f[0].empty()) g_hidden_sites.push_back(f[0]);
 }
 static void pins_save() {
+    if (g_incognito) return;
     std::wstring out;
     for (auto &e : g_pins) out += e.url + L"\t" + tsv_clean(e.title) + L"\n";
     write_file(g_state + L"\\paginas.tsv", utf8(out));
@@ -458,6 +459,7 @@ std::vector<HistoryEntry> history_top(int n) {
 
 // ---------------------------------------------------------------- the window
 static void save_placement() {
+    if (g_incognito) return;
     WINDOWPLACEMENT wp = { sizeof(wp) };
     if (g_fullscreen) wp = g_before_fs;
     else if (!GetWindowPlacement(g_win, &wp)) return;
@@ -561,7 +563,7 @@ static void open_urls(const std::vector<std::wstring> &urls) {
     if (!g_env_ready) { for (auto &u : urls) g_waiting_urls.push_back(u); show_window(); return; }
     bool was_hidden = !IsWindowVisible(g_win);
     if (was_hidden) g_open_asked = now_ms();
-    if (was_hidden && g_tabs.empty()) session_restore();
+    if (was_hidden && g_tabs.empty() && !g_incognito) session_restore();
     for (auto &u : urls) tab_new(u, true);
     if (urls.empty() && g_tabs.empty()) tab_new(L"", true);
     if (urls.empty() && was_hidden) { Tab *t = active_tab(); if (t) tab_activate(g_active); }
@@ -691,7 +693,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE:
         if (g_quitting) break;
-        if (g_set.resident) { hide_window(); return 0; }
+        if (g_set.resident && !g_incognito) { hide_window(); return 0; }   // (the incognito window goes for good)
         quit_now();
         return 0;
     case WM_COPYDATA: {
@@ -754,6 +756,18 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 void session_save_soon() { if (g_win) SetTimer(g_win, kTimerSession, 1500, NULL); }
 void app_quit() { quit_now(); }
 void app_close_window() { PostMessageW(g_win, WM_CLOSE, 0, 0); }
+std::wstring app_name() { return g_incognito ? std::wstring(L"Pluma (") + T(L"Incógnito") + L")" : L"Pluma"; }
+void app_open_incognito(const std::wstring &url) {
+    if (g_incognito) { tab_new(url, true); return; }
+    // the incognito window is another Pluma.exe (--incognito); if it is already open, it takes the url
+    std::wstring cmd = L"\"" + g_root + L"\\Pluma.exe\" --incognito" + (url.empty() ? L"" : L" \"" + url + L"\"");
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    if (CreateProcessW(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, g_root.c_str(), &si, &pi)) {
+        AllowSetForegroundWindow(pi.dwProcessId);
+        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+    }
+}
 void app_restart(bool hidden) {
     // the new one waits for this one to go (the "saliendo" handover) and opens what there was: the session, or hidden
     std::wstring cmd = L"\"" + g_root + L"\\Pluma.exe\"" + (hidden ? L" --oculto" : L"");
@@ -782,6 +796,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     for (int i = 1; i < argc; i++) {
         if (!wcscmp(argv[i], L"--oculto")) g_start_hidden = true;
         else if (!wcscmp(argv[i], L"--salir")) quit = true;
+        else if (!wcscmp(argv[i], L"--incognito")) g_incognito = true;
         else if (argv[i][0] != L'-' || (argv[i][1] && argv[i][1] != L'-')) urls.push_back(arg_to_url(argv[i]));
     }
     LocalFree(argv);
@@ -791,6 +806,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     wchar_t inst_name[64] = L"";
     std::wstring suffix;
     if (GetEnvironmentVariableW(L"PLUMA_INSTANCIA", inst_name, 64) > 0) { suffix = std::wstring(L".") + inst_name; g_test = true; }
+    std::wstring state_suffix = suffix;
+    // the incognito window: another Pluma of its own (own window, mutex and session), on the same engine and settings
+    if (g_incognito) { suffix += L".incognito"; g_start_hidden = false; }
     g_class += suffix; g_mutex += suffix;
 
     HANDLE mutex = CreateMutexW(NULL, FALSE, g_mutex.c_str());
@@ -832,7 +850,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_root = exe;
     PWSTR local = NULL;
     SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, NULL, &local);
-    g_state = std::wstring(local ? local : L".") + L"\\Pluma" + (suffix.empty() ? L"" : L"\\prueba" + suffix);
+    g_state = std::wstring(local ? local : L".") + L"\\Pluma" + (state_suffix.empty() ? L"" : L"\\prueba" + state_suffix);
     CoTaskMemFree(local);
     SHCreateDirectoryExW(NULL, g_state.c_str(), NULL);
     wchar_t port[16] = L"";
@@ -859,7 +877,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     video_init();
     SetTimer(g_win, kTimerTabs, 5000, NULL);
     if (!g_start_hidden) {
-        session_restore();   // the tabs are drawn at once; their pages come when the engine is up
+        if (!g_incognito) session_restore();   // the tabs are drawn at once; their pages come when the engine is up
         for (auto &u : urls) tab_new(u, true);
         if (g_tabs.empty()) tab_new(L"", true);
         show_window();

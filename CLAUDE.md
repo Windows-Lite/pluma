@@ -191,8 +191,11 @@ ya tenga esa funcionalidad»).
   solo aparezcan páginas que yo haya añadido, como YouTube... que las pueda añadir fácilmente como un marcador».
 
 ## Incógnito
-- Pestañas de incógnito (⋯ > Pestaña de incógnito, Ctrl+Mayús+N, o «Abrir en una pestaña de incógnito» en el menú de
-  un enlace): vistas InPrivate de WebView2 (`CreateCoreWebView2ControllerWithOptions`, perfil `incognito`): cookies,
+- Ventana de incógnito (⋯ > Nueva ventana de incógnito, Ctrl+Mayús+N, o «Abrir en una ventana de incógnito» en el menú
+  de un enlace), como la InPrivate de Edge: otro Pluma.exe (`--incognito`, ventana, mutex y sesión propios, mismo motor
+  y ajustes) donde todas las pestañas son de incógnito; barra siempre oscura (las páginas siguen el tema elegido), no se
+  queda en memoria al cerrarla y no escribe sesión, historial, fijadas, posición ni actualizaciones. Las extensiones
+  activas se ponen en su perfil en cuanto se lee la lista (los navegadores las apagan en incógnito; Pluma no). Vistas InPrivate de WebView2 (`CreateCoreWebView2ControllerWithOptions`, perfil `incognito`): cookies,
   caché e historial del motor solo en memoria, y se van con su última vista. Pluma no apunta nada suyo: ni historial,
   ni sesión, ni pestañas cerradas, ni iconos en `iconos\`, ni títulos o direcciones en `pluma.log`; las listas del
   reproductor de vídeo se borran del disco al cerrarse. Nunca se precarga nada desde una (cargaría en el perfil normal),

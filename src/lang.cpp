@@ -86,8 +86,8 @@ static const Text kTexts[] = {
     { L"Añadida, pero es de las antiguas (MV2): puede que no funcione", L"Added, but it's an old one (MV2): it may not work", L"Adicionada, mas é das antigas (MV2): pode não funcionar", L"Ajoutée, mais c'est une ancienne (MV2) : elle risque de ne pas fonctionner", L"Hinzugefügt, aber veraltet (MV2): funktioniert vielleicht nicht", L"Aggiunta, ma è di quelle vecchie (MV2): potrebbe non funzionare" },
     { L"Extensión añadida", L"Extension added", L"Extensão adicionada", L"Extension ajoutée", L"Erweiterung hinzugefügt", L"Estensione aggiunta" },
     // incognito
-    { L"Pestaña de incógnito", L"Incognito tab", L"Guia anônima", L"Onglet de navigation privée", L"Inkognito-Tab", L"Scheda in incognito" },
-    { L"Abrir en una pestaña de incógnito", L"Open in incognito tab", L"Abrir em guia anônima", L"Ouvrir dans un onglet de navigation privée", L"In Inkognito-Tab öffnen", L"Apri in una scheda in incognito" },
+    { L"Nueva ventana de incógnito", L"New incognito window", L"Nova janela anônima", L"Nouvelle fenêtre de navigation privée", L"Neues Inkognito-Fenster", L"Nuova finestra in incognito" },
+    { L"Abrir en una ventana de incógnito", L"Open in incognito window", L"Abrir em janela anônima", L"Ouvrir dans une fenêtre de navigation privée", L"In Inkognito-Fenster öffnen", L"Apri in una finestra in incognito" },
     { L"Ctrl+Mayús+N", L"Ctrl+Shift+N", L"Ctrl+Shift+N", L"Ctrl+Maj+N", L"Strg+Umschalt+N", L"Ctrl+Maiusc+N" },
     { L"Incógnito", L"Incognito", L"Anônima", L"Privé", L"Inkognito", L"Incognito" },
     { L"incógnito", L"incognito", L"anônima", L"navigation privée", L"inkognito", L"incognito" },

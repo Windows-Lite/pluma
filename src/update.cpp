@@ -212,6 +212,7 @@ void update_on_quit() { if (!g_ready.empty()) swap_exe(); }   // closing for goo
 
 // at start, before the engine: what the last update left (window thread)
 void update_finish() {
+    if (g_incognito) return;   // (the ordinary Pluma updates; the incognito window only runs it)
     DeleteFileW((g_root + L"\\Pluma.old.exe").c_str());
     std::wstring top = staging() + L"\\pluma-" + kVersion;
     if (PathFileExistsW(top.c_str())) {
@@ -229,6 +230,6 @@ void update_finish() {
 void update_init() {
     wchar_t u[8];
     bool test_url = GetEnvironmentVariableW(L"PLUMA_ACTUALIZAR_URL", u, 8) > 0;
-    if ((g_test && !test_url) || g_set.update == 0 || !wcscmp(kVersion, L"dev")) return;
+    if (g_incognito || (g_test && !test_url) || g_set.update == 0 || !wcscmp(kVersion, L"dev")) return;
     SetTimer(g_win, 70, test_url ? 3000 : 30000, tick);
 }

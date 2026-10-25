@@ -18,6 +18,7 @@ static bool g_spare_making;
 static std::vector<std::function<void(ComPtr<ICoreWebView2Controller>)>> g_view_waiters, g_incognito_waiters;
 static ComPtr<ICoreWebView2Profile> g_profile, g_incognito_profile;   // (the second: incognito tabs' InPrivate one)
 void ext_add_all_to(ICoreWebView2Profile *pr);
+void ext_when_ready(std::function<void()> f);
 static std::vector<std::function<void(ICoreWebView2Profile *)>> g_profile_waiters;
 void with_profile(std::function<void(ICoreWebView2Profile *)> f) {
     if (g_profile) { f(g_profile.Get()); return; }
@@ -157,7 +158,7 @@ static RECT page_rect() {
 void tabs_apply_theme() {
     if (!g_profile) return;
     COREWEBVIEW2_PREFERRED_COLOR_SCHEME s = g_set.theme == 2 ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_AUTO
-                                          : dark_theme() ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT;
+                                          : user_dark_theme() ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT;
     g_profile->put_PreferredColorScheme(s);
     if (g_incognito_profile) g_incognito_profile->put_PreferredColorScheme(s);
 }
@@ -195,7 +196,7 @@ static void setup_view(ICoreWebView2Controller *c, bool incognito) {
         if (!g_incognito_profile && SUCCEEDED(v.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && pr) {
             g_incognito_profile = pr;
             tabs_apply_theme();
-            ext_add_all_to(pr.Get());
+            ext_when_ready([pr] { ext_add_all_to(pr.Get()); });   // (once the list of extensions is read)
         }
         return;
     }
@@ -235,6 +236,7 @@ static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done,
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done) { make_view(done, false); }
 static void CALLBACK spare_timer(HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); spare_prepare(); }
 void spare_prepare() {
+    if (g_incognito) return;   // (a spare view is an ordinary one)
     if (!g_set.spare && !g_profile_waiters.empty() && !g_profile && !g_spare_making) {
         // no spare views, but something waits for the profile: a view only for that, let go at once
         g_spare_making = true;
@@ -364,7 +366,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             LPWSTR s = NULL; v->get_DocumentTitle(&s);
             t->title = s ? s : L"";
             CoTaskMemFree(s);
-            if (t == active_tab()) SetWindowTextW(g_win, (t->title.empty() ? std::wstring(L"Pluma") : t->title + L" - Pluma").c_str());
+            if (t == active_tab()) SetWindowTextW(g_win, (t->title.empty() ? app_name() : t->title + L" - " + app_name()).c_str());
             if (!t->incognito && !settings_page_url(t->url)) history_title(t->url, t->title);
             session_save_soon();
             ui_invalidate();
@@ -556,9 +558,9 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                     Tab *from = tab_by_id(id);
                     ComPtr<ICoreWebView2ContextMenuItem> ip;
                     if (from && !from->incognito &&
-                        SUCCEEDED(e9->CreateContextMenuItem(T(L"Abrir en una pestaña de incógnito"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
+                        SUCCEEDED(e9->CreateContextMenuItem(T(L"Abrir en una ventana de incógnito"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
                         ip->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
-                            [id, link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { open_link_in_tab(id, link, true, true); return S_OK; }).Get(), &tk);
+                            [link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { app_open_incognito(link); return S_OK; }).Get(), &tk);
                         items->InsertValueAtIndex(i + 1, ip.Get());
                     }
                     for (UINT32 k = 0; k < n + 1; k++) {
@@ -662,7 +664,7 @@ Tab *tab_new(const std::wstring &url, bool activate, int at, bool incognito) {
     auto t = std::make_unique<Tab>();
     t->id = g_next_id++;
     t->url = starts_with(url, L"pluma://") ? settings_page_from_typed(url) : url;   // (Pluma's own pages, from outside)
-    t->incognito = incognito;
+    t->incognito = incognito || g_incognito;
     if (!url.empty()) t->icon_png = cached_icon(url);
     Tab *raw = t.get();
     if (at < 0 || at > (int)g_tabs.size()) at = (int)g_tabs.size();
@@ -737,7 +739,7 @@ void tab_activate(int i) {
     if (old && old != t) { hide_view(old); ui_notice_drop(old->id); }
     g_active = i;
     t->hidden_since = 0;
-    SetWindowTextW(g_win, (t->title.empty() ? std::wstring(L"Pluma") : t->title + L" - Pluma").c_str());
+    SetWindowTextW(g_win, (t->title.empty() ? app_name() : t->title + L" - " + app_name()).c_str());
     if (!ui_address_focused() || old != t) ui_set_address_text(t->url);
     if (t->video_mode) {
         // Pluma's player is on: the page stays asleep behind it
@@ -1103,6 +1105,7 @@ void tabs_on_hide() {
 
 // ---------------------------------------------------------------- session (sesion.tsv)
 void session_save() {
+    if (g_incognito) return;   // (the incognito window keeps nothing, and must not overwrite the ordinary session)
     // (incognito tabs are not kept: the active one counts among the others)
     int active = 0, n = 0;
     for (int i = 0; i < (int)g_tabs.size(); i++) { if (g_tabs[i]->incognito) continue; if (i <= g_active) active = n; n++; }
@@ -1140,7 +1143,7 @@ void session_restore() {
     g_active = std::min(std::max(active, 0), (int)g_tabs.size() - 1);
     g_tabs[g_active]->hidden_since = 0;
     for (auto &t : g_tabs) ui_tab_icon_changed(t.get());
-    SetWindowTextW(g_win, (g_tabs[g_active]->title.empty() ? std::wstring(L"Pluma") : g_tabs[g_active]->title + L" - Pluma").c_str());
+    SetWindowTextW(g_win, (g_tabs[g_active]->title.empty() ? app_name() : g_tabs[g_active]->title + L" - " + app_name()).c_str());
     ui_set_address_text(g_tabs[g_active]->url);
     ui_layout();
 }

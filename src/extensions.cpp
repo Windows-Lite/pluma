@@ -143,7 +143,18 @@ static void add_folders(ICoreWebView2Profile *pr, std::vector<std::wstring> todo
             return S_OK;
         }).Get());
 }
-void ext_sync(std::function<void()> done) {
+// what waits for the list of extensions (the incognito profile gets them once it is read)
+static bool g_ext_ready;
+static std::vector<std::function<void()>> g_ext_waiters;
+void ext_when_ready(std::function<void()> f) { if (g_ext_ready) f(); else g_ext_waiters.push_back(f); }
+static void ext_ready() {
+    g_ext_ready = true;
+    auto w = std::move(g_ext_waiters);
+    g_ext_waiters.clear();
+    for (auto &f : w) f();
+}
+void ext_sync(std::function<void()> done_) {
+    auto done = [done_] { ext_ready(); if (done_) done_(); };
     with_profile([done](ICoreWebView2Profile *pr) {
         known_load();
         ComPtr<ICoreWebView2Profile> keep = pr;
@@ -157,7 +168,7 @@ void ext_sync(std::function<void()> done) {
                 if (k) for (auto &e : g_exts) if (e.id == k->id) installed = true;
                 if (!installed) todo.push_back(f);
             }
-            if (todo.empty()) { if (done) done(); return; }
+            if (todo.empty()) { done(); return; }
             add_folders(keep.Get(), todo, [keep, done] { refresh_list(keep.Get(), done); });
         });
     });
