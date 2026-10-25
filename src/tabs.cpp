@@ -15,8 +15,9 @@ static ComPtr<ICoreWebView2Controller> g_spare;   // made ahead of time, never n
 // of sight. (25/10: without it the engine stopped and started again while the user browsed.)
 static ComPtr<ICoreWebView2Controller> g_keeper;
 static bool g_spare_making;
-static std::vector<std::function<void(ComPtr<ICoreWebView2Controller>)>> g_view_waiters;
-static ComPtr<ICoreWebView2Profile> g_profile;
+static std::vector<std::function<void(ComPtr<ICoreWebView2Controller>)>> g_view_waiters, g_incognito_waiters;
+static ComPtr<ICoreWebView2Profile> g_profile, g_incognito_profile;   // (the second: incognito tabs' InPrivate one)
+void ext_add_all_to(ICoreWebView2Profile *pr);
 static std::vector<std::function<void(ICoreWebView2Profile *)>> g_profile_waiters;
 void with_profile(std::function<void(ICoreWebView2Profile *)> f) {
     if (g_profile) { f(g_profile.Get()); return; }
@@ -86,6 +87,7 @@ static std::wstring browser_args() {
 static void on_browser_exited();
 static void trim_after_load();
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done);
+static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done, bool incognito);
 void env_create(std::function<void()> ready) {
     auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
     opts->put_AreBrowserExtensionsEnabled(TRUE);
@@ -105,6 +107,9 @@ void env_create(std::function<void()> ready) {
             auto waiting = std::move(g_view_waiters);
             g_view_waiters.clear();
             for (auto &w : waiting) make_view(w);
+            auto waiting_ip = std::move(g_incognito_waiters);
+            g_incognito_waiters.clear();
+            for (auto &w : waiting_ip) make_view(w, true);
             make_view([](ComPtr<ICoreWebView2Controller> c) {
                 if (!c) return;
                 RECT none = { 0, 0, 0, 0 };
@@ -151,8 +156,9 @@ void tabs_apply_theme() {
     COREWEBVIEW2_PREFERRED_COLOR_SCHEME s = g_set.theme == 2 ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_AUTO
                                           : dark_theme() ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT;
     g_profile->put_PreferredColorScheme(s);
+    if (g_incognito_profile) g_incognito_profile->put_PreferredColorScheme(s);
 }
-static void setup_view(ICoreWebView2Controller *c) {
+static void setup_view(ICoreWebView2Controller *c, bool incognito) {
     ComPtr<ICoreWebView2> v; c->get_CoreWebView2(&v);
     c->put_IsVisible(FALSE);
     RECT r = page_rect(); c->put_Bounds(r);
@@ -179,6 +185,17 @@ static void setup_view(ICoreWebView2Controller *c) {
         v9->put_DefaultDownloadDialogCornerAlignment(COREWEBVIEW2_DEFAULT_DOWNLOAD_DIALOG_CORNER_ALIGNMENT_TOP_RIGHT);
         v9->put_DefaultDownloadDialogMargin({ (LONG)(8 * ui_scale()), (LONG)(8 * ui_scale()) });
     }
+    if (incognito) {
+        // the InPrivate profile: its own theme, and the same extensions (uBlock above all), the first time
+        ComPtr<ICoreWebView2_13> v13;
+        ComPtr<ICoreWebView2Profile> pr;
+        if (!g_incognito_profile && SUCCEEDED(v.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && pr) {
+            g_incognito_profile = pr;
+            tabs_apply_theme();
+            ext_add_all_to(pr.Get());
+        }
+        return;
+    }
     if (!g_profile) {
         ComPtr<ICoreWebView2_13> v13;
         if (SUCCEEDED(v.As(&v13))) v13->get_Profile(&g_profile);
@@ -188,18 +205,31 @@ static void setup_view(ICoreWebView2Controller *c) {
         if (g_profile) for (auto &f : waiting) f(g_profile.Get());
     }
 }
-static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done) {
-    if (!g_env) { g_view_waiters.push_back(done); return; }
+static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done, bool incognito) {
+    if (!g_env) { (incognito ? g_incognito_waiters : g_view_waiters).push_back(done); return; }
     double t0 = now_ms();
-    g_env->CreateCoreWebView2Controller(g_win, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-        [done, t0](HRESULT hr, ICoreWebView2Controller *c) -> HRESULT {
+    auto handler = Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+        [done, t0, incognito](HRESULT hr, ICoreWebView2Controller *c) -> HRESULT {
             if (FAILED(hr) || !c) { log_line(L"no se pudo crear una vista"); done(nullptr); return S_OK; }
-            if (g_dev) log_line(L"vista creada en " + std::to_wstring((int)(now_ms() - t0)) + L" ms");
-            setup_view(c);
+            if (g_dev) log_line(L"vista creada en " + std::to_wstring((int)(now_ms() - t0)) + L" ms" + (incognito ? L" (incógnito)" : L""));
+            setup_view(c, incognito);
             done(c);
             return S_OK;
-        }).Get());
+        });
+    if (incognito) {
+        // InPrivate (as Edge's): its cookies, cache and history live only in memory, and go with its last view
+        ComPtr<ICoreWebView2Environment10> e10;
+        ComPtr<ICoreWebView2ControllerOptions> o;
+        if (SUCCEEDED(g_env.As(&e10)) && SUCCEEDED(e10->CreateCoreWebView2ControllerOptions(&o))) {
+            o->put_ProfileName(L"incognito");
+            o->put_IsInPrivateModeEnabled(TRUE);
+            e10->CreateCoreWebView2ControllerWithOptions(g_win, o.Get(), handler.Get());
+        } else done(nullptr);   // (never an ordinary view instead)
+        return;
+    }
+    g_env->CreateCoreWebView2Controller(g_win, handler.Get());
 }
+static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done) { make_view(done, false); }
 static void CALLBACK spare_timer(HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); spare_prepare(); }
 void spare_prepare() {
     if (!g_set.spare && !g_profile_waiters.empty() && !g_profile && !g_spare_making) {
@@ -212,7 +242,8 @@ void spare_prepare() {
     g_spare_making = true;
     make_view([](ComPtr<ICoreWebView2Controller> c) { g_spare_making = false; g_spare = c; });
 }
-static void take_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done) {
+static void take_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done, bool incognito = false) {
+    if (incognito) { make_view(done, true); return; }   // (the spare view is an ordinary one)
     if (g_spare) {
         auto c = g_spare;
         g_spare.Reset();
@@ -242,7 +273,7 @@ static void on_icon(int id) {
             t->icon_png = png;
             ui_tab_icon_changed(t);
             std::wstring host = url_host(t->url);
-            if (!host.empty()) {
+            if (!host.empty() && !t->incognito) {   // (incognito: not even which sites, on disk)
                 CreateDirectoryW((g_state + L"\\iconos").c_str(), NULL);
                 write_file(g_state + L"\\iconos\\" + hash_hex(host) + L".png", png);
             }
@@ -255,9 +286,10 @@ static std::string cached_icon(const std::wstring &url) {
     if (!host.empty()) read_file(g_state + L"\\iconos\\" + hash_hex(host) + L".png", png);
     return png;
 }
-static void open_link_in_tab(int from_id, const std::wstring &url, bool activate) {
+static void open_link_in_tab(int from_id, const std::wstring &url, bool activate, bool incognito = false) {
     int i = tab_index(from_id);
-    tab_new(url, activate, i >= 0 ? i + 1 : -1);
+    Tab *from = tab_by_id(from_id);
+    tab_new(url, activate, i >= 0 ? i + 1 : -1, incognito || (from && from->incognito));   // (an incognito tab's links stay incognito)
 }
 static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     int id = t->id;
@@ -329,7 +361,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             t->title = s ? s : L"";
             CoTaskMemFree(s);
             if (t == active_tab()) SetWindowTextW(g_win, (t->title.empty() ? std::wstring(L"Pluma") : t->title + L" - Pluma").c_str());
-            history_title(t->url, t->title);
+            if (!t->incognito) history_title(t->url, t->title);
             session_save_soon();
             ui_invalidate();
             return S_OK;
@@ -343,7 +375,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             t->progress = 1;
             t->load_done = now_ms();
             t->crashed = false;
-            if (ok && tab_index(t->id) >= 0) history_add(t->url, t->title);
+            if (ok && tab_index(t->id) >= 0 && !t->incognito) history_add(t->url, t->title);   // (incognito: no history)
             if (ok && t == active_tab()) trim_after_load();
             // a reload keeps the address (no SourceChanged): Pluma's player takes the video again (it stayed on the
             // page after reloading, in the user's recording, 25/10)
@@ -406,6 +438,8 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             auto nt = std::make_unique<Tab>();
             nt->id = g_next_id++;
             nt->creating = true;
+            { Tab *from = tab_by_id(id); nt->incognito = from && from->incognito; }   // (its window must share the opener's profile)
+            bool nt_incognito = nt->incognito;
             LPWSTR u = NULL; a->get_Uri(&u);
             nt->url = u ? u : L"";
             CoTaskMemFree(u);
@@ -427,7 +461,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                 def->Complete();
                 if (t == active_tab()) tab_activate(g_active);
                 else t->hidden_since = now_ms();
-            });
+            }, nt_incognito);
             return S_OK;
         }).Get(), &tok);
     v->add_WindowCloseRequested(Callback<ICoreWebView2WindowCloseRequestedEventHandler>(
@@ -479,7 +513,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
             if (k == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED || k == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE) {
-                log_line(L"la página de una pestaña se ha cerrado (" + std::to_wstring((int)k) + L"): " + t->url);
+                log_line(L"la página de una pestaña se ha cerrado (" + std::to_wstring((int)k) + L"): " + (t->incognito ? std::wstring(L"(incógnito)") : t->url));
                 t->loading = false;
                 if (t == active_tab()) t->view->Reload(); else t->crashed = true;
             }
@@ -514,6 +548,23 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                         [id, link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { open_link_in_tab(id, link, false); return S_OK; }).Get(), &tk);
                     items->RemoveValueAtIndex(i);
                     items->InsertValueAtIndex(i, mine.Get());
+                    // and in an incognito tab (Edge's "InPrivate window" item, if any, does nothing here)
+                    Tab *from = tab_by_id(id);
+                    ComPtr<ICoreWebView2ContextMenuItem> ip;
+                    if (from && !from->incognito &&
+                        SUCCEEDED(e9->CreateContextMenuItem(L"Abrir en una pestaña de incógnito", NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
+                        ip->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
+                            [id, link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { open_link_in_tab(id, link, true, true); return S_OK; }).Get(), &tk);
+                        items->InsertValueAtIndex(i + 1, ip.Get());
+                    }
+                    for (UINT32 k = 0; k < n + 1; k++) {
+                        ComPtr<ICoreWebView2ContextMenuItem> x;
+                        LPWSTR nm = NULL;
+                        if (FAILED(items->GetValueAtIndex(k, &x)) || FAILED(x->get_Name(&nm))) continue;
+                        bool inprivate = nm && wcsstr(nm, L"InPrivate");
+                        CoTaskMemFree(nm);
+                        if (inprivate) { items->RemoveValueAtIndex(k); break; }
+                    }
                     break;
                 }
                 return S_OK;
@@ -584,7 +635,7 @@ static void ensure_view(Tab *t) {
         t->view->Navigate(url.c_str());
         if (t == active_tab()) tab_activate(g_active);
         else t->hidden_since = now_ms();
-    });
+    }, t->incognito);
 }
 
 void tab_warm(Tab *t) {
@@ -603,10 +654,11 @@ void tabs_layout_views() {
 }
 
 // ---------------------------------------------------------------- tab operations
-Tab *tab_new(const std::wstring &url, bool activate, int at) {
+Tab *tab_new(const std::wstring &url, bool activate, int at, bool incognito) {
     auto t = std::make_unique<Tab>();
     t->id = g_next_id++;
     t->url = url;
+    t->incognito = incognito;
     if (!url.empty()) t->icon_png = cached_icon(url);
     Tab *raw = t.get();
     if (at < 0 || at > (int)g_tabs.size()) at = (int)g_tabs.size();
@@ -628,7 +680,7 @@ static void release_view(Tab *t) {
 void tab_close(int i, bool from_mouse) {
     if (i < 0 || i >= (int)g_tabs.size()) return;
     Tab *t = g_tabs[i].get();
-    if (!t->url.empty()) {
+    if (!t->url.empty() && !t->incognito) {   // (an incognito tab leaves nothing to reopen)
         g_closed.push_back({ t->url, t->title, t->icon_png, i });
         if (g_closed.size() > 25) g_closed.erase(g_closed.begin());
     }
@@ -718,6 +770,8 @@ void tabs_preload(const std::wstring &url) {
     if (g_pre && url == g_pre_asked) return;
     if (g_pre) { release_view(g_pre.get()); g_pre.reset(); g_pre_asked.clear(); KillTimer(g_win, 0x51A7); }
     if (url.empty() || !g_env || g_quitting) return;
+    // (not from an incognito tab: the page would load in the ordinary profile, with its cookies)
+    if (active_tab() && active_tab()->incognito) return;
     if (!starts_with(url, L"https://") && !starts_with(url, L"http://")) return;
     if (url.rfind(search_url(L""), 0) == 0) return;   // not searches: each would be a query sent to the engine
     g_pre = std::make_unique<Tab>();
@@ -744,7 +798,7 @@ void tabs_preload(const std::wstring &url) {
     SetTimer(g_win, 0x51A7, 30000, [](HWND, UINT, UINT_PTR tid, DWORD) { KillTimer(g_win, tid); tabs_preload(L""); });
 }
 static bool use_preload(Tab *t, const std::wstring &url) {
-    if (!g_pre || g_pre_asked != url || t->view || t->creating) return false;
+    if (!g_pre || g_pre_asked != url || t->view || t->creating || t->incognito) return false;
     int i = tab_index(t->id);
     if (i < 0) return false;
     KillTimer(g_win, 0x51A7);
@@ -893,6 +947,8 @@ void tabs_tick() {
         }
         // the most recently looked-at hidden tabs stay frozen (they come back at once); the rest are let go after
         // discard_s, and come back where they were (saved_x/y)
+        // (incognito tabs are never let go: their page, logins and all, would be gone for good)
+        if (t->incognito) continue;
         int newer = 0;
         for (auto &o : g_tabs) if (o.get() != t && o->view && o->hidden_since > t->hidden_since && !o->audible) newer++;
         double limit = newer < g_set.keep_recent ? g_set.recent_discard_min * 60.0 : g_set.discard_s;
@@ -995,7 +1051,22 @@ void tabs_trim(int mode) {
 }
 void tabs_on_hide() {
     // closed but kept in memory: the pages freeze where they are (to come back as they were), except those playing
-    // sound, which are let go so the music stops; then every process gives its memory back
+    // sound, which are let go so the music stops; then every process gives its memory back. Incognito tabs close:
+    // closing the browser ends them, and with their last view all they kept goes
+    bool any_incognito = false;
+    for (size_t i = g_tabs.size(); i-- > 0;) {
+        Tab *t = g_tabs[i].get();
+        if (!t->incognito) continue;
+        any_incognito = true;
+        ui_release_icon(t);
+        release_view(t);
+        g_tabs.erase(g_tabs.begin() + i);
+        if (g_active > (int)i || g_active >= (int)g_tabs.size()) g_active--;
+    }
+    if (any_incognito) {
+        if (g_tabs.empty()) { g_active = -1; tab_new(L"", true); }
+        else tab_activate(std::max(0, g_active));
+    }
     for (auto &up : g_tabs) {
         Tab *t = up.get();
         if (!t->view) continue;
@@ -1028,8 +1099,12 @@ void tabs_on_hide() {
 
 // ---------------------------------------------------------------- session (sesion.tsv)
 void session_save() {
-    std::wstring out = L"activa\t" + std::to_wstring(std::max(0, g_active)) + L"\n";
+    // (incognito tabs are not kept: the active one counts among the others)
+    int active = 0, n = 0;
+    for (int i = 0; i < (int)g_tabs.size(); i++) { if (g_tabs[i]->incognito) continue; if (i <= g_active) active = n; n++; }
+    std::wstring out = L"activa\t" + std::to_wstring(active) + L"\n";
     for (auto &t : g_tabs) {
+        if (t->incognito) continue;
         std::wstring title = t->title;
         for (auto &c : title) if (c == L'\t' || c == L'\n' || c == L'\r') c = L' ';
         out += t->url + L"\t" + title + L"\n";

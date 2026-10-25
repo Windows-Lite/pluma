@@ -136,6 +136,7 @@ struct Tab {
     void *video = nullptr;             // Pluma's own player for its YouTube video (video.cpp), waiting or on
     bool video_mode = false;           // ... on screen instead of the page, which sleeps behind it
     std::wstring video_declined;       // the video the person went back to the page for: it stays on the page
+    bool incognito = false;            // InPrivate: nothing of it is kept (history, cookies, session); gone with the window
     // the bar's geometry, animated
     Anim x, w, hover, close_hover;
     bool placed = false;
@@ -147,7 +148,7 @@ extern int g_active;
 Tab *active_tab();
 Tab *tab_by_id(int id);
 int tab_index(int id);
-Tab *tab_new(const std::wstring &url, bool activate, int at = -1);   // url "" = the empty new tab
+Tab *tab_new(const std::wstring &url, bool activate, int at = -1, bool incognito = false);   // url "" = the empty new tab
 void tab_close(int index, bool from_mouse = false);
 void tab_activate(int index);
 void tab_navigate(Tab *t, const std::wstring &url);
@@ -262,6 +263,8 @@ void ext_toggle(size_t i);
 void ext_remove(size_t i);
 void ext_open_popup(size_t i, RECT anchor);
 void ext_open_options(size_t i);
+bool ext_bundled_removed();               // one of those that come with Pluma (uBlock Origin Lite) was taken off
+void ext_restore_bundled();               // ... and back on
 bool store_extension_id(const std::wstring &url, std::wstring &id, bool &edge);
 void store_install(const std::wstring &id, bool edge);
 std::wstring extensions_folder();

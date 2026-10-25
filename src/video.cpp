@@ -1827,7 +1827,7 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     t->audible = playing && !v->muted;
     if (t == active_tab()) show_player(t, v);
     SetTimer(g_msg, kCtlTimer, 250, ctl_tick);
-    log_line(L"vídeo propio: " + v->title + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
+    log_line(L"vídeo propio: " + (t->incognito ? std::wstring(L"(incógnito)") : v->title) + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
              L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió");
     v->warm_at = now_ms();
     SetTimer(g_msg, kFreezeTimer + t->id, 2500, freeze_check);
@@ -2092,6 +2092,20 @@ void video_destroy(Tab *t) {
     t->video = nullptr;
     t->video_mode = false;
     if (was_on) t->audible = false;
+    // incognito: its lists and captions (named after the video) go from the disk too, once mpv has let go of them
+    if (t->incognito) {
+        std::wstring dir = g_state + L"\\cache-video\\", id = v->id;
+        std::thread([dir, id] {
+            Sleep(4000);
+            for (const std::wstring &pat : { id + L"-*.m3u8", id + L"-sub*.vtt" }) {
+                WIN32_FIND_DATAW fd;
+                HANDLE fh = FindFirstFileW((dir + pat).c_str(), &fd);
+                if (fh == INVALID_HANDLE_VALUE) continue;
+                do DeleteFileW((dir + fd.cFileName).c_str()); while (FindNextFileW(fh, &fd));
+                FindClose(fh);
+            }
+        }).detach();
+    }
     delete v;
 }
 void video_layout() {

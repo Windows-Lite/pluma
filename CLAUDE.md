@@ -164,6 +164,23 @@ ya tenga esa funcionalidad»).
   la página suya, o el sitio de las sugerencias para siempre (`ocultas.tsv`), con «Deshacer». Pedido el 25/10: «que
   solo aparezcan páginas que yo haya añadido, como YouTube... que las pueda añadir fácilmente como un marcador».
 
+## Incógnito
+- Pestañas de incógnito (⋯ > Pestaña de incógnito, Ctrl+Mayús+N, o «Abrir en una pestaña de incógnito» en el menú de
+  un enlace): vistas InPrivate de WebView2 (`CreateCoreWebView2ControllerWithOptions`, perfil `incognito`): cookies,
+  caché e historial del motor solo en memoria, y se van con su última vista. Pluma no apunta nada suyo: ni historial,
+  ni sesión, ni pestañas cerradas, ni iconos en `iconos\`, ni títulos o direcciones en `pluma.log`; las listas del
+  reproductor de vídeo se borran del disco al cerrarse. Nunca se precarga nada desde una (cargaría en el perfil normal),
+  nunca se descargan (se perderían sus sesiones), sus enlaces y ventanas siguen en incógnito, y se cierran al cerrar la
+  ventana. El perfil de incógnito recibe las mismas extensiones activas (uBlock). Comprobado el 25/10 con un perfil
+  limpio: marca.com en incógnito no quedó en ningún archivo; sus cookies, aparte de las de las pestañas normales.
+
+## Extensiones
+- La ventanita de una extensión (su popup) se crea a la vista antes de meterle su página: hecha en una ventana oculta,
+  la página se quedaba «hidden» y no pintaba nada (salía vacía, 25/10). Se mide varias veces en su primer segundo
+  (uBlock la rellena poco a poco y salía cortada).
+- Clic derecho en el botón de una extensión: Opciones, Desactivar, Quitar de Pluma (como Chrome). Las que trae Pluma
+  (uBlock) quitadas quedan marcadas en `extensiones.tsv` y ⋯ > Extensiones ofrece «Volver a poner uBlock Origin Lite».
+
 ## Seguridad
 - Motor de Edge, actualizado por Windows. Páginas en AppContainer (`msWebView2RendererAppContainer`), aislamiento de
   sitios activado (no quitarlo para ahorrar memoria), SmartScreen, prevención de rastreo equilibrada, uBlock Lite.

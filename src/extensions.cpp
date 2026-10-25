@@ -162,6 +162,20 @@ void ext_sync(std::function<void()> done) {
         });
     });
 }
+void ext_add_all_to(ICoreWebView2Profile *pr) {
+    // the incognito profile gets the same extensions as the ordinary one (those on: uBlock above all)
+    ComPtr<ICoreWebView2Profile7> p7;
+    if (!pr || FAILED(pr->QueryInterface(IID_PPV_ARGS(&p7)))) return;
+    for (auto &e : g_exts) {
+        if (e.builtin || !e.enabled || e.folder.empty()) continue;
+        std::wstring folder = e.folder;
+        p7->AddBrowserExtension(folder.c_str(), Callback<ICoreWebView2ProfileAddBrowserExtensionCompletedHandler>(
+            [folder](HRESULT hr, ICoreWebView2BrowserExtension *) -> HRESULT {
+                if (FAILED(hr)) { wchar_t b[16]; swprintf_s(b, L"%08X", (unsigned)hr); log_line(L"incógnito: no se pudo añadir " + folder + L" (" + b + L")"); }
+                return S_OK;
+            }).Get());
+    }
+}
 static void with_extension(const std::wstring &id, std::function<void(ICoreWebView2BrowserExtension *)> f) {
     with_profile([id, f](ICoreWebView2Profile *pr) {
         ComPtr<ICoreWebView2Profile7> p7;
@@ -220,6 +234,18 @@ void ext_remove(size_t i) {
     });
     ui_layout();
 }
+bool ext_bundled_removed() {
+    // one of those that come with Pluma (uBlock Origin Lite) was taken off
+    std::wstring mine = g_root + L"\\extensiones\\";
+    for (auto &k : g_known) if (k.removed && !_wcsnicmp(k.folder.c_str(), mine.c_str(), mine.size())) return true;
+    return false;
+}
+void ext_restore_bundled() {
+    std::wstring mine = g_root + L"\\extensiones\\";
+    for (auto &k : g_known) if (k.removed && !_wcsnicmp(k.folder.c_str(), mine.c_str(), mine.size())) k.removed = false;
+    known_save();
+    ext_sync([] { ui_layout(); ui_toast(L"Extensión añadida de nuevo"); });
+}
 void ext_open_options(size_t i) {
     if (i >= g_exts.size() || g_exts[i].options.empty()) return;
     tab_new(L"chrome-extension://" + g_exts[i].id + L"/" + g_exts[i].options, true);
@@ -244,8 +270,36 @@ static void pop_size(int w, int h) {
     SetWindowPos(g_pop, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
     if (g_pop_ctrl) { RECT r = { 0, 0, w, h }; g_pop_ctrl->put_Bounds(r); }
 }
+static void pop_measure(bool first) {
+    // as big as its page wants, within limits; measured again during its first second (uBlock Origin Lite fills its
+    // popup in as it goes: measured once, it came out cut in half)
+    ComPtr<ICoreWebView2> v;
+    if (!g_pop_ctrl || FAILED(g_pop_ctrl->get_CoreWebView2(&v)) || !v) return;
+    v->ExecuteScript(L"(() => { const d = document.documentElement, b = document.body;"
+                     L" return [Math.ceil(Math.max(d.scrollWidth, b ? b.scrollWidth : 0)), Math.ceil(Math.max(d.scrollHeight, b ? b.scrollHeight : 0))]; })()",
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>([first](HRESULT hr, LPCWSTR r) -> HRESULT {
+            if (!g_pop || FAILED(hr) || !r) return S_OK;
+            int w = 0, h = 0;
+            if (swscanf_s(r, L"[%d,%d]", &w, &h) == 2) {
+                float s = ui_scale();
+                RECT now; GetClientRect(g_pop, &now);
+                int nw = (int)(w * s), nh = (int)(h * s);
+                if (first || abs(nw - now.right) > 2 || abs(nh - now.bottom) > 2) pop_size(nw, nh);
+            }
+            if (first) { SetForegroundWindow(g_pop); if (g_pop_ctrl) g_pop_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC); }
+            return S_OK;
+        }).Get());
+}
 static LRESULT CALLBACK pop_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_TIMER:
+        if (h == g_pop) {
+            int n = (int)(INT_PTR)GetPropW(h, L"medidas") + 1;
+            SetPropW(h, L"medidas", (HANDLE)(INT_PTR)n);
+            pop_measure(false);
+            if (n >= 6) KillTimer(h, wp);
+        }
+        return 0;
     case WM_ACTIVATE:
         if (LOWORD(wp) == WA_INACTIVE && h == g_pop) {
             // clicking anywhere else closes it, as in Chrome (after this message: not from inside it)
@@ -278,6 +332,9 @@ void ext_open_popup(size_t i, RECT anchor) {
     const Palette &p = pal();
     COLORREF border = RGB((int)(p.line_strong.r * 255), (int)(p.line_strong.g * 255), (int)(p.line_strong.b * 255));
     DwmSetWindowAttribute(g_pop, 34 /* DWMWA_BORDER_COLOR */, &border, sizeof(border));
+    // on the screen before its page goes in: a page made in a hidden window stayed "hidden" and drew nothing (the
+    // popup came out empty, 25/10)
+    pop_size((int)(340 * ui_scale()), (int)(120 * ui_scale()));
     HWND me = g_pop;
     Tab *t = active_tab();
     std::wstring page_url = t ? t->url : L"";
@@ -297,18 +354,9 @@ void ext_open_popup(size_t i, RECT anchor) {
                 L" const p = orig({}).then(pick); if (cb) { p.then(cb); return; } return p; } return orig(q, cb); }; })();";
             v->AddScriptToExecuteOnDocumentCreated(shim.c_str(), NULL);
             v->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                [](ICoreWebView2 *v, ICoreWebView2NavigationCompletedEventArgs *) -> HRESULT {
-                    // as big as its page wants, within limits
-                    v->ExecuteScript(L"(() => { const d = document.documentElement, b = document.body;"
-                                     L" return [Math.ceil(Math.max(d.scrollWidth, b ? b.scrollWidth : 0)), Math.ceil(Math.max(d.scrollHeight, b ? b.scrollHeight : 0))]; })()",
-                        Callback<ICoreWebView2ExecuteScriptCompletedHandler>([](HRESULT hr, LPCWSTR r) -> HRESULT {
-                            if (!g_pop || FAILED(hr) || !r) return S_OK;
-                            int w = 0, h = 0;
-                            if (swscanf_s(r, L"[%d,%d]", &w, &h) == 2) { float s = ui_scale(); pop_size((int)(w * s), (int)(h * s)); }
-                            SetForegroundWindow(g_pop);
-                            if (g_pop_ctrl) g_pop_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-                            return S_OK;
-                        }).Get());
+                [](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *) -> HRESULT {
+                    pop_measure(true);
+                    if (g_pop) SetTimer(g_pop, 1, 180, NULL);
                     return S_OK;
                 }).Get(), &tok);
             v->add_WindowCloseRequested(Callback<ICoreWebView2WindowCloseRequestedEventHandler>(
@@ -329,7 +377,9 @@ void ext_open_popup(size_t i, RECT anchor) {
                     if (vk == VK_ESCAPE) { a->put_Handled(TRUE); if (g_pop) PostMessageW(g_pop, WM_CLOSE, 0, 0); }
                     return S_OK;
                 }).Get(), &tok);
-            pop_size((int)(340 * ui_scale()), (int)(120 * ui_scale()));
+            RECT r; GetClientRect(g_pop, &r);
+            c->put_Bounds(r);
+            c->put_IsVisible(TRUE);
             std::wstring url = L"chrome-extension://" + e.id + L"/" + e.popup;
             v->Navigate(url.c_str());
             return S_OK;

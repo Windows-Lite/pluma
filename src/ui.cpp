@@ -26,7 +26,8 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_CHEV_R = 0xE76C, G_CHEV_L = 0xE76B, G_CHECK = 0xE73E, G_GEAR = 0xE713, G_DELETE = 0xE74D,
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
-                 G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735 };
+                 G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
+                 G_INPRIVATE = 0xE727 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -359,9 +360,11 @@ static D2D1_RECT_F notice_x_rect() {
 }
 // the new tab page: one column, the most visited sites and what Pluma is using
 static float ntp_col_l() { return std::max(S(24), (g_geo.W - S(560)) / 2); }
+static const float kNtpIncognitoH = 90;   // the incognito page's words, above the rows
 static float ntp_top() {
     RECT rc; GetClientRect(g_bar, &rc);
-    return ui_band_height() + std::max(S(36), (rc.bottom - ui_band_height()) * 0.16f);
+    bool incognito = active_tab() && active_tab()->incognito;
+    return ui_band_height() + std::max(S(36), (rc.bottom - ui_band_height()) * 0.16f) + (incognito ? S(kNtpIncognitoH) : 0);
 }
 static D2D1_RECT_F ntp_row_rect(size_t i) {
     float l = ntp_col_l(), t = ntp_top() + S(118) + i * S(40);
@@ -374,8 +377,9 @@ static D2D1_RECT_F ntp_x_rect(size_t i) {   // the cross that takes a row off (o
 static void ntp_fill() {
     // the person's own pages, if they have any (only those); else, if they want them, the sites they visit most
     g_ntp_pins = !g_pins.empty();
+    bool incognito = active_tab() && active_tab()->incognito;   // (incognito: their own pages, never what they visit most)
     if (g_ntp_pins) g_ntp_rows.assign(g_pins.begin(), g_pins.begin() + std::min<size_t>(g_pins.size(), 12));
-    else if (g_set.suggest_top) g_ntp_rows = history_top(8);
+    else if (g_set.suggest_top && !incognito) g_ntp_rows = history_top(8);
     else g_ntp_rows.clear();
     // (none yet: again at the next layout, the history may not be loaded yet when the first new tab shows)
     g_ntp_filled = !g_ntp_rows.empty() || !g_set.suggest_top;
@@ -519,7 +523,10 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         float cy = (r.top + r.bottom) / 2;
         float ix = compact && !active ? (r.left + r.right) / 2 : r.left + S(18);
         if (t->loading && t->view) { draw_spinner(rt, g_br.Get(), ix, cy, S(6.5f), now, p.accent); busy = true; }
-        else {
+        else if (t->incognito) {
+            // incognito: Edge's InPrivate sign instead of the site's icon, in the accent
+            glyph(rt, g_br.Get(), g_f.icon.Get(), G_INPRIVATE, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.accent);
+        } else {
             auto b = tab_icon(t);
             if (b) draw_icon_bitmap(rt, b.Get(), ix, cy, S(16), 1);
             else glyph(rt, g_br.Get(), g_f.icon.Get(), t->url.empty() ? G_NEWTAB : G_GLOBE, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.sub);
@@ -704,6 +711,15 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         text(rt, g_br.Get(), f.Get(), zs, R(z.left, z.top, z.right - S(8), z.bottom), p.sub);
         right = z.left - S(6);
     }
+    if (t && t->incognito && !focused) {
+        // a pill that says so, at the end of the address, as Edge's "InPrivate"
+        float tw = text_w(g_f.hint.Get(), L"Incógnito");
+        D2D1_RECT_F pr = R(right - tw - S(36), a.top + S(5), right, a.bottom - S(5));
+        fill(rt, g_br.Get(), pr, S(7), alpha(p.accent_soft, 0.55f));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_INPRIVATE, R(pr.left + S(4), pr.top, pr.left + S(26), pr.bottom), p.accent);
+        text(rt, g_br.Get(), g_f.hint.Get(), L"Incógnito", R(pr.left + S(28), pr.top, pr.right - S(4), pr.bottom), p.accent);
+        right = pr.left - S(6);
+    }
     if (!focused) {
         D2D1_RECT_F tr = R(a.left + S(36), a.top, right, a.bottom);
         if (u.empty()) text(rt, g_br.Get(), g_f.addr.Get(), L"Busca o escribe una dirección", tr, p.sub);
@@ -758,8 +774,24 @@ static bool paint_ntp(ID2D1RenderTarget *rt, double now) {
     const Palette &p = pal();
     bool busy = false;
     float l = ntp_col_l(), top = ntp_top();
-    text(rt, g_br.Get(), g_f.word.Get(), L"pluma", R(l, top, l + S(560), top + S(44)), p.text);
-    text(rt, g_br.Get(), g_f.ntp.Get(), L"Escribe una dirección arriba, o lo que quieras buscar.", R(l, top + S(46), l + S(560), top + S(70)), p.sub);
+    Tab *at = active_tab();
+    if (at && at->incognito) {
+        // what incognito does, and what it does not (as Chrome's page says it); ntp_top() leaves room for it
+        float y = top - S(kNtpIncognitoH);
+        glyph(rt, g_br.Get(), g_f.icon_lg.Get(), G_INPRIVATE, R(l - S(4), y + S(2), l + S(36), y + S(42)), p.accent);
+        text(rt, g_br.Get(), g_f.word.Get(), L"incógnito", R(l + S(46), y, l + S(560), y + S(44)), p.text);
+        const wchar_t *lines[] = { L"Pluma no guarda el historial ni las cookies de estas pestañas:",
+                                   L"todo se borra al cerrar la última o al cerrar Pluma.",
+                                   L"Las descargas y tus páginas sí se quedan, y las webs y tu red",
+                                   L"siguen viendo lo que visitas." };
+        for (int k = 0; k < 4; k++) {
+            float ly = y + S(52) + k * S(22) + (k >= 2 ? S(8) : 0);
+            text(rt, g_br.Get(), g_f.ntp.Get(), lines[k], R(l, ly, l + S(560), ly + S(22)), p.sub);
+        }
+    } else {
+        text(rt, g_br.Get(), g_f.word.Get(), L"pluma", R(l, top, l + S(560), top + S(44)), p.text);
+        text(rt, g_br.Get(), g_f.ntp.Get(), L"Escribe una dirección arriba, o lo que quieras buscar.", R(l, top + S(46), l + S(560), top + S(70)), p.sub);
+    }
     // the person's own pages (only those, once there is one), or the sites they visit most
     if (!g_ntp_rows.empty() || g_ntp_pins || !g_set.suggest_top)
         text(rt, g_br.Get(), g_f.ntp.Get(), g_ntp_pins || !g_set.suggest_top ? L"Tus páginas" : L"Lo que más visitas", R(l, top + S(90), l + S(560), top + S(112)), p.sub);
@@ -1192,7 +1224,7 @@ static bool sug_commit(bool new_tab) {
 }
 
 // ---------------------------------------------------------------- the menu
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_CLEAR, PAGE_TAB };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1334,6 +1366,7 @@ static std::vector<MItem> build_page(int page) {
     std::vector<MItem> v;
     if (page == PAGE_MAIN) {
         v.push_back(item(L"Pestaña nueva", G_NEWTAB, L"Ctrl+T", [] { after_menu([] { tab_new(L"", true); }); }));
+        v.push_back(item(L"Pestaña de incógnito", G_INPRIVATE, L"Ctrl+Mayús+N", [] { after_menu([] { tab_new(L"", true, -1, true); }); }));
         MItem re = item(L"Reabrir pestaña cerrada", G_UNDO, L"Ctrl+Mayús+T", [] { after_menu([] { tab_reopen_closed(); }); });
         v.push_back(re);
         v.push_back(sep());
@@ -1377,6 +1410,8 @@ static std::vector<MItem> build_page(int page) {
             v.push_back(m);
         }
         if (!any) v.push_back(note(L"Todavía no hay ninguna."));
+        if (ext_bundled_removed())
+            v.push_back(item(L"Volver a poner uBlock Origin Lite", G_UNDO, L"", [] { after_menu([] { ext_restore_bundled(); }); }));
         v.push_back(sep());
         v.push_back(item(L"Buscar en la Chrome Web Store", G_STORE, L"", [] { after_menu([] { tab_new(L"https://chromewebstore.google.com/", true); }); }));
         v.push_back(item(L"Abrir la carpeta de extensiones", G_FOLDER, L"", [] { after_menu([] { ShellExecuteW(NULL, L"open", extensions_folder().c_str(), NULL, NULL, SW_SHOWNORMAL); }); }));
@@ -1431,12 +1466,23 @@ static std::vector<MItem> build_page(int page) {
         Tab *t = tab_by_id(id);
         if (!t) return v;
         v.push_back(item(L"Recargar", G_RELOAD, L"", [id] { after_menu([id] { int i = tab_index(id); if (i >= 0) { tab_activate(i); tab_reload(false); } }); }));
-        v.push_back(item(L"Duplicar", G_NEWTAB, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t && !t->url.empty()) tab_new(t->url, true, tab_index(id) + 1); }); }));
+        v.push_back(item(L"Duplicar", G_NEWTAB, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t && !t->url.empty()) tab_new(t->url, true, tab_index(id) + 1, t->incognito); }); }));
         if (t->view) v.push_back(item(t->muted ? L"Volver a dar sonido" : L"Silenciar", t->muted ? G_VOL : G_MUTE, L"", [id] { after_menu([id] { tab_mute(tab_by_id(id)); }); }));
         v.push_back(sep());
         v.push_back(item(L"Cerrar las de la derecha", G_X, L"", [id] { after_menu([id] { int i = tab_index(id); while (i >= 0 && (int)g_tabs.size() > i + 1) tab_close((int)g_tabs.size() - 1); }); }));
         v.push_back(item(L"Cerrar las demás", G_X, L"", [id] { after_menu([id] { for (int k = (int)g_tabs.size() - 1; k >= 0; k--) if (g_tabs[k]->id != id) tab_close(k); }); }));
         v.push_back(item(L"Cerrar", G_X, L"Ctrl+W", [id] { after_menu([id] { tab_close(tab_index(id)); }); }));
+    } else if (page == PAGE_ONE_EXT) {
+        // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
+        size_t i = (size_t)g_menu_tab;
+        if (i >= g_exts.size()) return v;
+        v.push_back(note(g_exts[i].name));
+        if (!g_exts[i].options.empty()) v.push_back(item(L"Opciones", G_GEAR, L"", [i] { after_menu([i] { ext_open_options(i); }); }));
+        v.push_back(item(L"Desactivar", G_POWER, L"", [i] { after_menu([i] { ext_toggle(i); ui_layout(); }); }));
+        MItem rm = item(L"Quitar de Pluma", G_DELETE, L"", [i] { after_menu([i] { ext_remove(i); }); });
+        rm.danger = true;
+        v.push_back(rm);
+        v.push_back(note(L"Vuelve a activarla en ⋯ > Extensiones."));
     }
     return v;
 }
@@ -1757,10 +1803,10 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_RBUTTONUP: {
         HitInfo hi = hit_test((float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp));
-        if (hi.what == H_TAB || hi.what == H_TAB_CLOSE) {
+        if (hi.what == H_TAB || hi.what == H_TAB_CLOSE || hi.what == H_EXT) {
             POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
             ClientToScreen(h, &pt);
-            open_menu_page(PAGE_TAB, { pt.x, pt.y, pt.x, pt.y }, hi.id);
+            open_menu_page(hi.what == H_EXT ? PAGE_ONE_EXT : PAGE_TAB, { pt.x, pt.y, pt.x, pt.y }, hi.id);
         }
         return 0;
     }
@@ -1823,6 +1869,7 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
     if (ctrl && !alt) {
         if (vk == 'T' && shift) { tab_reopen_closed(); return true; }
+        if (vk == 'N' && shift) { tab_new(L"", true, -1, true); return true; }   // incognito, as in Chrome
         if (vk == 'T' || vk == 'N') { tab_new(L"", true); return true; }
         if (vk == 'W' || vk == VK_F4) { tab_close(g_active); return true; }
         if (vk == VK_TAB || vk == VK_PRIOR || vk == VK_NEXT) {
