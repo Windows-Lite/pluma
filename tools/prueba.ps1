@@ -2,7 +2,8 @@
 #   tools\prueba.ps1 [-Nombre t1] [-Url https://...] [-Puerto 9401] [-Limpio]     starts it (closing a previous one)
 #   tools\prueba.ps1 -Salir                                                         closes it
 param([string]$Nombre = 't1', [string]$Url = '', [int]$Puerto = 9401, [switch]$Limpio, [switch]$Salir, [switch]$Oculto)
-$exe = Join-Path (Split-Path $PSScriptRoot) 'Pluma.exe'
+# PLUMA_EXE: a build elsewhere (never test with the exe the user's own Pluma is running from)
+$exe = if ($env:PLUMA_EXE) { $env:PLUMA_EXE } else { Join-Path (Split-Path $PSScriptRoot) 'Pluma.exe' }
 $env:PLUMA_INSTANCIA = $Nombre
 $env:PLUMA_DEPURAR = "$Puerto"
 $mutex = "PlumaNavegadorUnico.$Nombre"

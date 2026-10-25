@@ -20,7 +20,13 @@ void with_profile(std::function<void(ICoreWebView2Profile *)> f) {
 }
 
 Tab *active_tab() { return g_active >= 0 && g_active < (int)g_tabs.size() ? g_tabs[g_active].get() : nullptr; }
-Tab *tab_by_id(int id) { for (auto &t : g_tabs) if (t->id == id) return t.get(); return nullptr; }
+static std::unique_ptr<Tab> g_pre;   // a page loading before it is asked for (typed, or under the mouse)
+static std::wstring g_pre_asked;      // the address it was asked with (a redirect changes its url)
+Tab *tab_by_id(int id) {
+    for (auto &t : g_tabs) if (t->id == id) return t.get();
+    if (g_pre && g_pre->id == id) return g_pre.get();
+    return nullptr;
+}
 int tab_index(int id) { for (size_t i = 0; i < g_tabs.size(); i++) if (g_tabs[i]->id == id) return (int)i; return -1; }
 
 // ---------------------------------------------------------------- what was typed -> where to go
@@ -61,9 +67,10 @@ std::wstring fixup_input(const std::wstring &typed) {
 static std::wstring browser_args() {
     // AppContainer: every page runs in a tighter sandbox than the default one (as in Edge's enhanced security)
     std::wstring a = L"--enable-features=msWebView2RendererAppContainer";
-    // the graphics keep decoded images of every page seen, up to a budget made for big PCs: 64 MB is plenty to scroll
-    // through photos without decoding them again, and saved about 17 MB with six tabs (measured 25/10)
-    a += L" --force-gpu-mem-discardable-limit-mb=64";
+    // the graphics keep decoded images of every page seen, up to a budget made for big PCs. On a laptop's integrated
+    // graphics that memory is the PC's RAM and cannot be given back: 32 MB still holds several screens of photos
+    // (a full screen of images is ~5 MB), and saved 17-35 MB with seven tabs (measured 25/10)
+    a += L" --force-gpu-mem-discardable-limit-mb=32";
     wchar_t port[16] = L"";
     if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) a += L" --remote-debugging-port=" + std::wstring(port);
     wchar_t extra[1024] = L"";
@@ -181,7 +188,13 @@ static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done)
 }
 static void CALLBACK spare_timer(HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); spare_prepare(); }
 void spare_prepare() {
-    if (g_spare || g_spare_making || !g_env || g_quitting) return;
+    if (!g_set.spare && !g_profile_waiters.empty() && !g_profile && !g_spare_making) {
+        // no spare views, but something waits for the profile: a view only for that, let go at once
+        g_spare_making = true;
+        make_view([](ComPtr<ICoreWebView2Controller> c) { g_spare_making = false; if (c) c->Close(); });
+        return;
+    }
+    if (!g_set.spare || g_spare || g_spare_making || !g_env || g_quitting) return;
     g_spare_making = true;
     make_view([](ComPtr<ICoreWebView2Controller> c) { g_spare_making = false; g_spare = c; });
 }
@@ -315,8 +328,18 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             t->progress = 1;
             t->load_done = now_ms();
             t->crashed = false;
-            if (ok) history_add(t->url, t->title);
+            if (ok && tab_index(t->id) >= 0) history_add(t->url, t->title);
             if (ok && t == active_tab()) trim_after_load();
+            if (ok && t->restoring) {
+                // back to where the page was; again a moment later for pages that grow as they load, unless the
+                // person has scrolled by then
+                t->restoring = false;
+                wchar_t js[400];
+                swprintf_s(js, L"(() => { const x = %.0f, y = %.0f; let moved = false; const stop = () => moved = true;"
+                               L" for (const e of ['wheel', 'keydown', 'mousedown', 'touchstart']) addEventListener(e, stop, { once: true, passive: true });"
+                               L" const go = () => { if (!moved) scrollTo(x, y); }; go(); setTimeout(go, 500); setTimeout(go, 1500); })()", t->saved_x, t->saved_y);
+                t->view->ExecuteScript(js, NULL);
+            }
             if (g_open_asked >= 0 && t == active_tab()) {
                 log_line(L"página lista " + std::to_wstring((int)(now_ms() - g_open_asked)) + L" ms después de pedirla" + (g_open_asked == 0 ? L" (arrancando)" : L" (desde memoria)"));
                 g_open_asked = -1;
@@ -514,11 +537,24 @@ static void ensure_view(Tab *t) {
         if (!t || !c) { if (c) c->Close(); if (t) t->creating = false; return; }
         attach(t, c);
         std::wstring url = t->pending.empty() ? t->url : t->pending;
+        bool back = t->pending.empty() && (t->saved_y > 0 || t->saved_x > 0 || t->saved_media > 3);
         t->pending.clear();
+        if (back) {
+            t->restoring = true;
+            // a YouTube video starts again at the second it was left at
+            if (t->saved_media > 3 && (url.find(L"youtube.com/watch") != std::wstring::npos) && url.find(L"&t=") == std::wstring::npos)
+                url += L"&t=" + std::to_wstring((int)t->saved_media) + L"s";
+        }
         t->view->Navigate(url.c_str());
         if (t == active_tab()) tab_activate(g_active);
         else t->hidden_since = now_ms();
     });
+}
+
+void tab_warm(Tab *t) {
+    if (!t || t->view || t->creating || t->url.empty() || t == active_tab()) return;
+    t->hidden_since = now_ms();
+    ensure_view(t);
 }
 
 void tabs_layout_views() {
@@ -585,6 +621,17 @@ static void hide_view(Tab *t) {
     if (!t) return;
     t->hidden_since = now_ms();
     if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
+    // where it was: if it is let go later, it comes back to the same place (and a video to the same second)
+    if (t->view && !t->loading) {
+        int id = t->id;
+        t->view->ExecuteScript(L"[scrollX, scrollY, ((document.querySelector('video') || {}).currentTime) || 0]",
+            Callback<ICoreWebView2ExecuteScriptCompletedHandler>([id](HRESULT hr, LPCWSTR r) -> HRESULT {
+                Tab *t = tab_by_id(id);
+                double x = 0, y = 0, m = 0;
+                if (t && SUCCEEDED(hr) && r && swscanf_s(r, L"[%lf,%lf,%lf]", &x, &y, &m) == 3) { t->saved_x = x; t->saved_y = y; t->saved_media = m; }
+                return S_OK;
+            }).Get());
+    }
 }
 void tab_activate(int i) {
     if (i < 0 || i >= (int)g_tabs.size()) return;
@@ -616,10 +663,59 @@ void tab_activate(int i) {
     ui_invalidate();
     session_save_soon();
 }
+// What is about to be asked for starts loading at once, in a view of its own, out of sight: the address the
+// autocompletion is sure of while it is being typed, a site of the new tab page under the mouse. If it is asked for,
+// that view becomes the tab (the page is already there, or on its way); if not, it goes after half a minute.
+// Only for new tabs: an existing tab keeps its own view and its history.
+void tabs_preload(const std::wstring &url) {
+    if (g_pre && url == g_pre_asked) return;
+    if (g_pre) { release_view(g_pre.get()); g_pre.reset(); g_pre_asked.clear(); KillTimer(g_win, 0x51A7); }
+    if (url.empty() || !g_env || g_quitting) return;
+    if (!starts_with(url, L"https://") && !starts_with(url, L"http://")) return;
+    if (url.rfind(search_url(L""), 0) == 0) return;   // not searches: each would be a query sent to the engine
+    g_pre = std::make_unique<Tab>();
+    g_pre->id = g_next_id++;
+    g_pre->url = url;
+    g_pre->pending = url;
+    g_pre->icon_png = cached_icon(url);
+    g_pre->creating = true;
+    g_pre->hidden_since = now_ms();
+    g_pre_asked = url;
+    int id = g_pre->id;
+    take_view([id](ComPtr<ICoreWebView2Controller> c) {
+        Tab *t = tab_by_id(id);   // still waiting, or already a tab
+        if (!t || !c) { if (c) c->Close(); return; }
+        attach(t, c);
+        std::wstring u = t->pending;
+        t->pending.clear();
+        t->view->Navigate(u.c_str());
+        if (t == active_tab()) tab_activate(g_active);
+    });
+    SetTimer(g_win, 0x51A7, 30000, [](HWND, UINT, UINT_PTR tid, DWORD) { KillTimer(g_win, tid); tabs_preload(L""); });
+}
+static bool use_preload(Tab *t, const std::wstring &url) {
+    if (!g_pre || g_pre_asked != url || t->view || t->creating) return false;
+    int i = tab_index(t->id);
+    if (i < 0) return false;
+    KillTimer(g_win, 0x51A7);
+    std::unique_ptr<Tab> p = std::move(g_pre);
+    g_pre_asked.clear();
+    p->hidden_since = 0;
+    ui_release_icon(t);
+    g_tabs[i] = std::move(p);   // the empty tab gives its place to the page already on its way
+    Tab *n = g_tabs[i].get();
+    if (n->view && !n->loading) history_add(n->url, n->title);
+    ui_tab_icon_changed(n);
+    if (i == g_active) tab_activate(i);
+    log_line(L"página cargada de antemano: " + url + (n->loading ? L" (aún cargando)" : L" (ya lista)"));
+    return true;
+}
+
 void tab_navigate(Tab *t, const std::wstring &url) {
     if (!t || url.empty()) return;
-    t->url = url;
+    if (!t->view && use_preload(t, url)) return;
     if (url_host(url) != url_host(t->url) || t->icon_png.empty()) { std::string png = cached_icon(url); t->icon_png = png; ui_tab_icon_changed(t); }
+    t->url = url;
     if (t->view) {
         t->view->Navigate(url.c_str());
         t->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
@@ -738,7 +834,12 @@ void tabs_tick() {
                     return S_OK;
                 }).Get());
         }
-        if (g_set.discard_min > 0 && hidden > g_set.discard_min * 60000.0) { release_view(t); continue; }
+        // the most recently looked-at hidden tabs stay frozen (they come back at once); the rest are let go after
+        // discard_s, and come back where they were (saved_x/y)
+        int newer = 0;
+        for (auto &o : g_tabs) if (o.get() != t && o->view && o->hidden_since > t->hidden_since && !o->audible) newer++;
+        double limit = newer < g_set.keep_recent ? g_set.recent_discard_min * 60.0 : g_set.discard_s;
+        if (limit > 0 && hidden > limit * 1000.0) { release_view(t); continue; }
         if (!oldest || t->hidden_since < oldest->hidden_since) oldest = t;
     }
     if (pressure && oldest && now - oldest->hidden_since > 10000) {
@@ -803,7 +904,8 @@ void tabs_trim(int mode) {
                 pi->get_ProcessId(&pid); pi->get_Kind(&kind);
                 // while on screen the graphics keep everything (no stutter); the engine too, unless the PC is idle
                 if (mode == TRIM_FROZEN && kind != COREWEBVIEW2_PROCESS_KIND_RENDERER) continue;
-                if (mode == TRIM_IDLE && kind == COREWEBVIEW2_PROCESS_KIND_GPU) continue;
+                static bool gpu_test = [] { wchar_t v[4] = L""; return GetEnvironmentVariableW(L"PLUMA_RECORTAR_GRAFICA", v, 4) > 0; }();
+                if (mode == TRIM_IDLE && kind == COREWEBVIEW2_PROCESS_KIND_GPU && !gpu_test) continue;
                 bool needed = false;
                 ComPtr<ICoreWebView2FrameInfoCollection> frames;
                 if (SUCCEEDED(x->get_AssociatedFrameInfos(&frames)) && frames) {
@@ -819,7 +921,7 @@ void tabs_trim(int mode) {
                 }
                 if (!needed) empty_ws((DWORD)pid);
             }
-            if (everything) EmptyWorkingSet(GetCurrentProcess());
+            if (mode != TRIM_FROZEN) EmptyWorkingSet(GetCurrentProcess());
             return S_OK;
         }).Get());
 }

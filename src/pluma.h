@@ -69,7 +69,10 @@ struct Settings {
     std::wstring engine = L"google";   // google, duckduckgo, bing, startpage, brave
     int theme = 1;                     // 0 light (as Mapea), 1 dark (the default), 2 as Windows
     int sleep_s = 45;                  // a hidden tab is frozen after this
-    int discard_min = 20;              // ... and unloaded after this (0 = never)
+    int discard_s = 60;                // ... and unloaded after this (0 = never), except the most recent ones:
+    int keep_recent = 2;               // the last tabs looked at stay frozen (to come back at once) for
+    int recent_discard_min = 20;       // this long
+    bool spare = false;                // a view made ahead of time (the next page starts 35 ms sooner; costs ~10 MB)
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
@@ -115,6 +118,8 @@ struct Tab {
     double hidden_since = 0;           // 0 while it is the one on screen
     std::wstring pending;              // a url to load as soon as the view exists
     std::vector<std::wstring> scripts_ids;   // the injected userscripts, to swap them
+    double saved_x = 0, saved_y = 0, saved_media = 0;   // where the page was when it was last hidden
+    bool restoring = false;            // unloaded and loaded again: put it back where it was
     float progress = 0;                // loading line, 0..1 (estimated: WebView2 does not give one)
     double load_started = 0, load_done = 0;
     // the bar's geometry, animated
@@ -132,6 +137,8 @@ Tab *tab_new(const std::wstring &url, bool activate, int at = -1);   // url "" =
 void tab_close(int index, bool from_mouse = false);
 void tab_activate(int index);
 void tab_navigate(Tab *t, const std::wstring &url);
+void tabs_preload(const std::wstring &url);
+void tab_warm(Tab *t);                    // a tab that was let go starts loading again (the mouse rests on it)   // starts loading what is about to be asked for ("" stops it)
 void tab_reopen_closed();
 void tabs_layout_views();                 // put the active view where the page goes
 void tabs_tick();                         // every few seconds: freeze, unload

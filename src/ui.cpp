@@ -913,6 +913,9 @@ static LRESULT CALLBACK edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                     SendMessageW(h, EM_SETSEL, n, (LPARAM)comp.size());
                     g_in_change = false;
                 }
+                // sure of where this is going (a known site): it starts loading now, in a new tab
+                Tab *at = active_tab();
+                if (at && !at->view && !at->creating) tabs_preload(comp.size() > txt.size() ? fixup_input(comp) : L"");
             }
             update_suggestions();
             return r;
@@ -1490,6 +1493,8 @@ static void set_hover(HitInfo h) {
     fade(g_hover, 0);
     fade(h, 1);
     g_hover = h;
+    if (h.what == H_NTP_ROW) SetTimer(g_bar, 33, 120, NULL);
+    if (h.what == H_TAB) SetTimer(g_bar, 34, 150, NULL);
     HCURSOR cur = LoadCursorW(NULL, h.what == H_ADDR ? IDC_IBEAM : h.what == H_NTP_ROW ? IDC_HAND : IDC_ARROW);
     SetCursor(cur);
     ui_invalidate();
@@ -1677,6 +1682,17 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (!busy) g_anim_on = false;
         return 0;
     }
+    case WM_TIMER:
+        if (wp == 34) {   // the mouse rests on a tab that was let go: it starts loading before the click
+            KillTimer(h, 34);
+            if (g_hover.what == H_TAB) tab_warm(tab_by_id(g_hover.id));
+        }
+        if (wp == 33) {   // the mouse rests on a site of the new tab page: it starts loading
+            KillTimer(h, 33);
+            Tab *t = active_tab();
+            if (g_hover.what == H_NTP_ROW && g_hover.id < (int)g_ntp_rows.size() && t && !t->view && !t->creating) tabs_preload(g_ntp_rows[g_hover.id].url);
+        }
+        return 0;
     case WM_APP + 20:   // the address field lost the focus
         if (!ui_address_focused()) {
             ShowWindow(g_edit, SW_HIDE);

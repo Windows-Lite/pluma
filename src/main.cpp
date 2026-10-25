@@ -151,7 +151,11 @@ void settings_load() {
     std::wstring th = ini_get(L"tema", L"oscuro");   // dark by default: how the user browses
     g_set.theme = th == L"claro" ? 0 : th == L"sistema" ? 2 : 1;
     g_set.sleep_s = std::max(10, _wtoi(ini_get(L"dormir_s", L"45").c_str()));
-    g_set.discard_min = std::max(0, _wtoi(ini_get(L"descargar_min", L"20").c_str()));
+    g_set.discard_s = std::max(0, _wtoi(ini_get(L"descargar_s", L"60").c_str()));
+    if (g_set.discard_s > 0 && g_set.discard_s < 10) g_set.discard_s = 10;
+    g_set.keep_recent = std::max(0, _wtoi(ini_get(L"recientes", L"2").c_str()));
+    g_set.recent_discard_min = std::max(0, _wtoi(ini_get(L"descargar_min", L"20").c_str()));
+    g_set.spare = ini_get(L"reserva", L"0") == L"1";
     g_set.resident = ini_get(L"residente", L"1") != L"0";
     g_set.schemes.clear();
     std::wstring sc = ini_get(L"protocolos", L"ytmp3");
@@ -169,7 +173,9 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"buscador", g_set.engine.c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"tema", g_set.theme == 1 ? L"oscuro" : g_set.theme == 2 ? L"sistema" : L"claro", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"dormir_s", std::to_wstring(g_set.sleep_s).c_str(), f.c_str());
-    WritePrivateProfileStringW(L"pluma", L"descargar_min", std::to_wstring(g_set.discard_min).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"descargar_s", std::to_wstring(g_set.discard_s).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"recientes", std::to_wstring(g_set.keep_recent).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"descargar_min", std::to_wstring(g_set.recent_discard_min).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"residente", g_set.resident ? L"1" : L"0", f.c_str());
     std::wstring sc;
     for (auto &s : g_set.schemes) sc += (sc.empty() ? L"" : L",") + s;
@@ -433,6 +439,7 @@ static void open_urls(const std::vector<std::wstring> &urls) {
 static void quit_now() {
     log_line(L"saliendo");
     g_quitting = true;
+    SetPropW(g_win, L"saliendo", (HANDLE)1);   // a Pluma.exe started now waits for this one to go, then starts
     ui_close_popups();
     if (IsWindowVisible(g_win)) { save_placement(); session_save(); }
     history_flush();
@@ -624,9 +631,20 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     HANDLE mutex = CreateMutexW(NULL, FALSE, g_mutex.c_str());
     if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
-        // one already in memory: hand over and leave
+        // one already in memory: hand over and leave. If it is closing for good (or still starting), wait: once it
+        // is gone this one starts instead (opening Pluma right after quitting it used to do nothing)
         HWND other = NULL;
-        for (int i = 0; i < 150 && !other; i++) { other = FindWindowW(g_class.c_str(), NULL); if (!other) Sleep(20); }
+        bool primary = false;
+        for (int i = 0; i < 250; i++) {
+            other = FindWindowW(g_class.c_str(), NULL);
+            if (other && !GetPropW(other, L"saliendo")) break;
+            other = NULL;
+            CloseHandle(mutex);
+            mutex = CreateMutexW(NULL, FALSE, g_mutex.c_str());
+            if (mutex && GetLastError() != ERROR_ALREADY_EXISTS) { primary = true; break; }
+            Sleep(20);
+        }
+        if (!other && !primary) return 0;
         if (other) {
             DWORD pid = 0; GetWindowThreadProcessId(other, &pid);
             AllowSetForegroundWindow(pid);
@@ -638,8 +656,8 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
                 DWORD_PTR res = 0;
                 SendMessageTimeoutW(other, WM_COPYDATA, 0, (LPARAM)&cds, SMTO_ABORTIFHUNG, 3000, &res);
             } else if (!g_start_hidden) PostMessageW(other, WM_APP_SHOW, 0, 0);
+            return 0;
         }
-        return 0;
     }
     if (quit) return 0;
 

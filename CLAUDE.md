@@ -10,13 +10,17 @@ código y commits en inglés; nada de em dashes.
 - `Pluma.exe` (C++ + WebView2, el motor de Edge que trae Windows y que Microsoft parchea solo). Una sola instancia que
   se queda en memoria al cerrar la ventana (como Zas): `Pluma.exe [url]`, `--oculto` (arranque con Windows),
   `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema,
-  dormir_s, descargar_min, residente, protocolos, `motor` = argumentos extra para el motor), sesión en `sesion.tsv`,
+  dormir_s, descargar_s, recientes, descargar_min, reserva, residente, protocolos, `motor` = argumentos extra para el
+  motor), sesión en `sesion.tsv`,
   historial en `historial.tsv`, iconos de webs en `iconos\`, registro con tiempos en `pluma.log`.
 - `src/main.cpp`: ventana con marco propio (las pestañas son la barra de título; los botones de Windows 11 con su menú
   de acoplar vía HTMAXBUTTON), ajustes, historial y autocompletado, arranque.
 - `src/tabs.cpp`: una vista WebView2 por pestaña **solo cuando hace falta** (pestaña nueva = ninguna; restaurada = al
-  mirarla), vista de reserva para que la siguiente página empiece al instante, dormir y descargar pestañas, recortes de
-  memoria (`tabs_trim`), sesión, `ytmp3:` sin preguntar (`protocolos`), errores del motor.
+  mirarla), dormir y soltar pestañas (vuelven al mismo punto: `saved_x/y`, y YouTube al mismo segundo), recortes de
+  memoria (`tabs_trim`), **precarga** (`tabs_preload`: lo que el autocompletado da por seguro mientras se escribe, o un
+  sitio de la pestaña nueva bajo el ratón, carga en una vista aparte que pasa a ser la pestaña al pulsar Enter;
+  `tab_warm`: una pestaña soltada con el ratón encima empieza a cargar antes del clic), sesión, `ytmp3:` sin preguntar
+  (`protocolos`), errores del motor.
 - `src/ui.cpp`: la barra dibujada con Direct2D (nada de la interfaz es una página web: no cuesta procesos), menú,
   sugerencias, avisos, pestaña nueva. Diseño de Mapea (sus colores, Roboto Mono en `fuentes/`, radios 10/14).
   Animaciones: un hilo espera a cada refresco de la pantalla (DwmFlush) y pide un fotograma solo mientras algo se mueve.
@@ -27,29 +31,40 @@ código y commits en inglés; nada de em dashes.
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
-- Compilar: `src\compilar.cmd` (cierra el Pluma en memoria) o `src\compilar.cmd <ruta>` (sin cerrar nada).
+- Compilar: `src\compilar.cmd <ruta>` para probar (no cierra nada). `src\compilar.cmd` a secas cierra el Pluma en
+  memoria (el del usuario): solo para ponerle la versión nueva, avisándole antes (el 25/10 se lo cerré usándolo).
 
-## Pruebas (nunca con el Pluma del usuario ni sus datos)
+## Pruebas (nunca con el Pluma del usuario ni sus datos, ni con su Pluma.exe: `PLUMA_EXE=<exe compilado aparte>`, con `extensiones` y `fuentes` enlazadas con `mklink /J` junto a él)
 ```
 tools\prueba.ps1 [-Nombre t1] [-Url ...] [-Puerto 9401] [-Limpio] [-Salir]   instancia de prueba fuera de la pantalla
 tools\medir.ps1 [-Nombre t1] [-Detalle]      RAM como la cuenta el Administrador de tareas, por tipo de proceso
 tools\captura.exe <clase> <png> [click x y | mclick | rclick | key vk | char texto | wait ms]   foto de la ventana
 node tools\cdp.js <puerto> <url> <expresión>  evalúa en una página (DevTools); tools\clic.js: clic de verdad
+tools\escenario.ps1 -Nombre x [-Ajustes 'clave=valor',...]   las 7 pestañas de la comparación con Firefox, medidas
+tools\tres.ps1 -Nombre x [-Ajustes ...]       3 pestañas (Wikipedia, GitHub, Google), medidas
 ```
+Las medidas varían mucho entre pasadas (la gráfica, de 47 a 120 MB en el mismo escenario): comparar ideas lanzándolas
+a la vez y repetir antes de creerse una diferencia pequeña.
 Clase de la ventana de prueba: `PlumaVentana.<nombre>`; paneles `PlumaPanel`; datos en `%LOCALAPPDATA%\Pluma\prueba.<nombre>`.
 `PLUMA_REPOSO_S=<s>` hace como si nadie tocara el PC desde el segundo s (para medir el recorte en reposo).
 Antes de enseñar algo: captura y mirarla.
 
 ## La RAM (lo que más le importa; medir antes y después de cada cambio)
-Medido el 25/10 en el portátil (i5-10300H, 16 GB), privada como el Administrador de tareas:
-- Su Firefox con 7 pestañas: 3.100 MB. Pluma con 7 (YouTube, Marca, El País, Reddit, Wikipedia, GitHub, Google):
-  887-960 MB todas vivas; 271 MB con las de fondo dormidas (cada una 2-3 MB); 6 sin YouTube, 206-227 MB.
+Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada como el Administrador de tareas:
+- Su Firefox con 7 pestañas: 3.100 MB. Pluma con las 7 de `escenario.ps1`: 887-960 MB todas vivas; con las de fondo
+  congeladas 214-271; soltando las de fondo salvo las 2 últimas, 140-183. Con 3 pestañas, 134-145.
 - Una pestaña ligera (Google): 183 MB usándola, 109 MB tras un rato quieto. Cerrado y en memoria: 13 MB.
-- Gráfica: caché de imágenes decodificadas con tope de 64 MB (`--force-gpu-mem-discardable-limit-mb`, -17 MB con 6).
-- Lo que no se toca: la gráfica y la pestaña a la vista nunca se recortan mientras se ve (daría tirones).
-- Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja) y soltadas a los 20 min; procesos sin
-  nada visible devuelven su memoria con EmptyWorkingSet (vuelve en microsegundos si hace falta); al cerrar la
-  ventana se congela todo (lo que suena se suelta) y todo devuelve su memoria.
+- Lo que queda con una web delante: la gráfica 45-120 MB (texturas; en una gráfica integrada son RAM y no se pueden
+  devolver: EmptyWorkingSet no le quita nada, y recortarla o avisarle de poca memoria no la baja), el motor 25-70,
+  la página (Google ~45, YouTube 220-380, igual que en cualquier navegador), la interfaz 3-15, la red ~10.
+- Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja); soltadas al minuto salvo las 2 últimas
+  vistas (`recientes`), que aguantan 20 min; caché de imágenes de la gráfica con tope de 32 MB
+  (`--force-gpu-mem-discardable-limit-mb`); sin vista de reserva (`reserva=0`: crear una vista son ~35 ms); procesos
+  sin nada visible (y el motor, la red y la interfaz 4 s después de cada carga) devuelven su memoria con
+  EmptyWorkingSet; al cerrar la ventana se congela todo (lo que suena se suelta) y todo devuelve su memoria.
+- Probado y descartado: encoger las vistas congeladas, recortar la gráfica, la gráfica NVIDIA
+  (`--force_high_performance_gpu`), un «poca memoria» momentáneo en la página a la vista. Ninguno bajaba nada.
+- No hacer: quitar el aislamiento de sitios (seguridad) ni recortar la gráfica o la página a la vista (tirones).
 
 ## Seguridad
 - Motor de Edge, actualizado por Windows. Páginas en AppContainer (`msWebView2RendererAppContainer`), aislamiento de
@@ -66,5 +81,5 @@ Medido el 25/10 en el portátil (i5-10300H, 16 GB), privada como el Administrado
   pintura pendiente): no se cerraba, no guardaba la sesión. Por eso las animaciones van por el hilo de DwmFlush.
 - `@match` con `*`: escapar todo menos el asterisco y luego `*` -> `.*` (antes quedaba `/*` y nunca casaba).
 - Desde PowerShell, `FindWindowW` con título nulo pide `[NullString]::Value`.
-- Una instancia de prueba que no termina de salir se traga las siguientes (la nueva le pasa la url y se va):
-  `prueba.ps1` espera al mutex y al proceso.
+- Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
+  iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.
