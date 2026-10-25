@@ -18,9 +18,9 @@ std::wstring settings_page_display(const std::wstring &u) {
 }
 std::wstring settings_page_from_typed(const std::wstring &typed) {
     std::wstring t = lower(typed);
-    // Pluma's own pages: pluma://settings, pluma://bookmarks, pluma://importar (edge:// and chrome:// settings too, by habit)
+    // Pluma's own pages: pluma://settings, pluma://bookmarks, pluma://import (edge:// and chrome:// settings too, by habit)
     if (starts_with(t, L"pluma://bookmarks") || starts_with(t, L"pluma://marcadores")) return std::wstring(kHost) + L"bookmarks";
-    if (starts_with(t, L"pluma://importar") || starts_with(t, L"pluma://import")) return std::wstring(kHost) + L"importar";
+    if (starts_with(t, L"pluma://import")) return std::wstring(kHost) + L"import";
     for (const wchar_t *p : { L"pluma://", L"edge://settings", L"chrome://settings" })
         if (starts_with(t, p)) return kPage;
     return L"";
@@ -31,7 +31,7 @@ static int page_resource(const std::wstring &u) {
     size_t cut = path.find_first_of(L"?#");
     if (cut != std::wstring::npos) path = path.substr(0, cut);
     if (path == L"bookmarks") return 201;
-    if (path == L"importar") return 202;
+    if (path == L"import") return 202;
     if (path.empty() || path == L"settings") return 200;
     return 0;
 }

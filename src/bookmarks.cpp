@@ -1,5 +1,5 @@
 // Pluma: bookmarks (marcadores.json, a tree of folders) and the two pages that go with them, served from the exe like
-// the settings page: the manager (pluma://bookmarks) and the import wizard (pluma://importar). settings.cpp serves the
+// the settings page: the manager (pluma://bookmarks) and the import wizard (pluma://import). settings.cpp serves the
 // HTML and routes the messages here.
 //
 // The tree has two permanent folders at the top: "Barra de marcadores" (role 1, the optional bar) and "Tus páginas"
@@ -234,8 +234,8 @@ void bookmarks_open() {
     tab_new(page, true);
 }
 void import_open() {
-    std::wstring page = L"https://pluma.local/importar";
-    for (size_t i = 0; i < g_tabs.size(); i++) if (settings_page_url(g_tabs[i]->url) && g_tabs[i]->url.find(L"/importar") != std::wstring::npos) { tab_activate((int)i); return; }
+    std::wstring page = L"https://pluma.local/import";
+    for (size_t i = 0; i < g_tabs.size(); i++) if (settings_page_url(g_tabs[i]->url) && g_tabs[i]->url.find(L"/import") != std::wstring::npos) { tab_activate((int)i); return; }
     tab_new(page, true);
 }
 
@@ -271,7 +271,7 @@ static std::wstring profiles_json() {
 }
 std::wstring bm_page_state(const std::wstring &path, const Json &texts) {
     std::wstring o = L"{\"op\":\"state\",\"dark\":" + std::wstring(dark_theme() ? L"true" : L"false") + L",\"lang\":" + json_escape(lang_code());
-    if (path.find(L"/importar") != std::wstring::npos) {
+    if (path.find(L"/import") != std::wstring::npos) {
         o += L",\"profiles\":" + profiles_json();
         o += L",\"passwordKind\":" + std::to_wstring(passwords_store_kind());
     } else {
@@ -291,8 +291,8 @@ void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j) {
     std::wstring op = j[L"op"].s;
     if (op == L"get") { v->PostWebMessageAsJson(bm_page_state(path, j[L"texts"]).c_str()); return; }
     if (op == L"open") { std::wstring u = j[L"url"].s; if (!u.empty()) tab_new(u, !j[L"background"].b); return; }
-    if (op == L"import" && path.find(L"/importar") == std::wstring::npos) { import_open(); return; }
-    if (path.find(L"/importar") != std::wstring::npos) {
+    if (op == L"import" && path.find(L"/import") == std::wstring::npos) { import_open(); return; }
+    if (path.find(L"/import") != std::wstring::npos) {
         if (op == L"import") {
             auto ps = import_scan();
             int i = (int)j[L"profile"].n;

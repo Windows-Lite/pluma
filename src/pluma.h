@@ -31,6 +31,8 @@
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
+struct Json;   // json.h; the bookmarks/import pages take and give JSON
+
 // ---------------------------------------------------------------- small things (main.cpp)
 double now_ms();
 std::string utf8(const std::wstring &s);
@@ -160,7 +162,7 @@ int bm_new_id();                    // a fresh node id (for import, which builds
 BmNode &bm_root();                  // the root folder (its kids are the top-level folders)
 void bm_commit();                   // after a batch change: save, resync the new tab page, refresh the open pages
 void bookmarks_open();              // the manager page (pluma://bookmarks)
-void import_open();                 // the wizard (pluma://importar)
+void import_open();                 // the wizard (pluma://import)
 // the pages Pluma serves from the exe that are not the settings page (bookmarks.cpp answers them)
 std::wstring bm_page_state(const std::wstring &path, const Json &texts);
 void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j);
