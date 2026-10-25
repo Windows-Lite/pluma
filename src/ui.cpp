@@ -1,5 +1,5 @@
 // Pluma: the bar (tabs, buttons, address), the menu, the suggestions and the new tab page, drawn with Direct2D.
-// Mapea's design system: light paper by default (dark as an option), Roboto Mono, radius 10 for controls and 14 for
+// Mapea's design system: light paper and dark ink (as Windows by default), Windows's typeface (any other as an option), radius 10 for controls and 14 for
 // panels, flat shadows on controls and lifted ones only on the panels that float. One motion language: ease-out,
 // no overshoot; 120 ms for hover and focus, 180 ms for tabs, 140 ms for panels; nothing moves when Windows says
 // "no animations". The one signature: the active tab is a sheet that slides from tab to tab.
@@ -27,7 +27,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
-                 G_INPRIVATE = 0xE727 };
+                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -61,8 +61,9 @@ const Palette &pal() {
 static ComPtr<ID2D1Factory> g_d2d;
 static ComPtr<IDWriteFactory> g_dw;
 static ComPtr<IWICImagingFactory> g_wic;
-static ComPtr<IDWriteFontCollection> g_ui_fonts;   // Roboto Mono, from the fuentes folder
-static std::wstring g_ui_family = L"Roboto Mono", g_icon_family = L"Segoe Fluent Icons";
+static ComPtr<IDWriteFontCollection> g_ui_fonts;   // the fuentes folder's, when the chosen family is one of them (else Windows's)
+static ComPtr<IDWriteFontCollection> g_own_fonts;  // Roboto and Roboto Mono, from the fuentes folder
+static std::wstring g_ui_family = L"Segoe UI", g_icon_family = L"Segoe Fluent Icons";
 static ComPtr<ID2D1HwndRenderTarget> g_rt;
 static D2D1_RENDER_TARGET_TYPE render_type() {
     // PLUMA_DIBUJO=cpu draws the bar without the graphics card (to compare what each costs)
@@ -109,31 +110,37 @@ static void make_formats() {
     g_f.notice = make_format(false, S(12.5f), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     if (g_edit_font) DeleteObject(g_edit_font);
     g_edit_font = CreateFontW(-(int)lroundf(S(13)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
-                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, FIXED_PITCH, g_ui_family.c_str());
+                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, g_ui_family.c_str());
+}
+static bool has_family(IDWriteFontCollection *c, const std::wstring &name) {
+    UINT32 idx; BOOL exists = FALSE;
+    return c && SUCCEEDED(c->FindFamilyName(name.c_str(), &idx, &exists)) && exists;
 }
 static void load_fonts() {
-    std::wstring path = g_root + L"\\fuentes\\RobotoMono.ttf";
-    ComPtr<IDWriteFactory5> f5;
-    bool ok = false;
-    if (PathFileExistsW(path.c_str()) && SUCCEEDED(g_dw.As(&f5))) {
-        ComPtr<IDWriteFontSetBuilder1> b;
-        ComPtr<IDWriteFontFile> file;
-        ComPtr<IDWriteFontSet> set;
-        ComPtr<IDWriteFontCollection1> coll;
-        if (SUCCEEDED(f5->CreateFontSetBuilder(&b)) && SUCCEEDED(f5->CreateFontFileReference(path.c_str(), NULL, &file)) &&
-            SUCCEEDED(b->AddFontFile(file.Get())) && SUCCEEDED(b->CreateFontSet(&set)) &&
-            SUCCEEDED(f5->CreateFontCollectionFromFontSet(set.Get(), &coll))) {
-            g_ui_fonts = coll;
-            ok = true;
-        }
-        AddFontResourceExW(path.c_str(), FR_PRIVATE, 0);   // the address field is a Windows edit control (GDI)
-    }
-    if (!ok) g_ui_family = L"Segoe UI";
     ComPtr<IDWriteFontCollection> sys;
     g_dw->GetSystemFontCollection(&sys);
-    UINT32 idx; BOOL exists = FALSE;
-    if (sys) sys->FindFamilyName(L"Segoe Fluent Icons", &idx, &exists);
-    if (!exists) g_icon_family = L"Segoe MDL2 Assets";
+    ComPtr<IDWriteFactory5> f5;
+    if (!g_own_fonts && SUCCEEDED(g_dw.As(&f5))) {
+        ComPtr<IDWriteFontSetBuilder1> b;
+        ComPtr<IDWriteFontSet> set;
+        ComPtr<IDWriteFontCollection1> coll;
+        if (SUCCEEDED(f5->CreateFontSetBuilder(&b))) {
+            for (const wchar_t *name : { L"Roboto.ttf", L"RobotoMono.ttf" }) {
+                std::wstring path = g_root + L"\\fuentes\\" + name;
+                ComPtr<IDWriteFontFile> file;
+                if (!PathFileExistsW(path.c_str()) || FAILED(f5->CreateFontFileReference(path.c_str(), NULL, &file))) continue;
+                b->AddFontFile(file.Get());
+                AddFontResourceExW(path.c_str(), FR_PRIVATE, 0);   // the address field is a Windows edit control (GDI)
+            }
+            if (SUCCEEDED(b->CreateFontSet(&set)) && SUCCEEDED(f5->CreateFontCollectionFromFontSet(set.Get(), &coll))) g_own_fonts = coll;
+        }
+    }
+    // the chosen family, from the fuentes folder or Windows; else Windows's own (Segoe UI Variable on Windows 11)
+    g_ui_fonts.Reset();
+    if (!g_set.font.empty() && has_family(g_own_fonts.Get(), g_set.font)) { g_ui_family = g_set.font; g_ui_fonts = g_own_fonts; }
+    else if (!g_set.font.empty() && has_family(sys.Get(), g_set.font)) g_ui_family = g_set.font;
+    else g_ui_family = has_family(sys.Get(), L"Segoe UI Variable Text") ? L"Segoe UI Variable Text" : L"Segoe UI";
+    if (!has_family(sys.Get(), L"Segoe Fluent Icons")) g_icon_family = L"Segoe MDL2 Assets";
 }
 
 // one bitmap from PNG bytes (favicons) or a file (extension icons), for a given render target
@@ -270,10 +277,12 @@ static void compute_geo() {
         t->w.go(w, kTabMs);
     }
 }
-// where each tab is drawn now: widths animate, positions follow (ghosts keep their slot while they shrink)
+// where each tab is drawn now: widths animate, positions follow (ghosts keep their slot while they shrink).
+// settled: where they end up, for clicks: closing tabs fast must not wait for the animation (the next tab's cross
+// is under the mouse at once, as in Chrome)
 struct Slot { Tab *t; float x, w; };
 static float g_strip_end;
-static std::vector<Slot> tab_slots(double now) {
+static std::vector<Slot> tab_slots(double now, bool settled = false) {
     std::vector<Slot> out;
     float x = g_geo.strip_l;
     size_t gi = 0;
@@ -281,20 +290,24 @@ static std::vector<Slot> tab_slots(double now) {
     for (auto &g : g_ghosts) gs.push_back(&g);
     std::sort(gs.begin(), gs.end(), [](Ghost *a, Ghost *b) { return a->slot < b->slot; });
     for (size_t i = 0; i <= g_tabs.size(); i++) {
-        while (gi < gs.size() && gs[gi]->slot <= (int)i) { gs[gi]->x = x; x += (gs[gi]->w + S(kTabGap)) * gs[gi]->k.at(now); gi++; }
+        while (!settled && gi < gs.size() && gs[gi]->slot <= (int)i) { gs[gi]->x = x; x += (gs[gi]->w + S(kTabGap)) * gs[gi]->k.at(now); gi++; }
         if (i == g_tabs.size()) break;
         Tab *t = g_tabs[i].get();
-        float w = t->w.at(now);
-        float dx = t->x.running(now) ? t->x.at(now) : 0;   // a reorder slides from where the tab was
+        float w = settled ? t->w.to : t->w.at(now);
+        float dx = !settled && t->x.running(now) ? t->x.at(now) : 0;   // a reorder slides from where the tab was
         out.push_back({ t, x + dx, w });
         x += w + S(kTabGap);
     }
-    g_strip_end = std::max(g_geo.strip_l, x - S(kTabGap));
+    if (!settled) g_strip_end = std::max(g_geo.strip_l, x - S(kTabGap));
     for (auto &s : out)
         if (g_dragging && s.t->id == g_drag_id) s.x = std::max(g_geo.strip_l, std::min(g_drag_x - g_drag_dx, g_geo.strip_r - s.w));
     return out;
 }
 static float strip_end(double now) { tab_slots(now); return g_strip_end; }
+static float settled_strip_end(double now) {
+    auto sl = tab_slots(now, true);
+    return sl.empty() ? g_geo.strip_l : sl.back().x + sl.back().w;
+}
 
 // ---------------------------------------------------------------- rectangles of the controls
 static D2D1_RECT_F tab_rect(const Slot &s) { return R(s.x, S(kTabY), s.x + s.w, S(kTabY + kTabH)); }
@@ -307,8 +320,8 @@ static D2D1_RECT_F tab_audio_rect(const Slot &s) {
     D2D1_RECT_F c = tab_close_rect(s);
     return R(c.left - S(22), c.top, c.left - S(2), c.bottom);
 }
-static D2D1_RECT_F plus_rect(double now) {
-    float x = strip_end(now) + S(4);
+static D2D1_RECT_F plus_rect(double now, bool settled = false) {
+    float x = (settled ? settled_strip_end(now) : strip_end(now)) + S(4);
     return R(x, S(kTabY), x + S(kPlusW), S(kTabY + kTabH));
 }
 static D2D1_RECT_F cap_rect(int i) { return R(g_geo.cap_l + S(kCapW) * i, 0, g_geo.cap_l + S(kCapW) * (i + 1), S(kTabRowH)); }
@@ -391,7 +404,7 @@ static HitInfo hit_test(float x, float y) {
     if (g_fullscreen) return h;
     if (y < S(kTabRowH)) {
         for (int i = 0; i < 3; i++) if (inside(cap_rect(i), x, y)) { h.what = (Hit)(H_MIN + i); return h; }
-        for (auto &s : tab_slots(now)) {
+        for (auto &s : tab_slots(now, true)) {
             D2D1_RECT_F r = tab_rect(s);
             if (!inside(r, x, y)) continue;
             h.id = s.t->id;
@@ -401,7 +414,7 @@ static HitInfo hit_test(float x, float y) {
             else h.what = H_TAB;
             return h;
         }
-        if (inside(plus_rect(now), x, y)) h.what = H_PLUS;
+        if (inside(plus_rect(now, true), x, y)) h.what = H_PLUS;
         return h;
     }
     if (y < S(kTabRowH + kToolRowH)) {
@@ -540,7 +553,7 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
                 glyph(rt, g_br.Get(), g_f.icon_sm.Get(), t->muted ? G_MUTE : G_VOL, ar, active ? p.text : p.sub);
                 right = ar.left - S(2);
             }
-            std::wstring title = !t->title.empty() ? t->title : t->url.empty() ? L"Pestaña nueva" : strip_scheme(t->url);
+            std::wstring title = !t->title.empty() ? t->title : t->url.empty() ? T(L"Pestaña nueva") : strip_scheme(t->url);
             text(rt, g_br.Get(), g_f.tab.Get(), title, R(r.left + S(32), r.top, right, r.bottom), active ? p.text : p.sub);
         }
         if (!compact || active) {
@@ -713,16 +726,16 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     }
     if (t && t->incognito && !focused) {
         // a pill that says so, at the end of the address, as Edge's "InPrivate"
-        float tw = text_w(g_f.hint.Get(), L"Incógnito");
+        float tw = text_w(g_f.hint.Get(), T(L"Incógnito"));
         D2D1_RECT_F pr = R(right - tw - S(36), a.top + S(5), right, a.bottom - S(5));
         fill(rt, g_br.Get(), pr, S(7), alpha(p.accent_soft, 0.55f));
         glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_INPRIVATE, R(pr.left + S(4), pr.top, pr.left + S(26), pr.bottom), p.accent);
-        text(rt, g_br.Get(), g_f.hint.Get(), L"Incógnito", R(pr.left + S(28), pr.top, pr.right - S(4), pr.bottom), p.accent);
+        text(rt, g_br.Get(), g_f.hint.Get(), T(L"Incógnito"), R(pr.left + S(28), pr.top, pr.right - S(4), pr.bottom), p.accent);
         right = pr.left - S(6);
     }
     if (!focused) {
         D2D1_RECT_F tr = R(a.left + S(36), a.top, right, a.bottom);
-        if (u.empty()) text(rt, g_br.Get(), g_f.addr.Get(), L"Busca o escribe una dirección", tr, p.sub);
+        if (u.empty()) text(rt, g_br.Get(), g_f.addr.Get(), T(L"Busca o escribe una dirección"), tr, p.sub);
         else {
             // the site in ink, the rest of the address in grey
             std::wstring shown = strip_scheme(u);
@@ -779,22 +792,22 @@ static bool paint_ntp(ID2D1RenderTarget *rt, double now) {
         // what incognito does, and what it does not (as Chrome's page says it); ntp_top() leaves room for it
         float y = top - S(kNtpIncognitoH);
         glyph(rt, g_br.Get(), g_f.icon_lg.Get(), G_INPRIVATE, R(l - S(4), y + S(2), l + S(36), y + S(42)), p.accent);
-        text(rt, g_br.Get(), g_f.word.Get(), L"incógnito", R(l + S(46), y, l + S(560), y + S(44)), p.text);
-        const wchar_t *lines[] = { L"Pluma no guarda el historial ni las cookies de estas pestañas:",
-                                   L"todo se borra al cerrar la última o al cerrar Pluma.",
-                                   L"Las descargas y tus páginas sí se quedan, y las webs y tu red",
-                                   L"siguen viendo lo que visitas." };
+        text(rt, g_br.Get(), g_f.word.Get(), T(L"incógnito"), R(l + S(46), y, l + S(560), y + S(44)), p.text);
+        const wchar_t *lines[] = { T(L"Pluma no guarda el historial ni las cookies de estas pestañas:"),
+                                   T(L"todo se borra al cerrar la última o al cerrar Pluma."),
+                                   T(L"Las descargas y tus páginas sí se quedan, y las webs y tu red"),
+                                   T(L"siguen viendo lo que visitas.") };
         for (int k = 0; k < 4; k++) {
             float ly = y + S(52) + k * S(22) + (k >= 2 ? S(8) : 0);
             text(rt, g_br.Get(), g_f.ntp.Get(), lines[k], R(l, ly, l + S(560), ly + S(22)), p.sub);
         }
     } else {
         text(rt, g_br.Get(), g_f.word.Get(), L"pluma", R(l, top, l + S(560), top + S(44)), p.text);
-        text(rt, g_br.Get(), g_f.ntp.Get(), L"Escribe una dirección arriba, o lo que quieras buscar.", R(l, top + S(46), l + S(560), top + S(70)), p.sub);
+        text(rt, g_br.Get(), g_f.ntp.Get(), T(L"Escribe una dirección arriba, o lo que quieras buscar."), R(l, top + S(46), l + S(560), top + S(70)), p.sub);
     }
     // the person's own pages (only those, once there is one), or the sites they visit most
     if (!g_ntp_rows.empty() || g_ntp_pins || !g_set.suggest_top)
-        text(rt, g_br.Get(), g_f.ntp.Get(), g_ntp_pins || !g_set.suggest_top ? L"Tus páginas" : L"Lo que más visitas", R(l, top + S(90), l + S(560), top + S(112)), p.sub);
+        text(rt, g_br.Get(), g_f.ntp.Get(), g_ntp_pins || !g_set.suggest_top ? T(L"Tus páginas") : T(L"Lo que más visitas"), R(l, top + S(90), l + S(560), top + S(112)), p.sub);
     for (size_t i = 0; i < g_ntp_rows.size(); i++) {
         D2D1_RECT_F r = ntp_row_rect(i);
         auto &a = g_btn_hover[hover_key(H_NTP_ROW, (int)i)];
@@ -823,13 +836,13 @@ static bool paint_ntp(ID2D1RenderTarget *rt, double now) {
     // how to put their own pages there
     if (!g_ntp_pins) {
         float y = ntp_top() + S(118) + g_ntp_rows.size() * S(40) + S(10);
-        text(rt, g_br.Get(), g_f.ntp.Get(), g_ntp_rows.empty() ? L"Añade tus páginas con la estrella de la barra (Ctrl+D)."
-                                                                : L"¿Solo las tuyas? Añádelas con la estrella de la barra (Ctrl+D).",
+        text(rt, g_br.Get(), g_f.ntp.Get(), g_ntp_rows.empty() ? T(L"Añade tus páginas con la estrella de la barra (Ctrl+D).")
+                                                                : T(L"¿Solo las tuyas? Añádelas con la estrella de la barra (Ctrl+D)."),
              R(l, y, l + S(560), y + S(24)), p.sub);
     }
     if (now - g_ntp_mem_at > 2500) { g_ntp_mem = engine_memory_mb(); g_ntp_mem_at = now; }
     RECT rc; GetClientRect(g_bar, &rc);
-    std::wstring mem = L"Pluma usa ahora " + std::to_wstring(g_ntp_mem) + L" MB de memoria";
+    std::wstring mem = T(L"Pluma usa ahora ") + std::to_wstring(g_ntp_mem) + T(L" MB de memoria");
     text(rt, g_br.Get(), g_f.ntp.Get(), mem, R(l, rc.bottom - S(48), l + S(560), rc.bottom - S(24)), p.sub);
     return busy;
 }
@@ -1153,8 +1166,8 @@ static void sug_draw(Panel &p, double now) {
         if (b) draw_icon_bitmap(p.rt.Get(), b.Get(), ix, cy, S(16), 1);
         else glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), s.search ? G_SEARCH : i == 0 ? G_GLOBE : G_CLOCK, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), c.sub);
         std::wstring main = s.title, side;
-        if (s.search) side = L"buscar con " + engine_name(g_set.engine);
-        else if (i == 0) { main = strip_scheme(s.url); side = L"ir a la dirección"; }
+        if (s.search) side = T(L"buscar con ") + engine_name(g_set.engine);
+        else if (i == 0) { main = strip_scheme(s.url); side = T(L"ir a la dirección"); }
         else { side = strip_scheme(s.url); if (main.empty()) { main = side; side.clear(); } }
         float tl = r.left + S(38), tr = r.right - S(12);
         float mw = std::min((tr - tl) * 0.62f, text_w(g_f.menu.Get(), main) + S(2));
@@ -1224,7 +1237,14 @@ static bool sug_commit(bool new_tab) {
 }
 
 // ---------------------------------------------------------------- the menu
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
+// each language by its own name; "" is Windows's
+static std::wstring lang_name(const wchar_t *code) {
+    static const struct { const wchar_t *code, *name; } names[] = { { L"es", L"Español" }, { L"en", L"English" }, { L"pt", L"Português" },
+                                                                    { L"fr", L"Français" }, { L"de", L"Deutsch" }, { L"it", L"Italiano" } };
+    for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
+    return T(L"Como Windows");
+}
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_LANG, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1365,39 +1385,41 @@ static MItem sub(const std::wstring &t, wchar_t icon, const std::wstring &value,
 static std::vector<MItem> build_page(int page) {
     std::vector<MItem> v;
     if (page == PAGE_MAIN) {
-        v.push_back(item(L"Pestaña nueva", G_NEWTAB, L"Ctrl+T", [] { after_menu([] { tab_new(L"", true); }); }));
-        v.push_back(item(L"Pestaña de incógnito", G_INPRIVATE, L"Ctrl+Mayús+N", [] { after_menu([] { tab_new(L"", true, -1, true); }); }));
-        MItem re = item(L"Reabrir pestaña cerrada", G_UNDO, L"Ctrl+Mayús+T", [] { after_menu([] { tab_reopen_closed(); }); });
+        v.push_back(item(T(L"Pestaña nueva"), G_NEWTAB, T(L"Ctrl+T"), [] { after_menu([] { tab_new(L"", true); }); }));
+        v.push_back(item(T(L"Pestaña de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { tab_new(L"", true, -1, true); }); }));
+        MItem re = item(T(L"Reabrir pestaña cerrada"), G_UNDO, T(L"Ctrl+Mayús+T"), [] { after_menu([] { tab_reopen_closed(); }); });
         v.push_back(re);
         v.push_back(sep());
         MItem z; z.kind = 5; z.text = L"Zoom"; z.icon = G_ZOOM; v.push_back(z);
-        v.push_back(item(L"Buscar en la página", G_SEARCH, L"Ctrl+F", [] { after_menu([] { tab_find(); }); }));
-        v.push_back(item(L"Imprimir", G_PRINT, L"Ctrl+P", [] { after_menu([] { tab_print(); }); }));
-        v.push_back(item(L"Descargas", G_DOWNLOAD, L"Ctrl+J", [] { after_menu([] { tab_downloads(); }); }));
+        v.push_back(item(T(L"Buscar en la página"), G_SEARCH, T(L"Ctrl+F"), [] { after_menu([] { tab_find(); }); }));
+        v.push_back(item(T(L"Imprimir"), G_PRINT, T(L"Ctrl+P"), [] { after_menu([] { tab_print(); }); }));
+        v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { after_menu([] { tab_downloads(); }); }));
         v.push_back(sep());
         size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
-        v.push_back(sub(L"Extensiones", G_PUZZLE, on == 1 ? L"1 activa" : on ? std::to_wstring(on) + L" activas" : L"", PAGE_EXT));
+        v.push_back(sub(T(L"Extensiones"), G_PUZZLE, on == 1 ? T(L"1 activa") : on ? std::to_wstring(on) + T(L" activas") : L"", PAGE_EXT));
         size_t son = 0; for (auto &s : g_scripts) if (s.enabled) son++;
-        v.push_back(sub(L"Scripts de usuario", G_CODE, son == 1 ? L"1 activo" : son ? std::to_wstring(son) + L" activos" : L"", PAGE_SCRIPTS));
-        v.push_back(sub(L"Buscador", G_GLOBE, engine_name(g_set.engine), PAGE_ENGINE));
-        v.push_back(sub(L"Tema", G_COLOR, g_set.theme == 1 ? L"Oscuro" : g_set.theme == 2 ? L"Como Windows" : L"Claro", PAGE_THEME));
+        v.push_back(sub(T(L"Scripts de usuario"), G_CODE, son == 1 ? T(L"1 activo") : son ? std::to_wstring(son) + T(L" activos") : L"", PAGE_SCRIPTS));
+        v.push_back(sub(T(L"Buscador"), G_GLOBE, engine_name(g_set.engine), PAGE_ENGINE));
+        v.push_back(sub(T(L"Tema"), G_COLOR, g_set.theme == 1 ? T(L"Oscuro") : g_set.theme == 2 ? T(L"Como Windows") : T(L"Claro"), PAGE_THEME));
+        v.push_back(sub(T(L"Fuente"), G_FONT, g_set.font.empty() ? T(L"La de Windows") : g_set.font, PAGE_FONT));
+        v.push_back(sub(T(L"Idioma"), G_LANG, lang_name(g_set.lang.empty() ? L"" : lang_code()), PAGE_LANG));
         if (video_available()) {
             // YouTube in Pluma's own player (a fraction of the page's memory)
-            MItem yt; yt.kind = 3; yt.text = L"YouTube en el reproductor de Pluma"; yt.on = g_set.native_video;
+            MItem yt; yt.kind = 3; yt.text = T(L"YouTube en el reproductor de Pluma"); yt.on = g_set.native_video;
             yt.act = [] { g_set.native_video = !g_set.native_video; settings_save(); video_settings_changed(); };
             v.push_back(yt);
         }
         // the new tab page: the sites visited most, while the person has no pages of their own there
-        MItem st; st.kind = 3; st.text = L"Sugerir lo que más visito"; st.on = g_set.suggest_top;
+        MItem st; st.kind = 3; st.text = T(L"Sugerir lo que más visito"); st.on = g_set.suggest_top;
         st.act = [] { g_set.suggest_top = !g_set.suggest_top; settings_save(); g_ntp_filled = false; };
         v.push_back(st);
-        v.push_back(sub(L"Borrar datos", G_ERASE, L"", PAGE_CLEAR));
-        v.push_back(item(L"Herramientas de desarrollo", G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
+        v.push_back(sub(T(L"Borrar datos"), G_ERASE, L"", PAGE_CLEAR));
+        v.push_back(item(T(L"Herramientas de desarrollo"), G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
         v.push_back(sep());
-        v.push_back(note(L"Pluma usa ahora " + std::to_wstring(engine_memory_mb()) + L" MB de memoria"));
-        v.push_back(item(L"Salir de Pluma", G_POWER, L"Ctrl+Mayús+Q", [] { after_menu([] { app_quit(); }); }));
+        v.push_back(note(T(L"Pluma usa ahora ") + std::to_wstring(engine_memory_mb()) + T(L" MB de memoria")));
+        v.push_back(item(T(L"Salir de Pluma"), G_POWER, T(L"Ctrl+Mayús+Q"), [] { after_menu([] { app_quit(); }); }));
     } else if (page == PAGE_EXT) {
-        v.push_back(back(L"Extensiones"));
+        v.push_back(back(T(L"Extensiones")));
         bool any = false;
         for (size_t i = 0; i < g_exts.size(); i++) {
             const Extension &e = g_exts[i];
@@ -1409,26 +1431,26 @@ static std::vector<MItem> build_page(int page) {
             m.b1 = G_DELETE; m.act1 = [i] { ext_remove(i); };
             v.push_back(m);
         }
-        if (!any) v.push_back(note(L"Todavía no hay ninguna."));
+        if (!any) v.push_back(note(T(L"Todavía no hay ninguna.")));
         if (ext_bundled_removed())
-            v.push_back(item(L"Volver a poner uBlock Origin Lite", G_UNDO, L"", [] { after_menu([] { ext_restore_bundled(); }); }));
+            v.push_back(item(T(L"Volver a poner uBlock Origin Lite"), G_UNDO, L"", [] { after_menu([] { ext_restore_bundled(); }); }));
         v.push_back(sep());
-        v.push_back(item(L"Buscar en la Chrome Web Store", G_STORE, L"", [] { after_menu([] { tab_new(L"https://chromewebstore.google.com/", true); }); }));
-        v.push_back(item(L"Abrir la carpeta de extensiones", G_FOLDER, L"", [] { after_menu([] { ShellExecuteW(NULL, L"open", extensions_folder().c_str(), NULL, NULL, SW_SHOWNORMAL); }); }));
-        v.push_back(note(L"En la tienda, abre una extensión y pulsa «Añadir a Pluma»."));
+        v.push_back(item(T(L"Buscar en la Chrome Web Store"), G_STORE, L"", [] { after_menu([] { tab_new(L"https://chromewebstore.google.com/", true); }); }));
+        v.push_back(item(T(L"Abrir la carpeta de extensiones"), G_FOLDER, L"", [] { after_menu([] { ShellExecuteW(NULL, L"open", extensions_folder().c_str(), NULL, NULL, SW_SHOWNORMAL); }); }));
+        v.push_back(note(T(L"En la tienda, abre una extensión y pulsa «Añadir a Pluma».")));
     } else if (page == PAGE_SCRIPTS) {
-        v.push_back(back(L"Scripts de usuario"));
+        v.push_back(back(T(L"Scripts de usuario")));
         for (size_t i = 0; i < g_scripts.size(); i++) {
             MItem m; m.kind = 3; m.text = g_scripts[i].name; m.on = g_scripts[i].enabled;
             m.act = [i] { script_toggle(i); tabs_set_scripts(); };
             v.push_back(m);
         }
-        if (g_scripts.empty()) v.push_back(note(L"Todavía no hay ninguno."));
+        if (g_scripts.empty()) v.push_back(note(T(L"Todavía no hay ninguno.")));
         v.push_back(sep());
-        v.push_back(item(L"Abrir la carpeta de scripts", G_FOLDER, L"", [] { after_menu([] { ShellExecuteW(NULL, L"open", scripts_folder().c_str(), NULL, NULL, SW_SHOWNORMAL); }); }));
-        v.push_back(note(L"Abre un archivo .user.js en Pluma para instalarlo."));
+        v.push_back(item(T(L"Abrir la carpeta de scripts"), G_FOLDER, L"", [] { after_menu([] { ShellExecuteW(NULL, L"open", scripts_folder().c_str(), NULL, NULL, SW_SHOWNORMAL); }); }));
+        v.push_back(note(T(L"Abre un archivo .user.js en Pluma para instalarlo.")));
     } else if (page == PAGE_ENGINE) {
-        v.push_back(back(L"Buscador"));
+        v.push_back(back(T(L"Buscador")));
         for (const wchar_t *id : { L"google", L"duckduckgo", L"bing", L"startpage", L"brave" }) {
             MItem m; m.kind = 4; m.text = engine_name(id); m.on = g_set.engine == id;
             std::wstring sid = id;
@@ -1436,17 +1458,38 @@ static std::vector<MItem> build_page(int page) {
             v.push_back(m);
         }
     } else if (page == PAGE_THEME) {
-        v.push_back(back(L"Tema"));
-        const wchar_t *names[] = { L"Claro", L"Oscuro", L"Como Windows" };
-        for (int i = 0; i < 3; i++) {
+        v.push_back(back(T(L"Tema")));
+        const wchar_t *names[] = { T(L"Claro"), T(L"Oscuro"), T(L"Como Windows") };
+        for (int i : { 2, 0, 1 }) {
             MItem m; m.kind = 4; m.text = names[i]; m.on = g_set.theme == i;
             m.act = [i] { g_set.theme = i; settings_save(); ui_theme_changed(); tabs_apply_theme(); menu_rebuild(); panel_render(g_menu); };
             v.push_back(m);
         }
+    } else if (page == PAGE_FONT) {
+        v.push_back(back(T(L"Fuente")));
+        // Windows's own, the two Pluma brings, and ones every Windows has (any other installed one: fuente= in ajustes.ini)
+        const wchar_t *fams[] = { L"", L"Roboto", L"Roboto Mono", L"Arial", L"Verdana", L"Georgia", L"Consolas" };
+        for (const wchar_t *f : fams) {
+            MItem m; m.kind = 4; m.text = *f ? f : T(L"La de Windows"); m.on = g_set.font == f;
+            std::wstring fam = f;
+            m.act = [fam] { g_set.font = fam; settings_save(); ui_font_changed(); menu_rebuild(); panel_render(g_menu); };
+            v.push_back(m);
+        }
+        if (std::find(std::begin(fams), std::end(fams), g_set.font) == std::end(fams)) {
+            MItem m; m.kind = 4; m.text = g_set.font; m.on = true; v.push_back(m);
+        }
+    } else if (page == PAGE_LANG) {
+        v.push_back(back(T(L"Idioma")));
+        for (const wchar_t *c : { L"", L"es", L"en", L"pt", L"fr", L"de", L"it" }) {
+            MItem m; m.kind = 4; m.text = lang_name(c); m.on = g_set.lang == c;
+            std::wstring code = c;
+            m.act = [code] { g_set.lang = code; settings_save(); ui_invalidate(); menu_rebuild(); panel_render(g_menu); };
+            v.push_back(m);
+        }
     } else if (page == PAGE_CLEAR) {
-        v.push_back(back(L"Borrar datos"));
-        v.push_back(item(L"El historial de Pluma", G_CLOCK, L"", [] { history_clear(); menu_close(); ui_toast(L"Historial borrado"); }));
-        MItem all = item(L"Todo menos las contraseñas", G_ERASE, L"", [] {
+        v.push_back(back(T(L"Borrar datos")));
+        v.push_back(item(T(L"El historial de Pluma"), G_CLOCK, L"", [] { history_clear(); menu_close(); ui_toast(T(L"Historial borrado")); }));
+        MItem all = item(T(L"Todo menos las contraseñas"), G_ERASE, L"", [] {
             ComPtr<ICoreWebView2_13> v13; ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Profile2> p2;
             Tab *t = nullptr;
             for (auto &x : g_tabs) if (x->view) { t = x.get(); break; }
@@ -1454,35 +1497,35 @@ static std::vector<MItem> build_page(int page) {
             if (t && SUCCEEDED(t->view.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && SUCCEEDED(pr.As(&p2)))
                 p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE |
                                       COREWEBVIEW2_BROWSING_DATA_KINDS_DOWNLOAD_HISTORY | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY),
-                                      Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>([](HRESULT) -> HRESULT { ui_toast(L"Datos borrados: cookies, caché e historial"); return S_OK; }).Get());
-            else ui_toast(L"Historial borrado");
+                                      Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>([](HRESULT) -> HRESULT { ui_toast(T(L"Datos borrados: cookies, caché e historial")); return S_OK; }).Get());
+            else ui_toast(T(L"Historial borrado"));
             menu_close();
         });
         all.danger = true;
         v.push_back(all);
-        v.push_back(note(L"Las cookies cierran tus sesiones en las webs."));
+        v.push_back(note(T(L"Las cookies cierran tus sesiones en las webs.")));
     } else if (page == PAGE_TAB) {
         int id = g_menu_tab;
         Tab *t = tab_by_id(id);
         if (!t) return v;
-        v.push_back(item(L"Recargar", G_RELOAD, L"", [id] { after_menu([id] { int i = tab_index(id); if (i >= 0) { tab_activate(i); tab_reload(false); } }); }));
-        v.push_back(item(L"Duplicar", G_NEWTAB, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t && !t->url.empty()) tab_new(t->url, true, tab_index(id) + 1, t->incognito); }); }));
-        if (t->view) v.push_back(item(t->muted ? L"Volver a dar sonido" : L"Silenciar", t->muted ? G_VOL : G_MUTE, L"", [id] { after_menu([id] { tab_mute(tab_by_id(id)); }); }));
+        v.push_back(item(T(L"Recargar"), G_RELOAD, L"", [id] { after_menu([id] { int i = tab_index(id); if (i >= 0) { tab_activate(i); tab_reload(false); } }); }));
+        v.push_back(item(T(L"Duplicar"), G_NEWTAB, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t && !t->url.empty()) tab_new(t->url, true, tab_index(id) + 1, t->incognito); }); }));
+        if (t->view) v.push_back(item(t->muted ? T(L"Volver a dar sonido") : T(L"Silenciar"), t->muted ? G_VOL : G_MUTE, L"", [id] { after_menu([id] { tab_mute(tab_by_id(id)); }); }));
         v.push_back(sep());
-        v.push_back(item(L"Cerrar las de la derecha", G_X, L"", [id] { after_menu([id] { int i = tab_index(id); while (i >= 0 && (int)g_tabs.size() > i + 1) tab_close((int)g_tabs.size() - 1); }); }));
-        v.push_back(item(L"Cerrar las demás", G_X, L"", [id] { after_menu([id] { for (int k = (int)g_tabs.size() - 1; k >= 0; k--) if (g_tabs[k]->id != id) tab_close(k); }); }));
-        v.push_back(item(L"Cerrar", G_X, L"Ctrl+W", [id] { after_menu([id] { tab_close(tab_index(id)); }); }));
+        v.push_back(item(T(L"Cerrar las de la derecha"), G_X, L"", [id] { after_menu([id] { int i = tab_index(id); while (i >= 0 && (int)g_tabs.size() > i + 1) tab_close((int)g_tabs.size() - 1); }); }));
+        v.push_back(item(T(L"Cerrar las demás"), G_X, L"", [id] { after_menu([id] { for (int k = (int)g_tabs.size() - 1; k >= 0; k--) if (g_tabs[k]->id != id) tab_close(k); }); }));
+        v.push_back(item(T(L"Cerrar"), G_X, T(L"Ctrl+W"), [id] { after_menu([id] { tab_close(tab_index(id)); }); }));
     } else if (page == PAGE_ONE_EXT) {
         // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
         size_t i = (size_t)g_menu_tab;
         if (i >= g_exts.size()) return v;
         v.push_back(note(g_exts[i].name));
-        if (!g_exts[i].options.empty()) v.push_back(item(L"Opciones", G_GEAR, L"", [i] { after_menu([i] { ext_open_options(i); }); }));
-        v.push_back(item(L"Desactivar", G_POWER, L"", [i] { after_menu([i] { ext_toggle(i); ui_layout(); }); }));
-        MItem rm = item(L"Quitar de Pluma", G_DELETE, L"", [i] { after_menu([i] { ext_remove(i); }); });
+        if (!g_exts[i].options.empty()) v.push_back(item(T(L"Opciones"), G_GEAR, L"", [i] { after_menu([i] { ext_open_options(i); }); }));
+        v.push_back(item(T(L"Desactivar"), G_POWER, L"", [i] { after_menu([i] { ext_toggle(i); ui_layout(); }); }));
+        MItem rm = item(T(L"Quitar de Pluma"), G_DELETE, L"", [i] { after_menu([i] { ext_remove(i); }); });
         rm.danger = true;
         v.push_back(rm);
-        v.push_back(note(L"Vuelve a activarla en ⋯ > Extensiones."));
+        v.push_back(note(T(L"Vuelve a activarla en ⋯ > Extensiones.")));
     }
     return v;
 }
@@ -1675,10 +1718,10 @@ static void ntp_take_off(size_t i) {
         size_t at = 0;
         for (size_t k = 0; k < g_pins.size(); k++) if (g_pins[k].url == e.url) at = k;
         pins_remove(e.url);
-        ui_notice(L"Quitada de tus páginas.", L"Deshacer", [e, at] { pins_add(e.url, e.title, at); ntp_refresh(); }, 8);
+        ui_notice(T(L"Quitada de tus páginas."), T(L"Deshacer"), [e, at] { pins_add(e.url, e.title, at); ntp_refresh(); }, 8);
     } else {
         history_hide_site(e.url, true);
-        ui_notice(L"No volverá a salir aquí.", L"Deshacer", [e] { history_hide_site(e.url, false); ntp_refresh(); }, 8);
+        ui_notice(T(L"No volverá a salir aquí."), T(L"Deshacer"), [e] { history_hide_site(e.url, false); ntp_refresh(); }, 8);
     }
     ntp_refresh();
 }
@@ -1708,7 +1751,7 @@ static void bar_click(HitInfo h, float x, float y) {
         ext_open_popup((size_t)h.id, { a.x, a.y, b.x, b.y });
         break;
     }
-    case H_TAB_CLOSE: { float w = g_geo.tab_w; tab_close(tab_index(h.id), true); g_frozen_w = w; compute_geo(); break; }
+    case H_TAB_CLOSE: { float w = g_geo.tab_w; tab_close(tab_index(h.id), true); g_frozen_w = w; compute_geo(); set_hover(hit_test(x, y)); break; }
     case H_TAB_AUDIO: tab_mute(tab_by_id(h.id)); break;
     case H_NOTICE_BTN: { auto a = g_notice.action; notice_close(); if (a) a(); break; }
     case H_NOTICE_X: notice_close(); break;
@@ -1717,7 +1760,6 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_STAR: ui_toggle_pin(); break;
     default: break;
     }
-    (void)x; (void)y;
 }
 static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -1798,7 +1840,10 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_MBUTTONUP: {
         HitInfo hi = hit_test((float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp));
-        if (hi.what == H_TAB || hi.what == H_TAB_CLOSE || hi.what == H_TAB_AUDIO) { float w = g_geo.tab_w; tab_close(tab_index(hi.id), true); g_frozen_w = w; compute_geo(); }
+        if (hi.what == H_TAB || hi.what == H_TAB_CLOSE || hi.what == H_TAB_AUDIO) {
+            float w = g_geo.tab_w; tab_close(tab_index(hi.id), true); g_frozen_w = w; compute_geo();
+            set_hover(hit_test((float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp)));
+        }
         return 0;
     }
     case WM_RBUTTONUP: {
@@ -1977,6 +2022,13 @@ void ui_theme_changed() {
     DwmSetWindowAttribute(g_win, 20, &dark, sizeof(dark));
     InvalidateRect(g_win, NULL, FALSE);
     if (g_edit) InvalidateRect(g_edit, NULL, TRUE);
+    ui_invalidate();
+}
+void ui_font_changed() {
+    load_fonts();
+    make_formats();
+    SendMessageW(g_edit, WM_SETFONT, (WPARAM)g_edit_font, TRUE);
+    compute_geo();
     ui_invalidate();
 }
 void ui_dpi_changed() {

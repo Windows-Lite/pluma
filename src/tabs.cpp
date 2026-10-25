@@ -92,13 +92,14 @@ void env_create(std::function<void()> ready) {
     auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
     opts->put_AreBrowserExtensionsEnabled(TRUE);
     opts->put_ScrollBarStyle(COREWEBVIEW2_SCROLLBAR_STYLE_FLUENT_OVERLAY);
+    opts->put_Language(lang_code());   // the engine's own menus and the pages' Accept-Language, as Pluma's
     std::wstring args = browser_args();
     opts->put_AdditionalBrowserArguments(args.c_str());
     std::wstring data = g_state + L"\\webview2";
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(NULL, data.c_str(), opts.Get(),
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>([ready](HRESULT res, ICoreWebView2Environment *env) -> HRESULT {
             if (FAILED(res) || !env) {
-                MessageBoxW(g_win, L"No se pudo iniciar el motor de Edge (WebView2). Instala «Microsoft Edge WebView2 Runtime».", L"Pluma", MB_ICONERROR);
+                MessageBoxW(g_win, T(L"No se pudo iniciar el motor de Edge (WebView2). Instala «Microsoft Edge WebView2 Runtime»."), L"Pluma", MB_ICONERROR);
                 PostQuitMessage(1);
                 return S_OK;
             }
@@ -132,7 +133,7 @@ void env_create(std::function<void()> ready) {
             return S_OK;
         }).Get());
     if (FAILED(hr)) {
-        MessageBoxW(NULL, L"No se pudo iniciar el motor de Edge (WebView2). Instala «Microsoft Edge WebView2 Runtime».", L"Pluma", MB_ICONERROR);
+        MessageBoxW(NULL, T(L"No se pudo iniciar el motor de Edge (WebView2). Instala «Microsoft Edge WebView2 Runtime»."), L"Pluma", MB_ICONERROR);
         PostQuitMessage(1);
     }
 }
@@ -338,7 +339,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             if (t == active_tab() && store_extension_id(u, ext_id, edge)) {
                 bool have = false;
                 for (auto &e : g_exts) if (e.id == ext_id || (!e.folder.empty() && ends_with_i(e.folder, (L"\\" + ext_id).c_str()))) have = true;
-                if (!have) ui_notice(L"Esta extensión se puede añadir a Pluma.", L"Añadir a Pluma", [ext_id, edge] { store_install(ext_id, edge); }, 0, t->id);
+                if (!have) ui_notice(T(L"Esta extensión se puede añadir a Pluma."), T(L"Añadir a Pluma"), [ext_id, edge] { store_install(ext_id, edge); }, 0, t->id);
             }
             session_save_soon();
             ui_invalidate();
@@ -405,10 +406,10 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                             // the result is a JSON string: let the script module unquote and read it
                             std::wstring src = json;
                             Tab *at = active_tab();
-                            ui_notice(L"Esta página es un script de usuario. ¿Lo instalas en Pluma?", L"Instalar", [src] {
+                            ui_notice(T(L"Esta página es un script de usuario. ¿Lo instalas en Pluma?"), T(L"Instalar"), [src] {
                                 std::wstring name;
-                                if (script_install(src, name)) { tabs_set_scripts(); ui_toast(L"Script instalado: " + name); }
-                                else ui_toast(L"No parece un script de usuario válido");
+                                if (script_install(src, name)) { tabs_set_scripts(); ui_toast(T(L"Script instalado: ") + name); }
+                                else ui_toast(T(L"No parece un script de usuario válido"));
                             }, 0, at ? at->id : 0);
                             return S_OK;
                         }).Get());
@@ -542,7 +543,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                     CoTaskMemFree(name);
                     if (!is_new_window) continue;
                     ComPtr<ICoreWebView2ContextMenuItem> mine;
-                    if (FAILED(e9->CreateContextMenuItem(L"Abrir en una pestaña nueva", NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &mine))) break;
+                    if (FAILED(e9->CreateContextMenuItem(T(L"Abrir en una pestaña nueva"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &mine))) break;
                     EventRegistrationToken tk;
                     mine->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
                         [id, link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { open_link_in_tab(id, link, false); return S_OK; }).Get(), &tk);
@@ -552,7 +553,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                     Tab *from = tab_by_id(id);
                     ComPtr<ICoreWebView2ContextMenuItem> ip;
                     if (from && !from->incognito &&
-                        SUCCEEDED(e9->CreateContextMenuItem(L"Abrir en una pestaña de incógnito", NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
+                        SUCCEEDED(e9->CreateContextMenuItem(T(L"Abrir en una pestaña de incógnito"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
                         ip->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
                             [id, link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { open_link_in_tab(id, link, true, true); return S_OK; }).Get(), &tk);
                         items->InsertValueAtIndex(i + 1, ip.Get());
