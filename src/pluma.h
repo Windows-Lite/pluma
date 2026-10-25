@@ -31,6 +31,8 @@
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
+struct Json;   // json.h; the bookmarks/import pages take and give JSON
+
 // ---------------------------------------------------------------- small things (main.cpp)
 double now_ms();
 std::string utf8(const std::wstring &s);
@@ -47,6 +49,7 @@ std::wstring json_escape(const std::wstring &s);  // a JSON string literal, quot
 std::wstring hash_hex(const std::wstring &s);
 bool starts_with(const std::wstring &s, const wchar_t *p);
 bool ends_with_i(const std::wstring &s, const wchar_t *p);
+std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file);   // a tab file in g_state, split into rows/fields
 
 // One value that moves towards a target with ease-out (no overshoot). Everything that moves in the bar is one of these.
 struct Anim {
@@ -79,6 +82,7 @@ struct Settings {
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
     bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
+    bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
 extern Settings g_set;
@@ -116,19 +120,73 @@ extern std::vector<HistoryEntry> g_history;
 void history_load();
 void history_add(const std::wstring &url, const std::wstring &title);
 void history_title(const std::wstring &url, const std::wstring &title);
+bool history_import(const std::wstring &url, const std::wstring &title, int visits, long long last);   // from another browser
 void history_flush();
 void history_clear();
 struct Suggestion { std::wstring url, title; bool search = false; };
 std::vector<Suggestion> history_suggest(const std::wstring &typed, std::wstring *inline_completion);
 std::vector<HistoryEntry> history_top(int n);
 // the new tab page: the person's own pages (added with the address's star, Ctrl+D), and sites taken off its suggestions
-extern std::vector<HistoryEntry> g_pins;
-void pins_load();
+extern std::vector<HistoryEntry> g_pins;    // the pages shown on the new tab page: a view of the "Tus páginas" folder
 bool pins_has(const std::wstring &url);
 bool pins_toggle(const std::wstring &url, const std::wstring &title);   // true: added
 void pins_add(const std::wstring &url, const std::wstring &title, size_t at);
 void pins_remove(const std::wstring &url);
 void history_hide_site(const std::wstring &url, bool hide);           // off the suggestions (or back on)
+void hidden_load();                                                   // the sites taken off the suggestions (ocultas.tsv)
+
+// ---------------------------------------------------------------- bookmarks (bookmarks.cpp): marcadores.json, a tree of folders
+struct BmNode {
+    int id = 0;
+    int role = 0;                   // 0 normal, 1 the bookmarks bar, 2 the new tab page's "Tus páginas"
+    bool folder = false;
+    std::wstring title, url;
+    long long added = 0;            // epoch seconds
+    std::vector<BmNode> kids;       // for folders
+};
+extern BmNode g_bm_root;
+void bookmarks_load();              // reads marcadores.json; migrates paginas.tsv the first time
+void bookmarks_save();
+int bm_bar_folder();                // id of "Barra de marcadores"
+int bm_pins_folder();              // id of "Tus páginas" (the new tab page)
+BmNode *bm_find(int id);           // a node by its id, or nullptr
+int bm_add(int parent, const std::wstring &url, const std::wstring &title);   // a bookmark; -1 if its url is already there
+int bm_add_folder(int parent, const std::wstring &title);
+void bm_remove(int id);
+void bm_rename(int id, const std::wstring &title);
+void bm_move(int id, int new_parent, int at);
+bool bm_url_in(int folder, const std::wstring &url);
+void bm_toggle_in(int folder, const std::wstring &url, const std::wstring &title);   // add it to the folder, or take it out
+int bm_count();                     // how many bookmarks (not folders) in the whole tree
+int bm_new_id();                    // a fresh node id (for import, which builds a subtree in one go)
+std::wstring bm_shown_title(const BmNode &n);   // a folder's name as shown (the permanent ones in the UI language)
+BmNode &bm_root();                  // the root folder (its kids are the top-level folders)
+void bm_commit();                   // after a batch change: save, resync the new tab page, refresh the open pages
+void bookmarks_open();              // the manager page (pluma://bookmarks)
+void import_open();                 // the wizard (pluma://import)
+// the pages Pluma serves from the exe that are not the settings page (bookmarks.cpp answers them)
+std::wstring bm_page_state(const std::wstring &path, const Json &texts);
+void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j);
+void bm_pages_refresh();            // the open bookmarks/import pages show what changed
+
+// ---------------------------------------------------------------- import from another browser (import.cpp, used by bookmarks.cpp)
+struct ImportProfile {
+    std::wstring browser;           // "Edge", "Brave", "Vivaldi", "Opera", "Firefox"
+    std::wstring name;              // the profile's display name
+    std::wstring path;              // the profile's folder
+    bool firefox = false;
+    bool running = false;           // the browser is open (its files are copied before being read)
+    int bookmarks = 0, history = 0, passwords = 0;   // counts found (estimates)
+};
+std::vector<ImportProfile> import_scan();           // the browsers and profiles found
+struct ImportResult { int bookmarks = 0, history = 0, passwords = 0; std::wstring note; };
+ImportResult import_do(const ImportProfile &p, bool bookmarks, bool history, bool passwords);
+int passwords_store_kind();          // 0 unknown, 10 writable (v10/DPAPI), 20 app-bound (not writable)
+// passwords come from a CSV the other browser exports (its own store is app-bound and cannot be read)
+void passwords_open_edge_export();   // opens edge://settings/passwords in Edge, for the user to export
+ImportResult passwords_import_pick();   // a file picker, then import the chosen CSV (passwords = how many; -1 cancelled)
+bool passwords_delete_csv();        // overwrites and deletes the CSV just imported (asked first on the page)
+int passwords_apply_pending();       // at the next start, before the engine runs: writes the ready rows into Login Data
 
 void set_fullscreen(bool on);
 void app_quit();                          // closes Pluma for good (not just the window)

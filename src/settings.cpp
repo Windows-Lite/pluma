@@ -17,19 +17,32 @@ std::wstring settings_page_display(const std::wstring &u) {
     return settings_page_url(u) ? L"pluma://" + u.substr(wcslen(kHost)) : u;
 }
 std::wstring settings_page_from_typed(const std::wstring &typed) {
-    // pluma://settings, pluma://settings (and the edge:// and chrome:// ones by habit) go to the page
+    std::wstring t = lower(typed);
+    // Pluma's own pages: pluma://settings, pluma://bookmarks, pluma://import (edge:// and chrome:// settings too, by habit)
+    if (starts_with(t, L"pluma://bookmarks") || starts_with(t, L"pluma://marcadores")) return std::wstring(kHost) + L"bookmarks";
+    if (starts_with(t, L"pluma://import")) return std::wstring(kHost) + L"import";
     for (const wchar_t *p : { L"pluma://", L"edge://settings", L"chrome://settings" })
-        if (starts_with(lower(typed), p)) return kPage;
+        if (starts_with(t, p)) return kPage;
     return L"";
+}
+// which page a pluma.local url is, and the resource that holds its HTML (200 settings, 201 bookmarks, 202 import)
+static int page_resource(const std::wstring &u) {
+    std::wstring path = u.substr(wcslen(kHost));
+    size_t cut = path.find_first_of(L"?#");
+    if (cut != std::wstring::npos) path = path.substr(0, cut);
+    if (path == L"bookmarks") return 201;
+    if (path == L"import") return 202;
+    if (path.empty() || path == L"settings") return 200;
+    return 0;
 }
 void settings_open() {
     for (size_t i = 0; i < g_tabs.size(); i++)
-        if (settings_page_url(g_tabs[i]->url)) { tab_activate((int)i); return; }
+        if (settings_page_url(g_tabs[i]->url) && page_resource(g_tabs[i]->url) == 200) { tab_activate((int)i); return; }
     tab_new(kPage, true);
 }
 
-static std::string page_html() {
-    HRSRC r = FindResourceW(g_inst, MAKEINTRESOURCEW(200), RT_RCDATA);
+static std::string page_html(int id) {
+    HRSRC r = FindResourceW(g_inst, MAKEINTRESOURCEW(id), RT_RCDATA);
     HGLOBAL g = r ? LoadResource(g_inst, r) : NULL;
     if (!g) return "";
     return std::string((const char *)LockResource(g), SizeofResource(g_inst, r));
@@ -113,7 +126,7 @@ void settings_page_refresh_soon() {
 }
 void settings_page_refresh() {
     // something changed elsewhere (the menu, another settings tab): the open pages show it
-    for (auto &t : g_tabs) if (t->view && settings_page_url(t->url)) post_state(t->view.Get(), Json());
+    for (auto &t : g_tabs) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) post_state(t->view.Get(), Json());
 }
 
 static void apply(const std::wstring &key, const Json &val) {
@@ -138,6 +151,8 @@ static void act(const std::wstring &what) {
     else if (what == L"extensions") ui_open_menu_page(L"ext");
     else if (what == L"scripts") ui_open_menu_page(L"scripts");
     else if (what == L"store") tab_new(L"https://chromewebstore.google.com/", true);
+    else if (what == L"bookmarks") bookmarks_open();
+    else if (what == L"import") import_open();
     else if (what == L"repo") tab_new(L"https://github.com/Windows-Lite/pluma", true);
 }
 
@@ -151,8 +166,9 @@ void settings_attach(ICoreWebView2 *v) {
             LPWSTR uri = NULL;
             if (FAILED(a->get_Request(&req)) || FAILED(req->get_Uri(&uri))) return S_OK;
             std::wstring u = uri; CoTaskMemFree(uri);
-            bool page = u == kPage || starts_with(u, (std::wstring(kPage) + L"?").c_str()) || starts_with(u, (std::wstring(kPage) + L"#").c_str());
-            std::string body = page ? page_html() : "";
+            int id = settings_page_url(u) ? page_resource(u) : 0;
+            std::string body = id ? page_html(id) : "";
+            bool page = id != 0;
             IStream *s = SHCreateMemStream((const BYTE *)body.data(), (UINT)body.size());
             ComPtr<ICoreWebView2WebResourceResponse> res;
             if (g_env && SUCCEEDED(g_env->CreateWebResourceResponse(s, page ? 200 : 404, page ? L"OK" : L"Not Found",
@@ -182,6 +198,7 @@ void settings_attach(ICoreWebView2 *v) {
             if (FAILED(a->get_WebMessageAsJson(&msg)) || !msg) return S_OK;
             Json j = json_parse(msg);
             CoTaskMemFree(msg);
+            if (page_resource(from) != 200) { bm_page_do(v, from, j); return S_OK; }   // the bookmarks and import pages
             std::wstring op = j[L"op"].s;
             if (op == L"get") { post_state(v, j[L"texts"]); return S_OK; }
             if (op == L"set") { apply(j[L"key"].s, j[L"value"]); if (j[L"key"].s == L"startup") settings_page_refresh(); }
