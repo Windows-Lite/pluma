@@ -227,5 +227,10 @@ ya tenga esa funcionalidad»).
   `motor=--disable-features=CalculateNativeWinOcclusion` en `ajustes.ini`. Y las instancias de prueba acumulan
   pestañas en `sesion.tsv` (46 el 25/10): `cdp.js` habla con la primera que casa, no con la de delante; borrarla.
 - Doble clic en el vídeo: el segundo «soltar» se ignora (llegaba a otra ventana tras el cambio de tamaño).
+- Los controles del reproductor son ventanas propiedad de la ventana de Pluma: al minimizarla, Windows las esconde
+  por su cuenta (`WM_SHOWWINDOW` con `SW_PARENTCLOSING`) y al restaurarla las vuelve a sacar (`SW_PARENTOPENING`)
+  aunque Pluma las haya escondido entretanto. Salían con su último dibujo y se quedaban encima de una pestaña nueva
+  con el vídeo ya cerrado (25/10). `layer_proc` ignora esos dos avisos y `layer_hide` esconde lo que se ve, no lo que
+  Pluma cree que se ve.
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.

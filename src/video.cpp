@@ -440,7 +440,10 @@ static void layer_show(Layer &l, const std::function<void(ID2D1RenderTarget *, I
     UpdateLayeredWindow(l.h, NULL, &l.pos, &sz, l.dc, &zero, 0, &bf, ULW_ALPHA);
     if (!l.shown) { SetWindowPos(l.h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); l.shown = true; }
 }
-static void layer_hide(Layer &l) { if (l.h && l.shown) { ShowWindow(l.h, SW_HIDE); l.shown = false; } }
+static void layer_hide(Layer &l) {
+    // (what is on the screen, not what Pluma believes: a layer shown by someone else goes too)
+    if (l.h && (l.shown || IsWindowVisible(l.h))) { ShowWindow(l.h, SW_HIDE); l.shown = false; }
+}
 
 // The bottom controls, as YouTube lays them out (CSS px, measured on its page): the progress bar 59 px above the
 // player's bottom, 12 px in from each side; a row of 40 px pills 8 px above the bottom: play, volume, time on the left;
@@ -1350,6 +1353,10 @@ static bool cursor_moved(HWND h, LPARAM lp) {
 }
 static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    // Windows hides the controls with the window minimized and shows them again when it comes back, by itself
+    // (SW_PARENTCLOSING / SW_PARENTOPENING), even when Pluma hid them meanwhile: they came back with their last picture
+    // and stayed on the screen, over a new tab, after the video had gone (25/10). Pluma alone shows and hides them
+    if (msg == WM_SHOWWINDOW && lp != 0) return 0;
     Video *v = V(active_tab());
     if (!v || v->stage != ST_ON) return DefWindowProcW(h, msg, wp, lp);
     if (msg == WM_MOUSEWHEEL) {
