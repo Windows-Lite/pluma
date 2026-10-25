@@ -25,7 +25,7 @@ if ($Quitar) {
     Write-Host 'Pluma quitado (tus datos siguen en %LOCALAPPDATA%\Pluma).'
     return
 }
-if (-not (Test-Path $exe)) { throw "No encuentro $exe" }
+if (-not (Test-Path $exe)) { throw "No encuentro $exe. Baja el zip de la última versión (Releases del repositorio) o compílalo con src\compilar.cmd" }
 # el motor del reproductor de vídeo propio de Pluma (YouTube): viene en el paquete; si falta, se baja
 if (-not (Test-Path (Join-Path $dir 'motor-video\libmpv-2.dll'))) { & (Join-Path $dir 'tools\motor-video.ps1') }
 Get-ChildItem $dir -Recurse -File | Unblock-File

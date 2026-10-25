@@ -21,18 +21,22 @@ Edge's engine (WebView2) behind a native interface of its own.</p>
   it at the same second.
 - **Built in**: incognito tabs, uBlock Origin Lite, Chrome extensions from the Web Store, user scripts (Violentmonkey style),
   saved passwords, downloads, find, zoom, print.
-- **Native**: C++17, Win32, Direct2D and DirectWrite, one ~1 MB executable. Dark by default; the new tab shows the
-  pages you add with the address's star (Ctrl+D).
+- **Native**: C++17, Win32, Direct2D and DirectWrite, one ~1 MB executable. Light, dark or as Windows (the default);
+  the bar's font to choose (Windows's own by default); the new tab shows the pages you add with the address's star
+  (Ctrl+D).
+- **Languages**: Spanish, English, Portuguese, French, German and Italian; Windows's language by default.
 
 ## Install
 
-Clone the repository and run `instalar.ps1` (`-ArrancarConWindows` to have it open instantly from sign-in). It adds
+Download `pluma-vX.Y.Z.zip` from the latest release, unzip it and run `instalar.ps1` (`-ArrancarConWindows` to have it open instantly from sign-in). It adds
 shortcuts, registers Pluma as a browser (choose it as the default in Windows' settings) and fetches the video engine.
 No administrator rights. It needs the Microsoft Edge WebView2 Runtime, which comes with Windows 11.
 
 ## Build
 
 `src\compilar.cmd` with the Visual Studio Build Tools (C++); the WebView2 SDK downloads itself the first time.
+Every push to `main` builds and publishes a release (`[skip release]` in the commit skips it); pull requests are built
+by the CI.
 
 ---
 

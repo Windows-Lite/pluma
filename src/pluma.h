@@ -67,7 +67,9 @@ extern bool g_motion;   // Windows "Show animations"
 // ---------------------------------------------------------------- settings and app state
 struct Settings {
     std::wstring engine = L"google";   // google, duckduckgo, bing, startpage, brave
-    int theme = 1;                     // 0 light (as Mapea), 1 dark (the default), 2 as Windows
+    int theme = 2;                     // 0 light (as Mapea), 1 dark, 2 as Windows (the default)
+    std::wstring lang;                 // the interface's language: es, en, pt, fr, de, it (empty = Windows's)
+    std::wstring font;                 // the bar's typeface: a family installed in Windows or one in fuentes\ (empty = Windows's)
     int sleep_s = 45;                  // a hidden tab is frozen after this
     int discard_s = 60;                // ... and unloaded after this (0 = never), except the most recent ones:
     int keep_recent = 2;               // the last tabs looked at stay frozen (to come back at once) for
@@ -79,6 +81,10 @@ struct Settings {
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
 extern Settings g_set;
+
+// ---------------------------------------------------------------- languages (lang.cpp)
+const wchar_t *T(const wchar_t *es);   // a text of the interface, written in Spanish, in the person's language
+const wchar_t *lang_code();            // es, en, pt, fr, de, it
 void settings_load();
 void settings_save();
 std::wstring search_url(const std::wstring &q);
@@ -191,6 +197,7 @@ void ui_focus_address(bool select_all = true);
 bool ui_address_focused();
 void ui_set_address_text(const std::wstring &s);
 void ui_theme_changed();
+void ui_font_changed();
 void ui_dpi_changed();
 void ui_notice(const std::wstring &text, const std::wstring &button, std::function<void()> action, int seconds = 0, int owner_tab = 0);
 void ui_notice_drop(int tab_id);          // the tab a note was about went elsewhere: the note goes

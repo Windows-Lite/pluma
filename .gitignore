@@ -6,3 +6,4 @@ tmp/
 *.exe.old
 motor-video/
 Pluma.viejo*.exe
+/Pluma.exe

@@ -152,8 +152,11 @@ static std::wstring ini_get(const wchar_t *key, const wchar_t *def) {
 }
 void settings_load() {
     g_set.engine = ini_get(L"buscador", L"google");
-    std::wstring th = ini_get(L"tema", L"oscuro");   // dark by default: how the user browses
-    g_set.theme = th == L"claro" ? 0 : th == L"sistema" ? 2 : 1;
+    // as Windows by default; "tema" saved before ajustes_v 2 was the old default (dark), not a choice
+    std::wstring th = _wtoi(ini_get(L"ajustes_v", L"1").c_str()) >= 2 ? ini_get(L"tema", L"sistema") : L"sistema";
+    g_set.theme = th == L"claro" ? 0 : th == L"oscuro" ? 1 : 2;
+    g_set.font = ini_get(L"fuente", L"");
+    g_set.lang = ini_get(L"idioma", L"");
     g_set.sleep_s = std::max(10, _wtoi(ini_get(L"dormir_s", L"45").c_str()));
     g_set.discard_s = std::max(0, _wtoi(ini_get(L"descargar_s", L"60").c_str()));
     if (g_set.discard_s > 0 && g_set.discard_s < 10) g_set.discard_s = 10;
@@ -177,7 +180,10 @@ void settings_load() {
 void settings_save() {
     std::wstring f = ini();
     WritePrivateProfileStringW(L"pluma", L"buscador", g_set.engine.c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"ajustes_v", L"2", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"tema", g_set.theme == 1 ? L"oscuro" : g_set.theme == 2 ? L"sistema" : L"claro", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"fuente", g_set.font.c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"idioma", g_set.lang.c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"dormir_s", std::to_wstring(g_set.sleep_s).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"descargar_s", std::to_wstring(g_set.discard_s).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"recientes", std::to_wstring(g_set.keep_recent).c_str(), f.c_str());

@@ -227,7 +227,7 @@ void ext_remove(size_t i) {
                 g_known.erase(std::remove_if(g_known.begin(), g_known.end(), [&](const Known &q) { return q.id == e.id; }), g_known.end());
             } else if (k) k->removed = true;   // bundled with Pluma: remember not to add it back
             known_save();
-            ui_toast(L"Extensión quitada: " + e.name);
+            ui_toast(T(L"Extensión quitada: ") + e.name);
             ui_layout();
             return S_OK;
         }).Get());
@@ -244,7 +244,7 @@ void ext_restore_bundled() {
     std::wstring mine = g_root + L"\\extensiones\\";
     for (auto &k : g_known) if (k.removed && !_wcsnicmp(k.folder.c_str(), mine.c_str(), mine.size())) k.removed = false;
     known_save();
-    ext_sync([] { ui_layout(); ui_toast(L"Extensión añadida de nuevo"); });
+    ext_sync([] { ui_layout(); ui_toast(T(L"Extensión añadida de nuevo")); });
 }
 void ext_open_options(size_t i) {
     if (i >= g_exts.size() || g_exts[i].options.empty()) return;
@@ -426,7 +426,7 @@ static bool unpack_crx(const std::wstring &crx, const std::wstring &dest) {
     return ok && code == 0 && PathFileExistsW((dest + L"\\manifest.json").c_str());
 }
 void store_install(const std::wstring &id, bool edge) {
-    ui_toast(L"Descargando la extensión...");
+    ui_toast(T(L"Descargando la extensión..."));
     std::wstring dest = extensions_folder() + L"\\" + id;
     std::wstring tmp = g_state + L"\\" + id + L".crx";
     std::wstring url = edge
@@ -438,7 +438,7 @@ void store_install(const std::wstring &id, bool edge) {
         DeleteFileW(tmp.c_str());
         CoUninitialize();
         ui_post([ok, dest] {
-            if (!ok) { ui_toast(L"No se pudo descargar la extensión"); return; }
+            if (!ok) { ui_toast(T(L"No se pudo descargar la extensión")); return; }
             Json m = read_manifest(dest);
             bool old = m[L"manifest_version"].kind == Json::NUM && m[L"manifest_version"].n < 3;
             with_profile([dest, old](ICoreWebView2Profile *pr) {
@@ -447,7 +447,7 @@ void store_install(const std::wstring &id, bool edge) {
                 add_folders(pr, { dest }, [keep, old] {
                     refresh_list(keep.Get(), [old] {
                         ui_layout();
-                        ui_toast(old ? L"Añadida, pero es de las antiguas (MV2): puede que no funcione" : L"Extensión añadida");
+                        ui_toast(old ? T(L"Añadida, pero es de las antiguas (MV2): puede que no funcione") : T(L"Extensión añadida"));
                     });
                 });
             });
