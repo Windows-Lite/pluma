@@ -215,6 +215,7 @@ static std::wstring g_last_csv;   // the CSV just read, so the page can offer to
 // import a chosen CSV: encrypt the new rows now, leave them pending for the next start
 static ImportResult import_file(const std::wstring &path) {
     ImportResult r;
+    if (g_incognito) { r.note = T(L"No disponible en una ventana de incógnito."); return r; }   // nothing is kept from there
     std::vector<BYTE> key;
     if (!master_key(key)) { r.note = T(L"No se pudo preparar el almacén de contraseñas de Pluma."); return r; }
     bool header_ok = false;
@@ -317,6 +318,7 @@ static void build_insert(void *db, const std::wstring &realm, const std::wstring
     pq::finalize(st);
 }
 int passwords_apply_pending() {
+    if (g_incognito) return 0;   // the ordinary window's engine may have Login Data open; it applies them itself
     std::string data;
     if (!read_file(pending_file(), data)) return 0;
     std::wstring ld = g_state + L"\\webview2\\EBWebView\\Default\\Login Data";

@@ -219,6 +219,7 @@ static long long firefox_to_unix(const std::wstring &micros) {
 }
 ImportResult import_do(const ImportProfile &p, bool want_bookmarks, bool want_history, bool /*passwords*/) {
     ImportResult r;
+    if (g_incognito) { r.note = T(L"No disponible en una ventana de incógnito."); return r; }   // nothing is kept from there
     // bookmarks
     if (want_bookmarks) {
         BmNode folder; folder.id = bm_new_id(); folder.folder = true;

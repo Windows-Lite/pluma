@@ -242,6 +242,7 @@ static const Text kTexts[] = {
     { L"CSV borrado", L"CSV deleted", L"CSV apagado", L"CSV supprimé", L"CSV gelöscht", L"CSV eliminato" },
     { L"No se pudo borrar el CSV", L"Could not delete the CSV", L"Não foi possível apagar o CSV", L"Impossible de supprimer le CSV", L"Die CSV konnte nicht gelöscht werden", L"Impossibile eliminare il CSV" },
     { L"contraseña importada", L"password imported", L"senha importada", L"mot de passe importé", L"Passwort importiert", L"password importata" },
+    { L"No disponible en una ventana de incógnito.", L"Not available in an incognito window.", L"Não disponível em uma janela anônima.", L"Indisponible dans une fenêtre de navigation privée.", L"In einem Inkognito-Fenster nicht verfügbar.", L"Non disponibile in una finestra in incognito." },
     { L"No se pudo preparar el almacén de contraseñas de Pluma.", L"Pluma's password store could not be prepared.", L"Não foi possível preparar o cofre de senhas do Pluma.", L"Le coffre de mots de passe de Pluma n'a pas pu être préparé.", L"Plumas Passwortspeicher konnte nicht vorbereitet werden.", L"Impossibile preparare l'archivio password di Pluma." },
     { L"El CSV no tiene las columnas esperadas (url, username, password).", L"The CSV lacks the expected columns (url, username, password).", L"O CSV não tem as colunas esperadas (url, username, password).", L"Le CSV n'a pas les colonnes attendues (url, username, password).", L"Der CSV fehlen die erwarteten Spalten (url, username, password).", L"Il CSV non ha le colonne previste (url, username, password)." },
 };

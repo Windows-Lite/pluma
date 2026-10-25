@@ -63,6 +63,7 @@ static void write_node(std::wstring &o, const BmNode &n) {
     o += L"}";
 }
 void bookmarks_save() {
+    if (g_incognito) return;   // the incognito window keeps nothing (and must not overwrite the ordinary window's file)
     std::wstring o = L"{\"v\":1,\"next\":" + std::to_wstring(g_bm_next) + L",\"roots\":[";
     for (size_t i = 0; i < g_bm_root.kids.size(); i++) { if (i) o += L","; write_node(o, g_bm_root.kids[i]); }
     o += L"]}";
