@@ -157,6 +157,13 @@ ya tenga esa funcionalidad»).
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
   en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
 
+## Pestaña nueva
+- «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en
+  `paginas.tsv` (url, título). En cuanto hay una, salen solo las suyas. Sin ninguna, «Lo que más visitas» (se puede
+  apagar en el menú: «Sugerir lo que más visito», `sugerir_visitadas`). La × de cada fila (al pasar el ratón) quita
+  la página suya, o el sitio de las sugerencias para siempre (`ocultas.tsv`), con «Deshacer». Pedido el 25/10: «que
+  solo aparezcan páginas que yo haya añadido, como YouTube... que las pueda añadir fácilmente como un marcador».
+
 ## Seguridad
 - Motor de Edge, actualizado por Windows. Páginas en AppContainer (`msWebView2RendererAppContainer`), aislamiento de
   sitios activado (no quitarlo para ahorrar memoria), SmartScreen, prevención de rastreo equilibrada, uBlock Lite.
@@ -178,18 +185,25 @@ ya tenga esa funcionalidad»).
 - Recortar memoria (EmptyWorkingSet) tarda 9-90 ms: nunca en el hilo de la ventana, que comparte la entrada con las
   páginas (un hilo de la ventana ocupado retrasa los clics en la web). Va en un hilo aparte; y la interfaz de Pluma no
   se recorta a sí misma mientras se ve. Medido con `clics.js` en YouTube: mediana 6 ms hasta verse el clic.
-- Pantalla completa (zoom.cpp), del hueco del vídeo a la pantalla y vuelta: el vídeo se mueve EN VIVO. mpv lo dibuja en
-  cualquier caja de su ventana (`video-margin-ratio-*`) y un hilo cambia la caja en cada refresco de la pantalla
-  (`WaitForVBlank`) con un mpv_handle propio (`mpv_create_client`). Una foto de la pantalla solo tapa el instante en
-  que la ventana cambia de tamaño (~100 ms); lo de alrededor (barra, barra de tareas, la página) se funde sobre el
-  vídeo mientras crece, o aparece cuando ya ha encogido. Historia, todo del 25/10: de golpe («tosco, laggy»); fundido
-  a negro («tosca, no fluida»; con temporizadores, 3-6 pasos); foto del vídeo que crecía («no hay transiciones,
-  tosco y laggy»: el vídeo se quedaba quieto medio segundo y entre ventana y pantalla completa solo crece un 10 %).
-  Trampas: la ventana de la foto, en un hilo sin mensajes, sacaba el cursor de espera en cada cambio (va en el hilo
-  de la ventana con `HTTRANSPARENT`); sin `DWMWA_TRANSITIONS_FORCEDISABLED` en la foto, Windows la fundía al
-  aparecer y el cambio se veía a través; los márgenes de la ventana nueva se ponen ANTES del cambio (después, salió
-  un fotograma con el vídeo pequeño en medio); `sub-use-margins=no`, o los subtítulos se van al negro de alrededor.
-  La pantalla completa que pide la página va sin animación de Windows (escalaba la página vieja, medio transparente).
+- Pantalla completa (zoom.cpp), del hueco del vídeo a la pantalla y vuelta: una ventana encima de todo, transparente
+  salvo lo que pinta (DirectComposition), con el fotograma que se ve (`screenshot-raw video` de mpv, en un hilo, con
+  su propio `mpv_create_client`) y una capa negra. Al entrar, el fotograma crece y el negro tapa la página; con todo
+  tapado, la ventana cambia debajo. Al salir, la ventana cambia primero, debajo, y el fotograma encoge a su hueco
+  mientras el negro descubre la página. Lo anima Windows mismo a la frecuencia de la pantalla. Medido: cuadros cada
+  10-15 ms, sin congelones; el zoom arranca a los 20-80 ms (el primer `screenshot-raw` tarda ~230: se hace uno por
+  adelantado 1,5 s después de entrar el reproductor). Historia, todo del 25/10: de golpe («tosco, laggy»); fundido a
+  negro («tosca, no fluida»); el vídeo en vivo movido con los márgenes de mpv (`video-margin-ratio-*`, cuatro cambios
+  por cuadro que mpv dibujaba uno a uno: «super choppy»); y una FOTO DE LA PANTALLA (BitBlt): Windows congelaba la
+  pantalla ~320 ms al leerla («se laguea todo»). Nunca leer la pantalla con BitBlt para una animación. Trampas: la
+  ventana del zoom en un hilo sin mensajes sacaba el cursor de espera (va en el hilo de la ventana, `HTTRANSPARENT`);
+  sin `DWMWA_TRANSITIONS_FORCEDISABLED` en ella, Windows la fundía al aparecer; la página dormida no cambia de tamaño
+  en la pantalla completa del reproductor (`tabs_layout_views`). La que pide la página va sin animación de Windows.
+- Scroll de YouTube a tirones al abrir un vídeo (25/10): el recorte de memoria (EmptyWorkingSet del motor, la gráfica
+  y la página) caía justo después de cargar y cada 20 s, y todo lo recortado vuelve a fallos de página al moverse;
+  y la página se dormía a los 2,5 s y la primera rueda la despertaba en frío. Ahora: recortes solo con el PC sin
+  tocar 3-5 s (`user_away`); la página se duerme a los 15 s sin el ratón encima (o 30 s sin tocar nada), y con el
+  ratón sobre la foto se despierta detrás (`warm_page`); una foto al principio y otra justo antes del cambio, no cada
+  1,5 s. Medido con `tirones.js` tras la rueda, a los 20 s: 0 cuadros de más de 25 ms (antes 3, uno de más de 50).
 - Pruebas de transiciones: fuera de la pantalla la foto sale negra. Con `PLUMA_A_LA_VISTA=x,y` la instancia de prueba
   se pone en la pantalla, siempre encima, para grabarla con `tools\grabar.exe`. Así, Chromium la da por tapada a los
   4 s (su detección de ventanas ocultas) y YouTube encoge su reproductor a 144x0: en ese perfil de prueba,

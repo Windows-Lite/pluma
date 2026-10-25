@@ -1,12 +1,12 @@
-// Pluma: into fullscreen and out of it with the picture moving on screen as it plays: from the video's place in the
-// page to the whole screen, and back. mpv itself draws the video in any box of its window (its margins), so the
-// picture grows or shrinks live, every frame, with no photo standing still in its place. A photo of the screen only
-// hides the moment the window changes size (a few frames): its picture goes as soon as the player draws at the new
-// size, and what is around the picture (the bar, the taskbar, the page) fades out over the video as it grows, or in
-// once it has shrunk.
-// (Before, a photo of the picture grew instead: the video stood still for half a second, and between window and
-// fullscreen it only grows a tenth: "no hay transiciones, tosco y laggy", 25/10. The photo's window, on a thread that
-// read no messages, also showed Windows' busy cursor at every change.)
+// Pluma: into fullscreen and out with a zoom, as phones and Macs do: the video grows from its place in the page to
+// fill the screen, or shrinks back into it. A window over everything, see-through but for what it draws, holds the
+// frame on screen (taken from the player itself) and a black layer: going in, the frame grows and the black comes
+// over the page, and once all is covered the window changes underneath; coming out, the window changes first, under
+// frame and black, and then the frame shrinks into its place while the black clears off the page around it. The
+// animation is DirectComposition's: Windows itself moves it at the screen's refresh rate, whatever Pluma, mpv or the
+// page are doing. (Before, 25/10: at once, "tosco, laggy"; a fade through black, "tosca, no fluida"; the live video
+// moved by mpv's margins, "super choppy"; a photo of the whole screen, which froze it for a third of a second while
+// Windows read it back, and the sleeping page laid out again for the whole screen: "se laguea todo".)
 #include "pluma.h"
 #include <atomic>
 #include <thread>
@@ -17,48 +17,38 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "dcomp.lib")
 
-static const UINT WM_APP_ZOOM = WM_APP + 30;   // to the window: wp 1 the photo is ready (lp 1: there is one), change now; wp 2 the end
-static const double kGrowMs = 300, kShrinkMs = 260, kRevealMs = 170, kSettleMaxMs = 300;
-static std::atomic<bool> g_busy{ false }, g_want{ false }, g_applied{ false }, g_settled{ false }, g_stop{ false };
-static std::function<void()> g_change;   // the change itself, on the window's thread
-static bool g_for_fullscreen;
-static HWND g_cover;                     // the photo's window (the window's thread's: the mouse goes through it)
-static void *g_client;                   // the zoom's own handle on mpv, for its thread
-static D2D1_RECT_F g_keep;               // the picture's box in the photo; after the change, where it stays
-static D2D1_RECT_F g_win_after;          // the player's window once changed (both written before g_applied)
-static D2D1_RECT_F g_win_foreseen;       // ... as foreseen before the change
-static RECT g_area_before;               // the page area before fullscreen: where the picture goes back to
+// to the window: wp 1 the frame is ready (lp 1: shown), show it (and coming out, change); wp 3 change (going in); 2 end
+static const UINT WM_APP_ZOOM = WM_APP + 30;
+static const double kZoomMs = 300, kFadeMs = 110, kSettleMaxMs = 300;
+static std::atomic<bool> g_busy{ false }, g_want{ false }, g_shown{ false }, g_changed{ false }, g_settled{ false }, g_stop{ false };
+static RECT g_after;                     // the player's window once changed (screen coordinates); written before g_changed
+static HWND g_cover;                     // the zoom's window (the window's thread's: the mouse goes through it)
+static bool g_enter;                     // this zoom goes into fullscreen
 
-static D2D1_RECT_F rf(RECT r) { return { (float)r.left, (float)r.top, (float)r.right, (float)r.bottom }; }
-static RECT media_area() {
-    // where the page or the player is, in screen coordinates (all of the window below the bar)
-    RECT rc; GetClientRect(g_win, &rc);
-    rc.top = (LONG)ui_band_height();
-    MapWindowPoints(g_win, NULL, (POINT *)&rc, 2);
-    return rc;
+static D2D1_RECT_F fit(double aspect, RECT r) {
+    // the picture inside an area, as a player shows it (black bars where it does not fill)
+    double w = r.right - r.left, h = r.bottom - r.top;
+    double pw = w, ph = w / aspect;
+    if (ph > h) { ph = h; pw = h * aspect; }
+    double x = r.left + (w - pw) / 2, y = r.top + (h - ph) / 2;
+    return { (float)x, (float)y, (float)(x + pw), (float)(y + ph) };
 }
-static ComPtr<IDXGIAdapter1> screen_card(RECT mon, ComPtr<IDXGIOutput> *output) {
+static ComPtr<IDXGIAdapter1> screen_card(RECT mon) {
     // the card the screen hangs from (Windows' list of displays: DXGI shows it as the process's card on a laptop
-    // with two), and its output for that screen: the photo is composed there, and the picture moves at its refresh
+    // with two); the zoom is composed there, with no copying between cards
     MONITORINFOEXW mi = {}; mi.cbSize = sizeof(mi);
     POINT c = { (mon.left + mon.right) / 2, (mon.top + mon.bottom) / 2 };
-    HMONITOR hm = MonitorFromPoint(c, MONITOR_DEFAULTTONEAREST);
-    GetMonitorInfoW(hm, &mi);
+    GetMonitorInfoW(MonitorFromPoint(c, MONITOR_DEFAULTTONEAREST), &mi);
     std::wstring name;
     DISPLAY_DEVICEW dd = { sizeof(dd) };
     for (DWORD i = 0; EnumDisplayDevicesW(NULL, i, &dd, 0); i++, dd.cb = sizeof(dd))
         if (!wcscmp(dd.DeviceName, mi.szDevice)) { name = dd.DeviceString; break; }
     ComPtr<IDXGIFactory1> f;
     ComPtr<IDXGIAdapter1> a;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&f)))) return nullptr;
+    if (name.empty() || FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&f)))) return nullptr;
     for (UINT i = 0; f->EnumAdapters1(i, &a) != DXGI_ERROR_NOT_FOUND; i++, a.Reset()) {
-        ComPtr<IDXGIOutput> o;
-        for (UINT k = 0; a->EnumOutputs(k, &o) != DXGI_ERROR_NOT_FOUND; k++, o.Reset()) {
-            DXGI_OUTPUT_DESC od;
-            if (SUCCEEDED(o->GetDesc(&od)) && od.Monitor == hm && output) *output = o;
-        }
         DXGI_ADAPTER_DESC1 ad;
-        if (!name.empty() && SUCCEEDED(a->GetDesc1(&ad)) && name == ad.Description) return a;
+        if (SUCCEEDED(a->GetDesc1(&ad)) && name == ad.Description) return a;
     }
     return nullptr;
 }
@@ -82,133 +72,108 @@ static bool fill_surface(IDCompositionDevice *dev, ID3D11DeviceContext *ctx, UIN
     out->EndDraw();
     return true;
 }
-static void next_frame(IDXGIOutput *out) {
-    // the screen's next refresh (or DWM's next frame, with no output)
-    if (!out || FAILED(out->WaitForVBlank())) DwmFlush();
-}
-static void move(void *client, IDXGIOutput *out, D2D1_RECT_F win, D2D1_RECT_F a, D2D1_RECT_F b, double ms) {
-    // the picture from box a to box b inside its window, live, a step at each refresh of the screen (easing out)
-    double t0 = now_ms();
-    for (;;) {
-        double t = ms > 0 ? std::min(1.0, (now_ms() - t0) / ms) : 1, e = 1 - pow(1 - t, 3);
-        D2D1_RECT_F r = { (float)(a.left + (b.left - a.left) * e), (float)(a.top + (b.top - a.top) * e),
-                          (float)(a.right + (b.right - a.right) * e), (float)(a.bottom + (b.bottom - a.bottom) * e) };
-        video_box(client, win, r);
-        if (t >= 1 || g_stop) break;
-        next_frame(out);
-    }
-}
-struct Plan {
-    RECT shot;                 // what the photo covers (screen px)
-    D2D1_RECT_F win_after;     // the player's window once changed, as foreseen (its margins are set before the change)
-    bool shrink;               // out of fullscreen: the picture first shrinks, live, to where it goes back
-    D2D1_RECT_F from, to;      // ... from the whole screen to that box (its window does not change meanwhile)
-    D2D1_RECT_F keep;          // the picture's box in the photo
-    double grow_ms, reveal_ms; // after the change: the picture to its whole window, and what is around fading
-};
-static void zoom_run(Plan p) {
+static void wait_for(std::atomic<bool> &flag, double ms) { double t = now_ms(); while (!flag && !g_stop && now_ms() - t < ms) Sleep(2); }
+// enter: from the player's place (box) to the screen; out: from the screen to where the player is once changed
+static void zoom_run(bool enter, RECT mon, RECT box, double aspect, void *client) {
     double began = now_ms();
-    void *client = g_client;
-    ComPtr<IDXGIOutput> out;
-    ComPtr<IDXGIAdapter1> card = screen_card(p.shot, &out);
-    if (p.shrink) move(client, out.Get(), rf(p.shot), p.from, p.to, kShrinkMs);
-    int W = p.shot.right - p.shot.left, H = p.shot.bottom - p.shot.top;
-    bool ok = false;
-    // the photo of the screen as it is now
-    std::vector<BYTE> shot((size_t)std::max(0, W) * std::max(0, H) * 4);
-    if (!shot.empty()) {
-        HDC sdc = GetDC(NULL), mdc = CreateCompatibleDC(sdc);
-        BITMAPINFO bi = {};
-        bi.bmiHeader.biSize = sizeof(bi.bmiHeader); bi.bmiHeader.biWidth = W; bi.bmiHeader.biHeight = -H;
-        bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
-        void *bits = NULL;
-        HBITMAP bmp = CreateDIBSection(mdc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-        HGDIOBJ old = SelectObject(mdc, bmp);
-        BitBlt(mdc, 0, 0, W, H, sdc, p.shot.left, p.shot.top, SRCCOPY | CAPTUREBLT);
-        GdiFlush();
-        memcpy(shot.data(), bits, shot.size());
-        SelectObject(mdc, old); DeleteObject(bmp); DeleteDC(mdc); ReleaseDC(NULL, sdc);
-    }
+    std::vector<BYTE> px;
+    int fw = 0, fh = 0;
+    bool ok = video_frame(client, mon.right - mon.left, px, fw, fh);
+    video_client_done(client);
+    double t_frame = now_ms();
     ComPtr<ID3D11Device> d3d; ComPtr<ID3D11DeviceContext> ctx; ComPtr<IDXGIDevice> dxgi;
     ComPtr<IDCompositionDevice> dev; ComPtr<IDCompositionTarget> target;
-    ComPtr<IDCompositionVisual> root, ring, center;
-    ComPtr<IDCompositionEffectGroup> fx_ring;
-    std::vector<ComPtr<IDCompositionVisual>> pieces;
-    std::vector<ComPtr<IDCompositionSurface>> surfaces;
-    // the photo in pieces: the picture's box, and the four bands around it (the bar, the taskbar, the page...)
-    int kl = std::max(0, std::min(W, (int)p.keep.left - (int)p.shot.left)), kt = std::max(0, std::min(H, (int)p.keep.top - (int)p.shot.top));
-    int kr = std::max(kl, std::min(W, (int)p.keep.right - (int)p.shot.left)), kb = std::max(kt, std::min(H, (int)p.keep.bottom - (int)p.shot.top));
-    RECT parts[5] = { { kl, kt, kr, kb }, { 0, 0, W, kt }, { 0, kb, W, H }, { 0, kt, kl, kb }, { kr, kt, W, kb } };
+    ComPtr<IDCompositionVisual> root, dark, pic;
+    ComPtr<IDCompositionSurface> s_dark, s_pic;
+    ComPtr<IDCompositionEffectGroup> fx_dark, fx_root;
+    ComPtr<IDCompositionScaleTransform> sc; ComPtr<IDCompositionTranslateTransform> tr;
+    int W = mon.right - mon.left, H = mon.bottom - mon.top;
+    D2D1_RECT_F from = fit(aspect, enter ? box : mon);
+    auto place = [&](D2D1_RECT_F r, bool animate) {
+        float sx = (r.right - r.left) / fw, sy = (r.bottom - r.top) / fh, x = r.left - mon.left, y = r.top - mon.top;
+        if (!animate) { sc->SetScaleX(sx); sc->SetScaleY(sy); tr->SetOffsetX(x); tr->SetOffsetY(y); return; }
+        float sx0 = (from.right - from.left) / fw, sy0 = (from.bottom - from.top) / fh;
+        sc->SetScaleX(ease(dev.Get(), sx0, sx, kZoomMs).Get()); sc->SetScaleY(ease(dev.Get(), sy0, sy, kZoomMs).Get());
+        tr->SetOffsetX(ease(dev.Get(), from.left - mon.left, x, kZoomMs).Get()); tr->SetOffsetY(ease(dev.Get(), from.top - mon.top, y, kZoomMs).Get());
+    };
+    ComPtr<IDXGIAdapter1> card = ok ? screen_card(mon) : nullptr;
     do {
-        if (shot.empty() || !g_cover || g_stop) break;
+        if (!ok || !g_cover || g_stop) { ok = false; break; }
+        ok = false;
         if (FAILED(D3D11CreateDevice(card.Get(), card ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                                      NULL, 0, D3D11_SDK_VERSION, &d3d, NULL, &ctx))) break;
         if (FAILED(d3d.As(&dxgi)) || FAILED(DCompositionCreateDevice(dxgi.Get(), IID_PPV_ARGS(&dev)))) break;
         if (FAILED(dev->CreateTargetForHwnd(g_cover, TRUE, &target))) break;
-        dev->CreateVisual(&root); dev->CreateVisual(&ring);
-        dev->CreateEffectGroup(&fx_ring);
-        ring->SetEffect(fx_ring.Get());
-        bool fine = true;
-        for (int i = 0; i < 5 && fine; i++) {
-            RECT r = parts[i];
-            if (r.right <= r.left || r.bottom <= r.top) continue;
-            ComPtr<IDCompositionSurface> s;
-            ComPtr<IDCompositionVisual> vis;
-            fine = fill_surface(dev.Get(), ctx.Get(), r.right - r.left, r.bottom - r.top, shot.data() + ((size_t)r.top * W + r.left) * 4, W * 4, s) &&
-                   SUCCEEDED(dev->CreateVisual(&vis));
-            if (!fine) break;
-            vis->SetContent(s.Get());
-            vis->SetOffsetX((float)r.left); vis->SetOffsetY((float)r.top);
-            if (i == 0) center = vis; else ring->AddVisual(vis.Get(), TRUE, NULL);
-            pieces.push_back(vis); surfaces.push_back(s);
-        }
-        if (!fine) break;
-        root->AddVisual(ring.Get(), TRUE, NULL);
-        if (center) root->AddVisual(center.Get(), TRUE, ring.Get());
+        BYTE black[8 * 8 * 4] = {};
+        if (!fill_surface(dev.Get(), ctx.Get(), 8, 8, black, 32, s_dark) || !fill_surface(dev.Get(), ctx.Get(), fw, fh, px.data(), fw * 4, s_pic)) break;
+        px.clear(); px.shrink_to_fit();
+        dev->CreateVisual(&root); dev->CreateVisual(&dark); dev->CreateVisual(&pic);
+        dark->SetContent(s_dark.Get()); pic->SetContent(s_pic.Get());
+        // the black: 8x8, stretched over the screen; see-through going in, full coming out
+        ComPtr<IDCompositionScaleTransform> sc_dark; dev->CreateScaleTransform(&sc_dark);
+        sc_dark->SetScaleX(W / 8.0f); sc_dark->SetScaleY(H / 8.0f);
+        dark->SetTransform(sc_dark.Get());
+        dev->CreateEffectGroup(&fx_dark); dev->CreateEffectGroup(&fx_root);
+        fx_dark->SetOpacity(enter ? 0.0f : 1.0f);
+        dark->SetEffect(fx_dark.Get());
+        // the frame, where the video is now
+        dev->CreateScaleTransform(&sc); dev->CreateTranslateTransform(&tr);
+        place(from, false);
+        IDCompositionTransform *pair[] = { sc.Get(), tr.Get() };
+        ComPtr<IDCompositionTransform> group;
+        dev->CreateTransformGroup(pair, 2, &group);
+        pic->SetTransform(group.Get());
+        pic->SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR);
+        root->SetEffect(fx_root.Get());
+        root->AddVisual(dark.Get(), TRUE, NULL);
+        root->AddVisual(pic.Get(), TRUE, dark.Get());
         target->SetRoot(root.Get());
         dev->Commit();
         dev->WaitForCommitCompletion();
         ok = true;
     } while (false);
-    // the window changes now, under the photo (or at once, if there is no photo)
-    double t_photo = now_ms(), t_applied = 0, t_settled = 0;
+    double t_ready = now_ms();
+    // the window shows it (and coming out, changes under it; with no frame, it simply changes)
     PostMessageW(g_win, WM_APP_ZOOM, 1, ok ? 1 : 0);
-    double t = now_ms();
-    while (!g_applied && !g_stop && now_ms() - t < 500) Sleep(2);
-    t_applied = now_ms();
-    if (g_applied && !g_stop) {
-        D2D1_RECT_F win = g_win_after, keep = g_keep;
-        if (ok) {
-            // once the player draws at its new size, the photo's picture goes: the live one is there, in its place
-            t = now_ms();
-            while (!g_settled && !g_stop && now_ms() - t < kSettleMaxMs) Sleep(2);
-            while (!video_box_drawn(client, win, keep) && !g_stop && now_ms() - t < kSettleMaxMs) Sleep(2);
-            t_settled = now_ms();
-            next_frame(out.Get()); next_frame(out.Get());
-            if (center) root->RemoveVisual(center.Get());
-            fx_ring->SetOpacity(ease(dev.Get(), 1, 0, p.reveal_ms).Get());
+    if (ok) {
+        if (enter) {
+            wait_for(g_shown, 500);
+            place(fit(aspect, mon), true);
+            fx_dark->SetOpacity(ease(dev.Get(), 0, 1, kZoomMs).Get());
             dev->Commit();
+            double t0 = now_ms();
+            while (!g_stop && now_ms() - t0 < kZoomMs + 16) Sleep(4);
+            // all covered: the window goes fullscreen underneath
+            PostMessageW(g_win, WM_APP_ZOOM, 3, 0);
+            wait_for(g_changed, 500);
+            wait_for(g_settled, kSettleMaxMs);
+        } else {
+            wait_for(g_changed, 500);
+            wait_for(g_settled, kSettleMaxMs);
+            place(fit(aspect, g_after), true);
+            fx_dark->SetOpacity(ease(dev.Get(), 1, 0, kZoomMs).Get());
+            dev->Commit();
+            double t0 = now_ms();
+            while (!g_stop && now_ms() - t0 < kZoomMs + 16) Sleep(4);
         }
-        double t0 = now_ms();
-        move(client, out.Get(), win, keep, win, p.grow_ms);
-        double left = p.reveal_ms + 16 - (now_ms() - t0);
-        if (ok && left > 0 && !g_stop) Sleep((DWORD)left);
-        video_box(client, win, win);
+        // the frame gives way to the live video under it
+        fx_root->SetOpacity(ease(dev.Get(), 1, 0, kFadeMs).Get());
+        dev->Commit();
+        Sleep((DWORD)kFadeMs + 20);
     }
-    if (g_dev) log_line(L"zoom: " + std::to_wstring((int)(now_ms() - began)) + L" ms (foto a los " + std::to_wstring((int)(t_photo - began)) +
-                        L", cambio " + std::to_wstring((int)(t_applied - began)) + L", asentado " + std::to_wstring((int)(t_settled - began)) + L")" +
-                        (ok ? L"" : L" (sin foto: cambio directo)"));
-    target.Reset(); pieces.clear(); surfaces.clear(); center.Reset(); ring.Reset(); root.Reset(); dev.Reset();
-    video_box_done(client);
+    if (g_dev) log_line(L"zoom: " + std::to_wstring((int)(now_ms() - began)) + L" ms (fotograma " + std::to_wstring((int)(t_frame - began)) +
+                        L", listo " + std::to_wstring((int)(t_ready - began)) + L")" + (ok ? L"" : L" (sin fotograma: cambio directo)"));
+    target.Reset(); root.Reset(); dark.Reset(); pic.Reset(); dev.Reset();
     PostMessageW(g_win, WM_APP_ZOOM, 2, 0);
 }
 static LRESULT CALLBACK cover_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    // the photo lets the mouse through to what is under it (Pluma's own windows): its cursor, its clicks
+    // the zoom lets the mouse through to what is under it (Pluma's own windows): its cursor, its clicks
     if (msg == WM_NCHITTEST) return HTTRANSPARENT;
     if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     return DefWindowProcW(h, msg, wp, lp);
 }
-static bool zoom_go(Plan p, std::function<void()> change, bool for_fullscreen) {
+void zoom_start(bool on) {
+    // fullscreen in (the video from its place in the page to the screen) or out (back there)
     static bool registered;
     if (!registered) {
         WNDCLASSEXW wc = { sizeof(wc) };
@@ -216,86 +181,55 @@ static bool zoom_go(Plan p, std::function<void()> change, bool for_fullscreen) {
         wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
         registered = RegisterClassExW(&wc) != 0;
     }
-    void *client = video_box_client();
-    if (!client) return false;
-    g_client = client;
-    g_change = change;
-    g_for_fullscreen = for_fullscreen;
-    g_keep = p.keep;
-    g_win_foreseen = p.win_after;
-    g_applied = g_settled = g_stop = false;
+    g_want = on;
+    RECT mon = fullscreen_rect(), box = video_window_rect();
+    double aspect = video_aspect();
+    void *client = video_client();
+    if (aspect <= 0 || !client || IsRectEmpty(&box)) { video_client_done(client); fullscreen_now(on); return; }
+    g_shown = g_changed = g_settled = g_stop = false;
+    g_enter = on;
     g_busy = true;
     g_cover = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"PlumaZoom", L"", WS_POPUP,
-                              p.shot.left, p.shot.top, p.shot.right - p.shot.left, p.shot.bottom - p.shot.top, NULL, NULL, g_inst, NULL);
-    // and not Windows' own animations meanwhile: of the window (they ran on after the change), nor of the photo,
-    // which faded in while the window changed under it (the change was seen through it, once in the recording)
+                              mon.left, mon.top, mon.right - mon.left, mon.bottom - mon.top, NULL, NULL, g_inst, NULL);
+    // and not Windows' own animations meanwhile: of the window (they ran on after the change), nor of the zoom's,
+    // which faded in (the change was seen through it)
     BOOL off = TRUE;
     DwmSetWindowAttribute(g_win, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
     if (g_cover) DwmSetWindowAttribute(g_cover, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
-    std::thread(zoom_run, p).detach();
-    return true;
-}
-void zoom_remember_area() { g_area_before = video_on(active_tab()) ? video_window_rect() : media_area(); }
-void zoom_start(bool on) {
-    // fullscreen in: the picture grows from its place in the page to the screen; out: it shrinks back there, then
-    // the window changes
-    g_want = on;
-    RECT mon = fullscreen_rect();
-    Plan p = {};
-    p.shot = mon;
-    if (on) {
-        RECT area = video_window_rect();
-        p.keep = rf(area);
-        p.win_after = rf(mon);
-        p.grow_ms = kGrowMs; p.reveal_ms = kGrowMs * 0.75;
-    } else {
-        RECT back = g_area_before, cut;
-        if (!IntersectRect(&cut, &back, &mon) || !EqualRect(&cut, &back)) back = mon;   // (unknown, or on another screen)
-        p.shrink = !EqualRect(&back, &mon);
-        p.from = rf(mon); p.to = rf(back); p.keep = rf(back);
-        p.win_after = rf(back);
-        p.grow_ms = kRevealMs; p.reveal_ms = kRevealMs;
-    }
-    if (!zoom_go(p, [] { fullscreen_now(g_want); }, true)) fullscreen_now(on);
+    std::thread(zoom_run, on, mon, box, aspect, client).detach();
 }
 bool zoom_busy() { return g_busy; }
 void zoom_want(bool on) { g_want = on; }
 void zoom_stop() {
-    // the window goes (closed to the tray): the photo with it, and its thread ends at once
+    // the window goes (closed to the tray): the zoom with it, and its thread ends at once
     if (!g_busy) return;
     g_stop = true;
     if (g_cover) ShowWindow(g_cover, SW_HIDE);
 }
+static void change() {
+    if (!g_stop) fullscreen_now(g_want);
+    g_after = video_window_rect();
+    g_settled = video_settled();
+    g_changed = true;
+}
 void zoom_message(WPARAM wp, LPARAM lp) {
-    // on the window's thread: the change itself, under the photo; and the end
+    // on the window's thread: the zoom shown, the change itself under it, and the end
     if (wp == 1) {
         if (lp && g_cover && !g_stop) {
             SetWindowPos(g_cover, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
             DwmFlush();
-            DwmFlush();
         }
-        // the margins for the window as it will be, before it changes: mpv's first picture at the new size has them
-        // already (set after, one picture came out with the old ones: the video small in the middle, 25/10)
-        video_box(g_client, g_win_foreseen, g_keep);
-        if (g_change && !g_stop) g_change();
-        // the picture where it was in the photo, inside the player's window as it is now
-        D2D1_RECT_F w = rf(video_window_rect()), k = g_keep;
-        k = { std::max(k.left, w.left), std::max(k.top, w.top), std::min(k.right, w.right), std::min(k.bottom, w.bottom) };
-        if (k.right <= k.left || k.bottom <= k.top) k = w;
-        video_box(g_client, w, k);
-        g_win_after = w;
-        g_keep = k;
-        g_settled = video_settled();
-        g_applied = true;
+        g_shown = true;
+        if (!lp || !g_enter) change();   // coming out (or with nothing to show): the window changes now, under it
+    } else if (wp == 3) {
+        change();
     } else {
         if (g_cover) { DestroyWindow(g_cover); g_cover = NULL; }
-        g_client = nullptr;
         g_busy = false;
         BOOL off = FALSE;
         DwmSetWindowAttribute(g_win, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
-        g_change = nullptr;
-        if (g_for_fullscreen && g_fullscreen != g_want && !g_stop) fullscreen_now(g_want);   // asked again meanwhile
+        if (g_fullscreen != g_want && !g_stop) fullscreen_now(g_want);   // asked again meanwhile
         video_zoom_done();
     }
 }
-void video_resized() { if (g_applied) g_settled = video_settled(); }
+void video_resized() { if (g_changed) g_settled = video_settled(); }

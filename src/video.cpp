@@ -24,6 +24,11 @@ enum { MPV_END_FILE_REASON_ERROR = 4 };
 struct mpv_event { int event_id; int error; uint64_t reply_userdata; void *data; };
 struct mpv_event_property { const char *name; int format; void *data; };
 struct mpv_event_end_file { int reason; int error; };
+enum { MPV_FORMAT_NODE_MAP = 8, MPV_FORMAT_BYTE_ARRAY = 9 };
+struct mpv_node_list;
+struct mpv_byte_array { void *data; size_t size; };
+struct mpv_node { union { char *string; int flag; int64_t int64; double double_; mpv_node_list *list; mpv_byte_array *ba; } u; int format; };
+struct mpv_node_list { int num; mpv_node *values; char **keys; };
 static struct {
     mpv_handle *(*create)();
     int (*initialize)(mpv_handle *);
@@ -36,6 +41,8 @@ static struct {
     int (*observe_property)(mpv_handle *, uint64_t, const char *, int);
     mpv_event *(*wait_event)(mpv_handle *, double);
     void (*set_wakeup_callback)(mpv_handle *, void (*)(void *), void *);
+    int (*command_ret)(mpv_handle *, const char **, mpv_node *);
+    void (*free_node_contents)(mpv_node *);
     mpv_handle *(*create_client)(mpv_handle *, const char *);
     void (*destroy)(mpv_handle *);
 } M;
@@ -57,6 +64,7 @@ static bool load_mpv() {
     LOAD(set_option_string, "mpv_set_option_string"); LOAD(command, "mpv_command"); LOAD(command_async, "mpv_command_async");
     LOAD(set_property, "mpv_set_property"); LOAD(get_property, "mpv_get_property");
     LOAD(observe_property, "mpv_observe_property"); LOAD(wait_event, "mpv_wait_event"); LOAD(set_wakeup_callback, "mpv_set_wakeup_callback");
+    LOAD(command_ret, "mpv_command_ret"); LOAD(free_node_contents, "mpv_free_node_contents");
     LOAD(create_client, "mpv_create_client"); LOAD(destroy, "mpv_destroy");
 #undef LOAD
     if (!M.create || !M.initialize || !M.command || !M.command_async || !M.get_property || !M.wait_event || !M.set_wakeup_callback) {
@@ -93,12 +101,13 @@ struct Video {
     RECT photo_box{}, photo_area{};
     double photo_at = 0;
     bool photo_asked = false;
+    double warm_at = 0;   // when its page was last awake behind the photo (it sleeps once left alone a while)
 };
 static int g_serial;
 static Video *V(Tab *t) { return t ? (Video *)t->video : nullptr; }
 static HWND g_msg;   // a window of its own for mpv's events (they come from mpv's threads) and the timers
 static const UINT WM_VIDEO_EVENTS = WM_APP + 60, WM_VIDEO_FAILED = WM_APP + 61, WM_VIDEO_GONE = WM_APP + 62;
-static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000,
+static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWarmTimer = 13, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000,
                       kStartTimer = 0x400000;
 
 // ---------------------------------------------------------------- drawing: YouTube's look
@@ -587,7 +596,7 @@ static bool start_player(Video *v, double start) {
         // captions as YouTube draws them: white on a dark box
         { "sub-fonts-dir", fonts }, { "sub-font", "Roboto" }, { "sub-font-size", "34" }, { "sub-color", "#FFFFFF" },
         { "sub-border-style", "background-box" }, { "sub-back-color", "#BF080808" }, { "sub-shadow-offset", "0" }, { "sub-margin-y", "44" },
-        // ... over the picture, and with it while the zoom moves it (not in the black around it)
+        // ... over the picture, as YouTube's (not in the black around it)
         { "sub-use-margins", "no" } };
     for (auto &o : opts) M.set_option_string(v->mpv, o.k, o.v.c_str());
     if (g_dev) { M.set_option_string(v->mpv, "log-file", utf8(g_state + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v"); }   // tests
@@ -1253,6 +1262,7 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 static void wake_page(Tab *t, UINT msg, POINT at, int delta);
+static void warm_page(Tab *t);
 // ---------------------------------------------------------------- the mouse: over the video, over the controls
 static int hit(Video *v, float x, float y) {
     Layer &l = g_bottom;
@@ -1463,7 +1473,7 @@ static void CALLBACK ctl_tick(HWND, UINT, UINT_PTR id, DWORD) {
     // nothing of the web is on screen: its processes, asleep, give back what they take again (149 MB in all
     // watching, 123 with this; measured 25/10). On a thread of its own, and never the player's process
     static double last_trim = 0;
-    if (now_ms() - last_trim > 20000 && active_tab()->suspended) { last_trim = now_ms(); tabs_trim(TRIM_IDLE); }
+    if (now_ms() - last_trim > 20000 && active_tab()->suspended && user_away(5000)) { last_trim = now_ms(); tabs_trim(TRIM_IDLE); }
     // the time and the bar (repainted while they show), four times a second
     if (!g_drag_seek) {
         double was = v->pos;
@@ -1603,6 +1613,7 @@ static LRESULT CALLBACK photo_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint_photo(h, dc); EndPaint(h, &ps); return 0; }
+    case WM_MOUSEMOVE: if (cursor_moved(h, lp)) warm_page(active_tab()); return 0;
     case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: {
         POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         MapWindowPoints(h, g_win, &p, 1);
@@ -1741,6 +1752,7 @@ static void freeze_page(int id) {
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (p && p.pauseVideo) p.pauseVideo(); return 1; })()", [id](const Json &) {
         Tab *t = tab_by_id(id);
         if (!t || !t->video_mode || !t->view) return;
+        if (t->ctrl) t->ctrl->put_IsVisible(FALSE);   // (awake behind the photo, it was drawing itself: warm_page)
         ComPtr<ICoreWebView2_19> v19;
         if (SUCCEEDED(t->view.As(&v19))) v19->put_MemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
         ComPtr<ICoreWebView2_3> v3;
@@ -1748,10 +1760,39 @@ static void freeze_page(int id) {
             v3->TrySuspend(Callback<ICoreWebView2TrySuspendCompletedHandler>([id](HRESULT hr, BOOL ok) -> HRESULT {
                 Tab *t = tab_by_id(id);
                 // with nothing of the web on screen, the engine and its graphics give back what they hold too
-                if (t && t->video_mode && SUCCEEDED(hr) && ok) { t->suspended = true; tabs_trim(TRIM_IDLE); }
+                if (t && t->video_mode && SUCCEEDED(hr) && ok) { t->suspended = true; if (user_away(3000)) tabs_trim(TRIM_IDLE); }
                 return S_OK;
             }).Get());
     });
+}
+static const double kSleepAfterMs = 15000;
+static void CALLBACK freeze_check(HWND, UINT, UINT_PTR tid, DWORD) {
+    // the page behind Pluma's player sleeps (and gives its memory back) once the person has left it alone a while:
+    // asleep 2.5 s after the change, the first scroll to the comments woke it cold, and it stuttered for seconds
+    // (25/10). With the mouse over it, it stays awake (unless nobody touches the PC)
+    int id = (int)(tid - kFreezeTimer);
+    Tab *t = tab_by_id(id);
+    Video *v = V(t);
+    if (!t || !v || v->stage != ST_ON || !t->video_mode || t->suspended) { KillTimer(g_msg, tid); return; }
+    POINT pt; GetCursorPos(&pt);
+    bool over_page = g_photo && t == active_tab() && WindowFromPoint(pt) == g_photo;
+    if (user_away(30000) || (!over_page && now_ms() - v->warm_at >= kSleepAfterMs)) { KillTimer(g_msg, tid); freeze_page(id); return; }
+    SetTimer(g_msg, tid, 2000, freeze_check);
+}
+static void warm_page(Tab *t) {
+    // the mouse comes over the page around the video: the page wakes behind the photo (still unseen, the video still
+    // Pluma's), so that a scroll or a click on it finds it ready
+    Video *v = V(t);
+    if (!t || !v || v->stage != ST_ON || !t->video_mode || !t->view || !t->ctrl || g_fullscreen) return;
+    v->warm_at = now_ms();
+    SetTimer(g_msg, kFreezeTimer + t->id, 2000, freeze_check);
+    if (!t->suspended) return;
+    ComPtr<ICoreWebView2_3> v3;
+    if (SUCCEEDED(t->view.As(&v3))) v3->Resume();
+    t->suspended = false;
+    ComPtr<ICoreWebView2_19> v19;
+    if (SUCCEEDED(t->view.As(&v19))) v19->put_MemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL);
+    t->ctrl->put_IsVisible(TRUE);   // (it draws itself again, under the photo and the player)
 }
 static void place_window(Video *v, bool on_screen) {
     if (!v->wnd) return;
@@ -1788,9 +1829,18 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     SetTimer(g_msg, kCtlTimer, 250, ctl_tick);
     log_line(L"vídeo propio: " + v->title + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
              L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió");
-    SetTimer(g_msg, kFreezeTimer + t->id, 2500, [](HWND, UINT, UINT_PTR tid, DWORD) { KillTimer(g_msg, tid); freeze_page((int)(tid - kFreezeTimer)); });
+    v->warm_at = now_ms();
+    SetTimer(g_msg, kFreezeTimer + t->id, 2500, freeze_check);
     // the other qualities' lists, ahead (YouTube's list server takes 1-3 s for each)
     fetch_playlists(v, each_quality(v), [](Video *) {});
+    // and mpv's first frame taken once, ahead, on a thread: the first takes ~230 ms (the next ones ~25), and the
+    // fullscreen zoom waited for it
+    if (t == active_tab())
+        SetTimer(g_msg, kWarmTimer, 1500, [](HWND, UINT, UINT_PTR tid, DWORD) {
+            KillTimer(g_msg, tid);
+            void *c = video_client();
+            if (c) std::thread([c] { std::vector<BYTE> px; int w, h; video_frame(c, 640, px, w, h); video_client_done(c); }).detach();
+        });
     ui_invalidate();
 }
 static void CALLBACK sync_timer(HWND, UINT, UINT_PTR tid, DWORD) {
@@ -1819,9 +1869,13 @@ static void sync_tick(Tab *t, Video *v) {
              bool inside = set_box(t, v, r.arr[2].n, r.arr[3].n, r.arr[4].n, r.arr[5].n, r.arr[6].n);
              RECT pr = player_rect(v);
              bool drawn = abs(v->osd_w - (pr.right - pr.left)) <= 2 && abs(v->osd_h - (pr.bottom - pr.top)) <= 2;
-             // and a photo of the page around it, recent (YouTube keeps filling the page in as it loads)
-             bool pic = g_fullscreen || (photo_fits(v) && now_ms() - v->photo_at < 3000);
-             if (!g_fullscreen && (!photo_fits(v) || now_ms() - v->photo_at > 1500)) take_photo(t, v);
+             // and a photo of the page around it: one now, and a fresh one just before the change if it is old
+             // (YouTube fills the page in as it loads; but each one costs the page a moment: taken every second and
+             // a half, its scroll stuttered, 25/10)
+             double gap_now = v->start_at - pt;
+             bool fresh = now_ms() - v->photo_at < 4000;
+             if (!g_fullscreen && (!photo_fits(v) || (!fresh && gap_now < 1.5))) take_photo(t, v);
+             bool pic = g_fullscreen || (photo_fits(v) && fresh);
              static double said = 0;
              if (g_dev && now_ms() - said > 1000) {
                  said = now_ms();
@@ -1961,10 +2015,7 @@ static void CALLBACK watch_tick(HWND, UINT, UINT_PTR tid, DWORD) {
     // a page the person woke up (to scroll it, to click something): Pluma's player only once they leave it alone
     auto w = g_woken.find(id);
     if (w != g_woken.end() && w->second != watch_id(t->url)) { g_woken.erase(w); w = g_woken.end(); }
-    if (w != g_woken.end() && !g_test) {
-        LASTINPUTINFO li = { sizeof(li) };
-        if (GetLastInputInfo(&li) && GetTickCount() - li.dwTime < 4000) { SetTimer(g_msg, tid, 1000, watch_tick); return; }
-    }
+    if (w != g_woken.end() && !user_away(4000)) { SetTimer(g_msg, tid, 1000, watch_tick); return; }
     eval(t, kState, [id](const Json &r) {
         Tab *t = tab_by_id(id);
         if (!t || !g_watch.count(id)) return;
@@ -2107,37 +2158,50 @@ void video_debug_shot(const std::wstring &path) {
     }
     DeleteObject(bmp); DeleteDC(mdc);
 }
-void *video_box_client() {
+void *video_client() {
+    // a handle of its own on the player on screen, for another thread (it outlives the player safely: its commands
+    // just fail once the player has gone)
     Video *v = V(active_tab());
     if (!v || v->stage != ST_ON || !v->mpv || !M.create_client || !M.destroy) return nullptr;
     return M.create_client(v->mpv, NULL);
 }
-void video_box(void *client, D2D1_RECT_F win, D2D1_RECT_F box) {
-    // mpv's margins, as parts of its window: the picture fits in what they leave (libmpv may be called from any thread)
-    if (!client) return;
-    double w = std::max(1.0f, win.right - win.left), h = std::max(1.0f, win.bottom - win.top);
-    double m[4] = { (box.left - win.left) / w, (win.right - box.right) / w, (box.top - win.top) / h, (win.bottom - box.bottom) / h };
-    static const char *names[4] = { "video-margin-ratio-left", "video-margin-ratio-right", "video-margin-ratio-top", "video-margin-ratio-bottom" };
-    for (int i = 0; i < 4; i++) {
-        double d = std::max(0.0, std::min(0.9, m[i]));
-        M.set_property((mpv_handle *)client, names[i], MPV_FORMAT_DOUBLE, &d);
+void video_client_done(void *client) { if (client) M.destroy((mpv_handle *)client); }
+bool video_frame(void *client, int max_w, std::vector<BYTE> &px, int &w, int &h) {
+    // the frame on screen as mpv decoded it (BGRX), at most max_w wide (a 4K frame, every other pixel): taken from
+    // the player itself, not from the screen (reading the screen back froze it for a third of a second, 25/10)
+    if (!client || !M.command_ret || !M.free_node_contents) return false;
+    const char *args[] = { "screenshot-raw", "video", NULL };
+    mpv_node res = {};
+    if (M.command_ret((mpv_handle *)client, args, &res) < 0) return false;
+    bool ok = false;
+    if (res.format == MPV_FORMAT_NODE_MAP && res.u.list) {
+        int64_t W = 0, H = 0, stride = 0;
+        mpv_byte_array *ba = nullptr;
+        for (int i = 0; i < res.u.list->num; i++) {
+            const char *k = res.u.list->keys[i];
+            mpv_node &n = res.u.list->values[i];
+            if (!strcmp(k, "w") && n.format == MPV_FORMAT_INT64) W = n.u.int64;
+            else if (!strcmp(k, "h") && n.format == MPV_FORMAT_INT64) H = n.u.int64;
+            else if (!strcmp(k, "stride") && n.format == MPV_FORMAT_INT64) stride = n.u.int64;
+            else if (!strcmp(k, "data") && n.format == MPV_FORMAT_BYTE_ARRAY) ba = n.u.ba;
+        }
+        if (W > 0 && H > 0 && ba && ba->data && stride >= W * 4 && ba->size >= (size_t)(stride * H)) {
+            int step = 1;
+            while (max_w > 0 && W / step > max_w * 1.25) step++;
+            w = (int)(W / step); h = (int)(H / step);
+            px.resize((size_t)w * h * 4);
+            const BYTE *src = (const BYTE *)ba->data;
+            for (int y = 0; y < h; y++) {
+                const uint32_t *s = (const uint32_t *)(src + (size_t)y * step * stride);
+                uint32_t *d = (uint32_t *)(px.data() + (size_t)y * w * 4);
+                if (step == 1) memcpy(d, s, (size_t)w * 4);
+                else for (int x = 0; x < w; x++) d[x] = s[x * step];
+            }
+            ok = true;
+        }
     }
-}
-void video_box_done(void *client) { if (client) M.destroy((mpv_handle *)client); }
-bool video_box_drawn(void *client, D2D1_RECT_F win, D2D1_RECT_F box) {
-    // mpv already draws the picture in that box at that window's size (what it draws, not what it was asked: once a
-    // picture came out with the margins of before, and the video showed small in its place for two frames, 25/10)
-    if (!client) return true;
-    int64_t d[6] = {};
-    static const char *names[6] = { "osd-dimensions/w", "osd-dimensions/h", "osd-dimensions/ml", "osd-dimensions/mt", "osd-dimensions/mr", "osd-dimensions/mb" };
-    for (int i = 0; i < 6; i++) if (M.get_property((mpv_handle *)client, names[i], MPV_FORMAT_INT64, &d[i]) < 0) return true;
-    float w = win.right - win.left, h = win.bottom - win.top;
-    float l = box.left - win.left, t = box.top - win.top, r = box.right - win.left, b = box.bottom - win.top;
-    float vl = (float)d[2], vt = (float)d[3], vr = (float)(d[0] - d[4]), vb = (float)(d[1] - d[5]);
-    bool size = fabsf(d[0] - w) <= 2 && fabsf(d[1] - h) <= 2;
-    bool inside = vl >= l - 2 && vt >= t - 2 && vr <= r + 2 && vb <= b + 2;
-    bool fills = fabsf((vr - vl) - (r - l)) <= 3 || fabsf((vb - vt) - (b - t)) <= 3;
-    return size && inside && fills;
+    M.free_node_contents(&res);
+    return ok;
 }
 RECT video_window_rect() {
     Video *v = V(active_tab());

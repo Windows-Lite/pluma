@@ -539,12 +539,28 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
 
 // a few seconds after a page has loaded, the engine gives back what loading it left behind (at most every half
 // minute; never the graphics nor the page on screen)
+bool user_away(double ms) {
+    // nobody has touched the PC for that long. Tests: always, so what they measure does not depend on the user; or,
+    // with PLUMA_REPOSO_S=s, as if somebody used it until second s
+    if (g_test) {
+        static double busy_until = [] { wchar_t v[16] = L""; return GetEnvironmentVariableW(L"PLUMA_REPOSO_S", v, 16) ? _wtoi(v) * 1000.0 : -1e12; }();
+        return now_ms() - busy_until >= ms;
+    }
+    LASTINPUTINFO li = { sizeof(li) };
+    return GetLastInputInfo(&li) && GetTickCount() - li.dwTime >= (DWORD)ms;
+}
+static void CALLBACK trim_after_load_tick(HWND, UINT, UINT_PTR id, DWORD) {
+    if (!user_away(3000)) { SetTimer(g_win, id, 3000, trim_after_load_tick); return; }
+    KillTimer(g_win, id);
+    tabs_trim(TRIM_IDLE);
+}
 static void trim_after_load() {
-    // after a page has loaded or a tab was let go
+    // after a page has loaded or a tab was let go; not while the person is using it (the engine and the graphics,
+    // emptied in the middle of a scroll, made it stutter for seconds: a YouTube video just opened, 25/10)
     static double last = -1e9;
     if (now_ms() - last < 20000) return;
     last = now_ms();
-    SetTimer(g_win, 0x51A6, 4000, [](HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); tabs_trim(TRIM_IDLE); });
+    SetTimer(g_win, 0x51A6, 4000, trim_after_load_tick);
 }
 
 static void ensure_view(Tab *t) {
@@ -580,7 +596,9 @@ void tab_warm(Tab *t) {
 void tabs_layout_views() {
     Tab *t = active_tab();
     RECT r = page_rect();
-    if (t && t->ctrl) t->ctrl->put_Bounds(r);
+    // (Pluma's player in fullscreen: its page keeps its size, not laid out again for the whole screen and back at
+    // every fullscreen, which made all of it stutter, 25/10)
+    if (t && t->ctrl && !(t->video_mode && g_fullscreen)) t->ctrl->put_Bounds(r);
     video_layout();
 }
 

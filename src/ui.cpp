@@ -26,7 +26,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_CHEV_R = 0xE76C, G_CHEV_L = 0xE76B, G_CHECK = 0xE73E, G_GEAR = 0xE713, G_DELETE = 0xE74D,
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
-                 G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E };
+                 G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -205,7 +205,7 @@ static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
 static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
 static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo g_hover, g_press;
 static std::unordered_map<int, Anim> g_btn_hover;  // per control
@@ -216,6 +216,7 @@ struct Notice { std::wstring text, button; std::function<void()> action; double 
 static Notice g_notice;
 static std::wstring g_addr_text;                  // what the address shows when not being typed in
 static std::vector<HistoryEntry> g_ntp_rows;
+static bool g_ntp_pins, g_ntp_filled;            // the rows are the person's own pages (else suggestions); computed
 static double g_ntp_mem_at = -1e9; static size_t g_ntp_mem;
 static WNDPROC g_edit_proc;
 static bool g_in_change;
@@ -326,9 +327,19 @@ static D2D1_RECT_F addr_rect() {
     float y = tool_y() + S((kToolRowH - kAddrH) / 2);
     return R(g_geo.addr_l, y, g_geo.addr_r, y + S(kAddrH));
 }
+// the star at the end of the address: the page on the new tab page, or off it (Ctrl+D)
+static bool star_shown() {
+    Tab *t = active_tab();
+    return t && !ui_address_focused() && (starts_with(t->url, L"https://") || starts_with(t->url, L"http://"));
+}
+static D2D1_RECT_F star_rect() {
+    D2D1_RECT_F a = addr_rect();
+    return R(a.right - S(34), a.top + S(4), a.right - S(6), a.bottom - S(4));
+}
 static D2D1_RECT_F zoom_rect() {
     D2D1_RECT_F a = addr_rect();
-    return R(a.right - S(62), a.top + S(5), a.right - S(6), a.bottom - S(5));
+    float r = star_shown() ? star_rect().left - S(4) : a.right - S(6);
+    return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
 static D2D1_RECT_F notice_rect() {
@@ -355,6 +366,19 @@ static float ntp_top() {
 static D2D1_RECT_F ntp_row_rect(size_t i) {
     float l = ntp_col_l(), t = ntp_top() + S(118) + i * S(40);
     return R(l - S(12), t, l + S(560) + S(12), t + S(38));
+}
+static D2D1_RECT_F ntp_x_rect(size_t i) {   // the cross that takes a row off (on hover)
+    D2D1_RECT_F r = ntp_row_rect(i);
+    return R(r.right - S(38), r.top + S(5), r.right - S(10), r.bottom - S(5));
+}
+static void ntp_fill() {
+    // the person's own pages, if they have any (only those); else, if they want them, the sites they visit most
+    g_ntp_pins = !g_pins.empty();
+    if (g_ntp_pins) g_ntp_rows.assign(g_pins.begin(), g_pins.begin() + std::min<size_t>(g_pins.size(), 12));
+    else if (g_set.suggest_top) g_ntp_rows = history_top(8);
+    else g_ntp_rows.clear();
+    // (none yet: again at the next layout, the history may not be loaded yet when the first new tab shows)
+    g_ntp_filled = !g_ntp_rows.empty() || !g_set.suggest_top;
 }
 
 static HitInfo hit_test(float x, float y) {
@@ -385,6 +409,7 @@ static HitInfo hit_test(float x, float y) {
             if (inside(ext_rect(k), x, y)) { h.what = H_EXT; h.id = (int)i; return h; }
             k++;
         }
+        if (star_shown() && inside(star_rect(), x, y)) { h.what = H_STAR; return h; }
         if (zoom_shown() && inside(zoom_rect(), x, y)) { h.what = H_ZOOM; return h; }
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
@@ -395,7 +420,8 @@ static HitInfo hit_test(float x, float y) {
         return h;
     }
     if (ntp_on_screen())
-        for (size_t i = 0; i < g_ntp_rows.size(); i++) if (inside(ntp_row_rect(i), x, y)) { h.what = H_NTP_ROW; h.id = (int)i; return h; }
+        for (size_t i = 0; i < g_ntp_rows.size(); i++)
+            if (inside(ntp_row_rect(i), x, y)) { h.what = inside(ntp_x_rect(i), x, y) ? H_NTP_X : H_NTP_ROW; h.id = (int)i; return h; }
     return h;
 }
 int ui_hit_caption(POINT p) {
@@ -658,6 +684,17 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     }
     glyph(rt, g_br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), ic);
     float right = a.right - S(12);
+    if (star_shown()) {
+        // the star: filled in the accent when the page is one of the person's own on the new tab page
+        D2D1_RECT_F s = star_rect();
+        auto &sa = g_btn_hover[hover_key(H_STAR, 0)];
+        busy |= sa.running(now);
+        float sh = sa.at(now);
+        if (sh > 0) fill(rt, g_br.Get(), s, S(7), alpha(p.hover, sh * 1.3f));
+        bool on = pins_has(t->url);
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), on ? G_STAR_FILL : G_STAR, s, on ? p.accent : mix(p.sub, p.text, sh));
+        right = s.left - S(4);
+    }
     if (zoom_shown()) {
         D2D1_RECT_F z = zoom_rect();
         float zh = hov(H_ZOOM, 0);
@@ -723,13 +760,16 @@ static bool paint_ntp(ID2D1RenderTarget *rt, double now) {
     float l = ntp_col_l(), top = ntp_top();
     text(rt, g_br.Get(), g_f.word.Get(), L"pluma", R(l, top, l + S(560), top + S(44)), p.text);
     text(rt, g_br.Get(), g_f.ntp.Get(), L"Escribe una dirección arriba, o lo que quieras buscar.", R(l, top + S(46), l + S(560), top + S(70)), p.sub);
-    if (!g_ntp_rows.empty())
-        text(rt, g_br.Get(), g_f.ntp.Get(), L"Lo que más visitas", R(l, top + S(90), l + S(560), top + S(112)), p.sub);
+    // the person's own pages (only those, once there is one), or the sites they visit most
+    if (!g_ntp_rows.empty() || g_ntp_pins || !g_set.suggest_top)
+        text(rt, g_br.Get(), g_f.ntp.Get(), g_ntp_pins || !g_set.suggest_top ? L"Tus páginas" : L"Lo que más visitas", R(l, top + S(90), l + S(560), top + S(112)), p.sub);
     for (size_t i = 0; i < g_ntp_rows.size(); i++) {
         D2D1_RECT_F r = ntp_row_rect(i);
         auto &a = g_btn_hover[hover_key(H_NTP_ROW, (int)i)];
-        busy |= a.running(now);
-        if (a.at(now) > 0) fill(rt, g_br.Get(), r, S(10), alpha(p.surface, a.at(now)));
+        auto &ax = g_btn_hover[hover_key(H_NTP_X, (int)i)];
+        busy |= a.running(now) || ax.running(now);
+        float hk = std::max(a.at(now), ax.at(now));   // the row is lit with the mouse over its cross too
+        if (hk > 0) fill(rt, g_br.Get(), r, S(10), alpha(p.surface, hk));
         float cy = (r.top + r.bottom) / 2;
         auto b = host_icon(rt, g_host_icons, g_ntp_rows[i].url);
         if (b) draw_icon_bitmap(rt, b.Get(), l + S(8), cy, S(16), 1);
@@ -738,8 +778,22 @@ static bool paint_ntp(ID2D1RenderTarget *rt, double now) {
         if (starts_with(host, L"www.")) host = host.substr(4);
         float hw = std::min(S(220), text_w(g_f.ntp_sub.Get(), host) + S(4));
         std::wstring title = g_ntp_rows[i].title.empty() ? host : g_ntp_rows[i].title;
-        text(rt, g_br.Get(), g_f.ntp.Get(), title, R(l + S(30), r.top, r.right - S(12) - hw - S(16), r.bottom), p.text);
-        text(rt, g_br.Get(), g_f.ntp_sub.Get(), host, R(r.right - S(12) - hw, r.top, r.right - S(12), r.bottom), p.sub);
+        // with the mouse on the row, its site gives way to the cross that takes it off
+        float xw = S(44) * hk;
+        text(rt, g_br.Get(), g_f.ntp.Get(), title, R(l + S(30), r.top, r.right - S(12) - hw - S(16) - xw, r.bottom), p.text);
+        text(rt, g_br.Get(), g_f.ntp_sub.Get(), host, R(r.right - S(12) - hw - xw, r.top, r.right - S(12) - xw, r.bottom), alpha(p.sub, 1 - hk * 0.4f));
+        if (hk > 0) {
+            D2D1_RECT_F x = ntp_x_rect(i);
+            if (ax.at(now) > 0) fill(rt, g_br.Get(), x, S(7), alpha(p.hover, ax.at(now) * 1.3f));
+            glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_X, x, alpha(mix(p.sub, p.text, ax.at(now)), hk));
+        }
+    }
+    // how to put their own pages there
+    if (!g_ntp_pins) {
+        float y = ntp_top() + S(118) + g_ntp_rows.size() * S(40) + S(10);
+        text(rt, g_br.Get(), g_f.ntp.Get(), g_ntp_rows.empty() ? L"Añade tus páginas con la estrella de la barra (Ctrl+D)."
+                                                                : L"¿Solo las tuyas? Añádelas con la estrella de la barra (Ctrl+D).",
+             R(l, y, l + S(560), y + S(24)), p.sub);
     }
     if (now - g_ntp_mem_at > 2500) { g_ntp_mem = engine_memory_mb(); g_ntp_mem_at = now; }
     RECT rc; GetClientRect(g_bar, &rc);
@@ -1300,6 +1354,10 @@ static std::vector<MItem> build_page(int page) {
             yt.act = [] { g_set.native_video = !g_set.native_video; settings_save(); video_settings_changed(); };
             v.push_back(yt);
         }
+        // the new tab page: the sites visited most, while the person has no pages of their own there
+        MItem st; st.kind = 3; st.text = L"Sugerir lo que más visito"; st.on = g_set.suggest_top;
+        st.act = [] { g_set.suggest_top = !g_set.suggest_top; settings_save(); g_ntp_filled = false; };
+        v.push_back(st);
         v.push_back(sub(L"Borrar datos", G_ERASE, L"", PAGE_CLEAR));
         v.push_back(item(L"Herramientas de desarrollo", G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
         v.push_back(sep());
@@ -1521,7 +1579,7 @@ static void set_hover(HitInfo h) {
     g_hover = h;
     if (h.what == H_NTP_ROW) SetTimer(g_bar, 33, 120, NULL);
     if (h.what == H_TAB) SetTimer(g_bar, 34, 150, NULL);
-    HCURSOR cur = LoadCursorW(NULL, h.what == H_ADDR ? IDC_IBEAM : h.what == H_NTP_ROW ? IDC_HAND : IDC_ARROW);
+    HCURSOR cur = LoadCursorW(NULL, h.what == H_ADDR ? IDC_IBEAM : h.what == H_NTP_ROW || h.what == H_NTP_X ? IDC_HAND : IDC_ARROW);
     SetCursor(cur);
     ui_invalidate();
 }
@@ -1562,6 +1620,31 @@ static void drag_update(float x) {
     }
     ui_invalidate();
 }
+static void ntp_refresh() { g_ntp_filled = false; g_hover = HitInfo(); ui_layout(); }
+static void ntp_take_off(size_t i) {
+    // a row off the new tab page: one of the person's own pages, or a suggested site (it does not come back), with a
+    // way back
+    HistoryEntry e = g_ntp_rows[i];
+    if (g_ntp_pins) {
+        size_t at = 0;
+        for (size_t k = 0; k < g_pins.size(); k++) if (g_pins[k].url == e.url) at = k;
+        pins_remove(e.url);
+        ui_notice(L"Quitada de tus páginas.", L"Deshacer", [e, at] { pins_add(e.url, e.title, at); ntp_refresh(); }, 8);
+    } else {
+        history_hide_site(e.url, true);
+        ui_notice(L"No volverá a salir aquí.", L"Deshacer", [e] { history_hide_site(e.url, false); ntp_refresh(); }, 8);
+    }
+    ntp_refresh();
+}
+void ui_toggle_pin() {
+    // the page on screen onto the new tab page, or off it (the address's star, Ctrl+D)
+    Tab *t = active_tab();
+    if (!t || !(starts_with(t->url, L"https://") || starts_with(t->url, L"http://"))) return;
+    std::wstring title = t->title.empty() ? url_host(t->url) : t->title;
+    pins_toggle(t->url, title);
+    g_ntp_filled = false;
+    ui_invalidate();
+}
 static void bar_click(HitInfo h, float x, float y) {
     switch (h.what) {
     case H_PLUS: tab_new(L"", true); break;
@@ -1584,6 +1667,8 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NOTICE_BTN: { auto a = g_notice.action; notice_close(); if (a) a(); break; }
     case H_NOTICE_X: notice_close(); break;
     case H_NTP_ROW: if (h.id < (int)g_ntp_rows.size()) { Tab *t = active_tab(); std::wstring u = g_ntp_rows[h.id].url; if (t) tab_navigate(t, u); else tab_new(u, true); } break;
+    case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
+    case H_STAR: ui_toggle_pin(); break;
     default: break;
     }
     (void)x; (void)y;
@@ -1609,7 +1694,8 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_MOUSEMOVE: {
         float x = (float)GET_X_LPARAM(lp), y = (float)GET_Y_LPARAM(lp);
-        if (!g_tracking) { TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 }; TrackMouseEvent(&tme); g_tracking = true; }
+        // (not in tests: they move the mouse with messages, and Windows, seeing the real one elsewhere, says it left)
+        if (!g_tracking && !g_test) { TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 }; TrackMouseEvent(&tme); g_tracking = true; }
         ui_caption_hover(0);
         if (g_press.what == H_TAB && (wp & MK_LBUTTON)) {
             if (!g_dragging && fabs(x - g_press_x) > S(5) && g_tabs.size() > 1) g_dragging = true;
@@ -1755,6 +1841,7 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
         }
         if (vk == 'L' || vk == 'E' || vk == 'K') { ui_focus_address(true); return true; }
         if (vk == 'J') { tab_downloads(); return true; }
+        if (vk == 'D' && !shift) { ui_toggle_pin(); return true; }
         if (vk == 'Q' && shift) { app_quit(); return true; }
         if (vk == 'R' && !shift) { tab_reload(false); return true; }
         if ((vk == 'R' && shift) || vk == VK_F5) { tab_reload(true); return true; }
@@ -1827,8 +1914,8 @@ void ui_layout() {
     RECT rc; GetClientRect(g_win, &rc);
     int band = (int)lroundf(ui_band_height());
     bool ntp = ntp_on_screen();
-    if (ntp && g_ntp_rows.empty()) g_ntp_rows = history_top(8);
-    if (!ntp) g_ntp_rows.clear();
+    if (ntp && !g_ntp_filled) ntp_fill();
+    if (!ntp) { g_ntp_rows.clear(); g_ntp_filled = false; }
     int h = g_fullscreen ? 0 : (page_on_screen() && !ntp ? band : rc.bottom);
     SetWindowPos(g_bar, HWND_TOP, 0, 0, rc.right, h, SWP_NOACTIVATE | (h == 0 ? SWP_HIDEWINDOW : SWP_SHOWWINDOW));
     compute_geo();

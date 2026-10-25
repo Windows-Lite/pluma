@@ -162,6 +162,7 @@ void settings_load() {
     g_set.spare = ini_get(L"reserva", L"0") == L"1";
     g_set.resident = ini_get(L"residente", L"1") != L"0";
     g_set.native_video = ini_get(L"video_propio", L"1") != L"0";
+    g_set.suggest_top = ini_get(L"sugerir_visitadas", L"1") != L"0";
     g_set.schemes.clear();
     std::wstring sc = ini_get(L"protocolos", L"ytmp3");
     size_t pos = 0;
@@ -183,6 +184,7 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"descargar_min", std::to_wstring(g_set.recent_discard_min).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"residente", g_set.resident ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"video_propio", g_set.native_video ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"sugerir_visitadas", g_set.suggest_top ? L"1" : L"0", f.c_str());
     std::wstring sc;
     for (auto &s : g_set.schemes) sc += (sc.empty() ? L"" : L",") + s;
     WritePrivateProfileStringW(L"pluma", L"protocolos", sc.c_str(), f.c_str());
@@ -343,8 +345,84 @@ std::vector<Suggestion> history_suggest(const std::wstring &typed, std::wstring 
     }
     return out;
 }
+// ---------------------------------------------------------------- the new tab page: the person's own pages (paginas.tsv:
+// url, title), and the sites they took off its suggestions (ocultas.tsv: one a line)
+std::vector<HistoryEntry> g_pins;
+static std::vector<std::wstring> g_hidden_sites;
+static std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file) {
+    std::vector<std::vector<std::wstring>> rows;
+    std::string data;
+    if (!read_file(g_state + L"\\" + file, data)) return rows;
+    std::wstring w = wide(data);
+    size_t pos = 0;
+    while (pos < w.size()) {
+        size_t nl = w.find(L'\n', pos);
+        std::wstring line = w.substr(pos, nl == std::wstring::npos ? std::wstring::npos : nl - pos);
+        pos = nl == std::wstring::npos ? w.size() : nl + 1;
+        if (!line.empty() && line.back() == L'\r') line.pop_back();
+        if (line.empty()) continue;
+        std::vector<std::wstring> f;
+        size_t a = 0;
+        while (true) { size_t t = line.find(L'\t', a); f.push_back(line.substr(a, t == std::wstring::npos ? std::wstring::npos : t - a)); if (t == std::wstring::npos) break; a = t + 1; }
+        rows.push_back(f);
+    }
+    return rows;
+}
+static std::wstring site_key(const std::wstring &url) {
+    std::wstring h = lower(url_host(url));
+    return starts_with(h, L"www.") ? h.substr(4) : h;
+}
+static std::wstring pin_key(const std::wstring &url) {
+    std::wstring k = url;
+    while (!k.empty() && k.back() == L'/') k.pop_back();
+    return k;
+}
+void pins_load() {
+    g_pins.clear();
+    for (auto &f : tsv_read(L"paginas.tsv")) {
+        if (f[0].empty() || pins_has(f[0])) continue;
+        HistoryEntry e; e.url = f[0]; e.title = f.size() > 1 ? f[1] : L"";
+        g_pins.push_back(e);
+    }
+    g_hidden_sites.clear();
+    for (auto &f : tsv_read(L"ocultas.tsv")) if (!f[0].empty()) g_hidden_sites.push_back(f[0]);
+}
+static void pins_save() {
+    std::wstring out;
+    for (auto &e : g_pins) out += e.url + L"\t" + tsv_clean(e.title) + L"\n";
+    write_file(g_state + L"\\paginas.tsv", utf8(out));
+}
+bool pins_has(const std::wstring &url) {
+    for (auto &e : g_pins) if (pin_key(e.url) == pin_key(url)) return true;
+    return false;
+}
+void pins_add(const std::wstring &url, const std::wstring &title, size_t at) {
+    if (url.empty() || pins_has(url)) return;
+    HistoryEntry e; e.url = url; e.title = title;
+    g_pins.insert(g_pins.begin() + std::min(at, g_pins.size()), e);
+    pins_save();
+}
+void pins_remove(const std::wstring &url) {
+    for (size_t i = 0; i < g_pins.size(); i++)
+        if (pin_key(g_pins[i].url) == pin_key(url)) { g_pins.erase(g_pins.begin() + i); pins_save(); return; }
+}
+bool pins_toggle(const std::wstring &url, const std::wstring &title) {
+    if (pins_has(url)) { pins_remove(url); return false; }
+    pins_add(url, title, g_pins.size());
+    return true;
+}
+void history_hide_site(const std::wstring &url, bool hide) {
+    std::wstring k = site_key(url);
+    auto it = std::find(g_hidden_sites.begin(), g_hidden_sites.end(), k);
+    if (hide && it == g_hidden_sites.end()) g_hidden_sites.push_back(k);
+    else if (!hide && it != g_hidden_sites.end()) g_hidden_sites.erase(it);
+    else return;
+    std::wstring out;
+    for (auto &s : g_hidden_sites) out += s + L"\n";
+    write_file(g_state + L"\\ocultas.tsv", utf8(out));
+}
 std::vector<HistoryEntry> history_top(int n) {
-    // the most visited sites, one entry per site (its front page if it was visited)
+    // the most visited sites, one entry per site (its front page if it was visited), but those the person took off
     long long now = (long long)time(NULL);
     struct Site { double score = 0; size_t best = 0; double best_score = -1; bool front = false; };
     std::unordered_map<std::wstring, Site> sites;
@@ -352,6 +430,7 @@ std::vector<HistoryEntry> history_top(int n) {
         const HistoryEntry &e = g_history[i];
         std::wstring h = url_host(e.url);
         if (h.empty()) continue;
+        if (!g_hidden_sites.empty() && std::find(g_hidden_sites.begin(), g_hidden_sites.end(), site_key(e.url)) != g_hidden_sites.end()) continue;
         Site &s = sites[h];
         double fr = frecency(e, now);
         s.score += fr;
@@ -410,7 +489,6 @@ void fullscreen_now(bool on) {
     DwmSetWindowAttribute(g_win, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
     SetTimer(g_win, kTimerTransitions, 700, NULL);
     if (on) {
-        zoom_remember_area();
         g_before_fs.length = sizeof(g_before_fs);
         GetWindowPlacement(g_win, &g_before_fs);
         GetWindowRect(g_win, &g_test_rect);
@@ -769,6 +847,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         log_line(L"ventana a la vista en " + std::to_wstring((int)now_ms()) + L" ms");
     }
     history_load();
+    pins_load();
     scripts_load();
     env_create([] {
         g_env_ready = true;
