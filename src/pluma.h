@@ -159,6 +159,7 @@ bool bm_url_in(int folder, const std::wstring &url);
 void bm_toggle_in(int folder, const std::wstring &url, const std::wstring &title);   // add it to the folder, or take it out
 int bm_count();                     // how many bookmarks (not folders) in the whole tree
 int bm_new_id();                    // a fresh node id (for import, which builds a subtree in one go)
+std::wstring bm_shown_title(const BmNode &n);   // a folder's name as shown (the permanent ones in the UI language)
 BmNode &bm_root();                  // the root folder (its kids are the top-level folders)
 void bm_commit();                   // after a batch change: save, resync the new tab page, refresh the open pages
 void bookmarks_open();              // the manager page (pluma://bookmarks)

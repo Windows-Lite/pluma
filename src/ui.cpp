@@ -1582,7 +1582,7 @@ static std::vector<MItem> build_page(int page) {
             for (auto &k : n.kids) {
                 if (!k.folder) continue;
                 MItem m; m.kind = 4; m.on = bm_url_in(k.id, url);
-                m.text = std::wstring(depth * 2, L' ') + k.title;
+                m.text = std::wstring(depth * 2, L' ') + bm_shown_title(k);
                 int id = k.id;
                 m.act = [id, url, title] { bm_toggle_in(id, url, title); menu_rebuild(); panel_render(g_menu); ui_layout(); };
                 v.push_back(m);

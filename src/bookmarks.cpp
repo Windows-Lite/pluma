@@ -240,10 +240,17 @@ void import_open() {
     tab_new(page, true);
 }
 
+// the permanent folders keep their stored name, but show it in the UI language unless the person renamed them
+std::wstring bm_shown_title(const BmNode &n) {
+    if (n.role == 1 && n.title == L"Barra de marcadores") return T(L"Barra de marcadores");
+    if (n.role == 2 && n.title == L"Tus páginas") return T(L"Tus páginas");
+    return n.title;
+}
+
 static void json_tree(std::wstring &o, const BmNode &n) {
     o += L"{\"id\":" + std::to_wstring(n.id) + L",\"role\":" + std::to_wstring(n.role);
     o += L",\"folder\":" + std::wstring(n.folder ? L"true" : L"false");
-    o += L",\"title\":" + json_escape(n.title);
+    o += L",\"title\":" + json_escape(bm_shown_title(n));
     o += L",\"url\":" + json_escape(n.url);
     if (n.folder) {
         o += L",\"kids\":[";
