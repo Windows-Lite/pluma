@@ -41,7 +41,7 @@ static D2D1_COLOR_F mix(D2D1_COLOR_F a, D2D1_COLOR_F b, float k) {
     return { a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k, a.a + (b.a - a.a) * k };
 }
 static D2D1_COLOR_F alpha(D2D1_COLOR_F c, float a) { c.a *= a; return c; }
-bool dark_theme() { return g_incognito || user_dark_theme(); }   // (incognito: a dark bar, as Edge's InPrivate)
+bool dark_theme() { return g_incognito || user_dark_theme(); }   // (incognito: dark, bar and pages)
 bool user_dark_theme() {
     if (g_set.theme == 1) return true;
     if (g_set.theme == 0) return false;

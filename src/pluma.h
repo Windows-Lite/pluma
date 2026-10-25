@@ -142,7 +142,7 @@ extern HINSTANCE g_inst;
 extern HWND g_win, g_bar, g_edit;
 extern std::wstring g_root, g_state;   // the exe's folder; %LOCALAPPDATA%\Pluma (or its test folder)
 extern bool g_test, g_dev, g_quitting, g_fullscreen;
-extern bool g_incognito;   // the incognito window (--incognito): every tab InPrivate, dark bar, nothing kept
+extern bool g_incognito;   // the incognito window (--incognito): every tab InPrivate, all dark, nothing kept
 extern bool g_test_visible;   // a test instance on the screen (PLUMA_A_LA_VISTA), to record what the user would see
 extern double g_open_asked;               // when a page was asked for (start, or from memory): for the log
 extern ComPtr<ICoreWebView2Environment> g_env;
@@ -242,7 +242,7 @@ void ui_toggle_pin();                      // the page on screen onto the new ta
 struct Palette { D2D1_COLOR_F bg, surface, text, sub, line, line_strong, accent, accent_soft, error, hover, press; };
 const Palette &pal();
 bool dark_theme();       // the bar (always dark in the incognito window)
-bool user_dark_theme();  // what the settings say (the pages follow this one)
+bool user_dark_theme();  // what the settings say (ordinary pages follow this one)
 
 // ---------------------------------------------------------------- YouTube in Pluma's own player (video.cpp)
 void video_init();

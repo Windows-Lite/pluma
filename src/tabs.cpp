@@ -160,7 +160,8 @@ void tabs_apply_theme() {
     COREWEBVIEW2_PREFERRED_COLOR_SCHEME s = g_set.theme == 2 ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_AUTO
                                           : user_dark_theme() ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT;
     g_profile->put_PreferredColorScheme(s);
-    if (g_incognito_profile) g_incognito_profile->put_PreferredColorScheme(s);
+    // the incognito window is dark all over: its pages too
+    if (g_incognito_profile) g_incognito_profile->put_PreferredColorScheme(g_incognito ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : s);
 }
 static void setup_view(ICoreWebView2Controller *c, bool incognito) {
     ComPtr<ICoreWebView2> v; c->get_CoreWebView2(&v);
