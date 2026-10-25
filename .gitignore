@@ -4,3 +4,4 @@ src/*.res
 src/pluma-32.png
 tmp/
 *.exe.old
+motor-video/

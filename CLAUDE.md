@@ -29,6 +29,7 @@ código y commits en inglés; nada de em dashes.
 - `src/extensions.cpp`: extensiones de Chrome (carpeta `extensiones/` junto al exe, que trae uBlock Origin Lite, y
   `%LOCALAPPDATA%\Pluma\extensiones`), instalar desde la Chrome Web Store o Edge Add-ons con «Añadir a Pluma»,
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
+- `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
 - Compilar: `src\compilar.cmd <ruta>` para probar (no cierra nada). `src\compilar.cmd` a secas cierra el Pluma en
@@ -46,7 +47,11 @@ node tools\clics.js <puerto> <url> <n>        lo que tarda un clic en llegar a l
 node tools\tirones.js <puerto> <url> <s>      fotogramas lentos al hacer scroll; tools\scroll.ps1 lo pasa por 3 webs
 node tools\rueda.js <puerto> <url> <pasos>    scroll con la rueda de verdad; con captura.exe ... burst n ms y
                                               tools\hoja.py, una hoja de fotogramas para ver qué parpadea
+tools\foto.ps1 [-Nombre yt] -Salida x.png [-Acciones 'move x,y','click x,y','key 0x4B','char <','wait ms']
+                                              foto hecha por Pluma con los controles del reproductor (captura.exe
+                                              los saca opacos); las acciones van al reproductor y a sus controles
 ```
+En las pruebas, nada de pantalla completa: la ventana de prueba saldría encima de la pantalla del usuario.
 Las medidas varían mucho entre pasadas (la gráfica, de 47 a 120 MB en el mismo escenario): comparar ideas lanzándolas
 a la vez y repetir antes de creerse una diferencia pequeña.
 Clase de la ventana de prueba: `PlumaVentana.<nombre>`; paneles `PlumaPanel`; datos en `%LOCALAPPDATA%\Pluma\prueba.<nombre>`.
@@ -60,6 +65,10 @@ Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada 
   3 pestañas: 122-130. Medir de una en una: con el PC por encima de ~80 % de memoria Windows recorta todo por su cuenta
   y salen cifras falsas (70 MB); `escenario.ps1` apunta la memoria del PC en uso.
 - Una pestaña ligera (Google): 183 MB usándola, 109 MB tras un rato quieto. Cerrado y en memoria: 13 MB.
+- Viendo YouTube a 1080p en el reproductor de Pluma: 123-149 MB en total (mpv 77 con los sombreadores ya guardados,
+  92 el primer vídeo de cada PC; la interfaz 14; lo web, dormido y recortado cada 20 s, 30-55), frente a 420-528 con
+  la página. mpv solo, a 1080p por HLS: el búfer de 4 MB (10 MB: +17), audio de Windows +4; probados sin ganancia
+  720p o 144p (el coste es fijo, de dibujar), gpu-next, opengl, direct3d, copiar la decodificación, modo «dumb».
 - Lo que queda con una web delante: la gráfica 45-55 MB recortada (sin recortar se queda 90-120 con lo que dejan los
   vídeos y las webs pesadas, y no lo suelta sola), el motor 25-70, la página (Google ~45, YouTube 220-380, igual que en
   cualquier navegador), la interfaz 3-15, la red ~10.
@@ -74,6 +83,39 @@ Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada 
 - Probado y descartado: encoger las vistas congeladas, la gráfica NVIDIA (`--force_high_performance_gpu`), un «poca
   memoria» momentáneo en la página a la vista. Ninguno bajaba nada.
 - No hacer: quitar el aislamiento de sitios (seguridad) ni recortar la página a la vista mientras se usa.
+
+## YouTube en el reproductor de Pluma (`src/video.cpp`)
+Pedido el 25/10: que viendo YouTube no pese lo que pesa su página, sin esperar los 10 s de yt-dlp, con controles «lo
+más parecidos posible a los de YouTube», sin tocar Zas y sin depender de otra app («que la gente que descargue Pluma
+ya tenga esa funcionalidad»).
+- Motor: libmpv propio en `motor-video\libmpv-2.dll` junto al exe (la compilación oficial de shinchiro, versión fijada y
+  comprobada con su SHA-256 en `tools\motor-video.ps1`; `instalar.ps1` la baja si falta; fuera de git). Se carga con el
+  primer vídeo. Ajuste `video_propio` (menú: «YouTube en el reproductor de Pluma»).
+- Cómo: la página abre y reproduce como siempre. Cuando su vídeo suena (sin anuncio y arriba del todo), Pluma pide desde
+  la página (sus cookies, su visitorData) la respuesta del cliente VISIONOS y coge su `hlsManifestUrl`; baja la lista
+  con WinHTTP, elige variante (lo que cabe en el reproductor; VP9, luego H.264, luego AV1) y el audio de su grupo. mpv
+  la carga en pausa 1,2 s por delante y, cuando la página llega a ese segundo, la página se pausa y sigue mpv: sin corte.
+  A los 2,5 s la página, en pausa, se congela y devuelve su memoria. Volumen, silencio, velocidad, subtítulos y la
+  normalización de volumen de YouTube pasan de la página al reproductor y vuelven.
+- Trampas (25/10): los enlaces directos (`adaptiveFormats`) de visionOS dan 403 pasados ~20 MB y su audio ni empieza
+  (YouTube sin token); además solo aceptan rangos cerrados (`bytes=0-` da 403; mpv pide por trozos con
+  `curl-max-request-size`). La lista HLS va en trozos de ~5 s y baja entera. yt-dlp 2026.10.10 hace lo mismo
+  (visionos + HLS), pero tarda 13 s.
+- Las listas y los subtítulos los baja Pluma (WinHTTP, a la vez, solo de googlevideo.com y de la API de subtítulos)
+  y mpv los abre del disco (`cache-video\`): arranca en ~1,5 s en vez de 4-5. Nunca una orden de mpv que espere a la
+  red en el hilo de la ventana: los subtítulos pedidos por mpv tardaron 10 s una vez, y con `mpv_command` la ventana
+  se habría quedado colgada ese tiempo (van con `mpv_command_async`).
+- No `stopVideo` en la página al dormirla: luego YouTube ignora el salto al segundo y empieza desde 0. Tampoco
+  `autoload-files=no` en mpv: deja el audio sin elegir (vídeo mudo).
+- Controles: los del reproductor nuevo de YouTube («delhi»), medidos en su página: sus iconos SVG, píldoras
+  `rgba(0,0,0,.3)` de 40 px, barra `#ff0033` que acaba en `#ff2791`, a 59 px del borde y a 12 de los lados, menú
+  `rgba(0,0,0,.6)` con radio 12 y filas de 48, avisos con la tecla, el «bezel» del centro. Son ventanas con capas
+  aparte; la ventana de mpv va deshabilitada para que el ratón y las teclas lleguen a Pluma.
+  Teclas: k/espacio, j/l, flechas, m, f, c, 0-9, Inicio/Fin, < y >, Esc; las de Pluma siguen funcionando.
+- «Página de YouTube» vuelve a la página en el mismo segundo (y ese vídeo se queda ya en la página). Al acabar, vuelve
+  a la página para que salga su pantalla final y pase al siguiente. Si mpv falla, la página sigue donde iba.
+- Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
+  en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
 
 ## Seguridad
 - Motor de Edge, actualizado por Windows. Páginas en AppContainer (`msWebView2RendererAppContainer`), aislamiento de

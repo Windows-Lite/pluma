@@ -7,6 +7,8 @@
 #include <windows.h>
 #include <wincodec.h>
 #include <string>
+#include <vector>
+#include <algorithm>
 #include <cstdio>
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -52,6 +54,40 @@ static bool shoot(HWND w, const wchar_t *path) {
     PrintWindow(w, mdc, 2 /* PW_RENDERFULLCONTENT */);
     SelectObject(mdc, old);
     for (int i = 0; i < cw * ch; i++) ((BYTE *)bits)[i * 4 + 3] = 255;
+    // the window's own popups on top (the video player's controls are layered windows of their own), blended as
+    // the screen shows them
+    struct Ctx { HWND owner; RECT r; BYTE *bits; int cw, ch; std::vector<HWND> list; } ctx = { w, r, (BYTE *)bits, cw, ch, {} };
+    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+        Ctx *c = (Ctx *)lp;
+        if (GetWindow(h, GW_OWNER) == c->owner && IsWindowVisible(h)) c->list.push_back(h);
+        return TRUE;
+    }, (LPARAM)&ctx);
+    for (auto it = ctx.list.rbegin(); it != ctx.list.rend(); ++it) {   // bottom of the z-order first
+        HWND p = *it;
+        RECT pr; GetWindowRect(p, &pr);
+        int pw = pr.right - pr.left, ph = pr.bottom - pr.top;
+        if (pw <= 0 || ph <= 0) continue;
+        BITMAPINFO pb = bi;
+        pb.bmiHeader.biWidth = pw; pb.bmiHeader.biHeight = -ph;
+        void *pbits = NULL;
+        HDC pdc = CreateCompatibleDC(mdc);
+        HBITMAP pbmp = CreateDIBSection(pdc, &pb, DIB_RGB_COLORS, &pbits, NULL, 0);
+        HGDIOBJ po = SelectObject(pdc, pbmp);
+        PrintWindow(p, pdc, 2);
+        SelectObject(pdc, po);
+        bool layered = (GetWindowLongW(p, GWL_EXSTYLE) & WS_EX_LAYERED) != 0;
+        BYTE ca = 255; DWORD fl = 0;
+        if (layered) GetLayeredWindowAttributes(p, NULL, &ca, &fl);
+        for (int y = 0; y < ph; y++)
+            for (int x = 0; x < pw; x++) {
+                int dx = pr.left - r.left + x, dy = pr.top - r.top + y;
+                if (dx < 0 || dy < 0 || dx >= cw || dy >= ch) continue;
+                BYTE *s = (BYTE *)pbits + (y * pw + x) * 4, *d = (BYTE *)bits + (dy * cw + dx) * 4;
+                int a = layered ? s[3] : 255;   // premultiplied
+                for (int k = 0; k < 3; k++) d[k] = (BYTE)(std::min)(255, s[k] + d[k] * (255 - a) / 255);
+            }
+        DeleteObject(pbmp); DeleteDC(pdc);
+    }
     IWICBitmap *wb = NULL;
     g_wic->CreateBitmapFromMemory(cw, ch, GUID_WICPixelFormat32bppBGRA, cw * 4, cw * ch * 4, (BYTE *)bits, &wb);
     IWICStream *st = NULL; g_wic->CreateStream(&st); st->InitializeFromFilename(path, GENERIC_WRITE);

@@ -26,6 +26,8 @@ if ($Quitar) {
     return
 }
 if (-not (Test-Path $exe)) { throw "No encuentro $exe" }
+# el motor del reproductor de vídeo propio de Pluma (YouTube): viene en el paquete; si falta, se baja
+if (-not (Test-Path (Join-Path $dir 'motor-video\libmpv-2.dll'))) { & (Join-Path $dir 'tools\motor-video.ps1') }
 Get-ChildItem $dir -Recurse -File | Unblock-File
 
 # accesos directos

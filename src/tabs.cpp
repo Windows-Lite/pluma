@@ -134,7 +134,7 @@ void env_create(std::function<void()> ready) {
 static void on_browser_exited() {
     // the engine died (it happens with a broken update or a crash): start it again and bring the page back
     log_line(L"se arranca el motor de nuevo");
-    for (auto &t : g_tabs) { t->ctrl.Reset(); t->view.Reset(); t->suspended = false; t->loading = false; t->creating = false; t->scripts_ids.clear(); }
+    for (auto &t : g_tabs) { video_destroy(t.get()); t->ctrl.Reset(); t->view.Reset(); t->suspended = false; t->loading = false; t->creating = false; t->scripts_ids.clear(); }
     g_spare.Reset(); g_spare_making = false; g_profile.Reset(); g_keeper.Reset();
     g_env.Reset();
     env_create([] { if (active_tab()) tab_activate(g_active); spare_prepare(); });
@@ -300,6 +300,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             if (url_host(u) != url_host(t->url)) { std::string png = cached_icon(u); if (!png.empty()) { t->icon_png = png; ui_tab_icon_changed(t); } }
             if (u != t->url) ui_notice_drop(t->id);
             t->url = u;
+            video_page_changed(t);
             if (t == active_tab() && !ui_address_focused()) ui_set_address_text(u);
             std::wstring ext_id; bool edge = false;
             if (t == active_tab() && store_extension_id(u, ext_id, edge)) {
@@ -435,7 +436,8 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     v->add_ContainsFullScreenElementChanged(Callback<ICoreWebView2ContainsFullScreenElementChangedEventHandler>(
         [id](ICoreWebView2 *v, IUnknown *) -> HRESULT {
             BOOL fs = FALSE; v->get_ContainsFullScreenElement(&fs);
-            if (tab_by_id(id) == active_tab()) set_fullscreen(fs != FALSE);
+            Tab *t = tab_by_id(id);
+            if (t && t == active_tab() && !t->video_mode) set_fullscreen(fs != FALSE);   // (Pluma's player has its own)
             return S_OK;
         }).Get(), &tok);
     ComPtr<ICoreWebView2_8> v8;
@@ -444,7 +446,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             [id](ICoreWebView2 *v, IUnknown *) -> HRESULT {
                 Tab *t = tab_by_id(id);
                 ComPtr<ICoreWebView2_8> v8;
-                if (!t || FAILED(v->QueryInterface(IID_PPV_ARGS(&v8)))) return S_OK;
+                if (!t || t->video_mode || FAILED(v->QueryInterface(IID_PPV_ARGS(&v8)))) return S_OK;   // (then the player says)
                 BOOL a = FALSE; v8->get_IsDocumentPlayingAudio(&a);
                 t->audible = a != FALSE;
                 ui_invalidate();
@@ -576,6 +578,7 @@ void tabs_layout_views() {
     Tab *t = active_tab();
     RECT r = page_rect();
     if (t && t->ctrl) t->ctrl->put_Bounds(r);
+    video_layout();
 }
 
 // ---------------------------------------------------------------- tab operations
@@ -595,6 +598,7 @@ Tab *tab_new(const std::wstring &url, bool activate, int at) {
     return raw;
 }
 static void release_view(Tab *t) {
+    video_destroy(t);   // (it keeps the second it was at, to come back there)
     if (t->ctrl) { t->ctrl->put_IsVisible(FALSE); t->ctrl->Close(); }
     t->ctrl.Reset(); t->view.Reset();
     t->scripts_ids.clear();
@@ -637,7 +641,8 @@ static void hide_view(Tab *t) {
     t->hidden_since = now_ms();
     if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
     // where it was: if it is let go later, it comes back to the same place (and a video to the same second)
-    if (t->view && !t->loading) {
+    if (t->video_mode) t->saved_media = video_position(t);   // (its page sleeps: Pluma's player knows)
+    else if (t->view && !t->loading) {
         int id = t->id;
         t->view->ExecuteScript(L"[scrollX, scrollY, ((document.querySelector('video') || {}).currentTime) || 0]",
             Callback<ICoreWebView2ExecuteScriptCompletedHandler>([id](HRESULT hr, LPCWSTR r) -> HRESULT {
@@ -657,7 +662,11 @@ void tab_activate(int i) {
     t->hidden_since = 0;
     SetWindowTextW(g_win, (t->title.empty() ? std::wstring(L"Pluma") : t->title + L" - Pluma").c_str());
     if (!ui_address_focused() || old != t) ui_set_address_text(t->url);
-    if (t->view) {
+    if (t->video_mode) {
+        // Pluma's player is on: the page stays asleep behind it
+        ui_layout();
+        if (old != t) video_focus();
+    } else if (t->view) {
         if (t->suspended) {
             ComPtr<ICoreWebView2_3> v3;
             if (SUCCEEDED(t->view.As(&v3))) v3->Resume();
@@ -675,6 +684,8 @@ void tab_activate(int i) {
         ensure_view(t);
     }
     if (t->url.empty() && old != t) ui_focus_address(false);
+    video_layout();
+    if (old != t) video_page_changed(t);
     ui_invalidate();
     session_save_soon();
 }
@@ -733,6 +744,7 @@ static bool use_preload(Tab *t, const std::wstring &url) {
 
 void tab_navigate(Tab *t, const std::wstring &url) {
     if (!t || url.empty()) return;
+    if (t->video) video_back_to_page(t, VIDEO_LEAVE);
     if (!t->view && use_preload(t, url)) return;
     if (url_host(url) != url_host(t->url) || t->icon_png.empty()) { std::string png = cached_icon(url); t->icon_png = png; ui_tab_icon_changed(t); }
     t->url = url;
@@ -748,17 +760,19 @@ void tab_navigate(Tab *t, const std::wstring &url) {
     ui_layout();
     ui_invalidate();
 }
-void tab_go_back() { Tab *t = active_tab(); if (t && t->view && t->can_back) t->view->GoBack(); }
-void tab_go_forward() { Tab *t = active_tab(); if (t && t->view && t->can_fwd) t->view->GoForward(); }
+void tab_go_back() { Tab *t = active_tab(); if (t && t->view && t->can_back) { if (t->video) video_back_to_page(t, VIDEO_LEAVE); t->view->GoBack(); } }
+void tab_go_forward() { Tab *t = active_tab(); if (t && t->view && t->can_fwd) { if (t->video) video_back_to_page(t, VIDEO_LEAVE); t->view->GoForward(); } }
 void tab_reload(bool hard) {
     Tab *t = active_tab();
     if (!t) return;
+    if (t->video) video_back_to_page(t, VIDEO_LEAVE);
     if (!t->view) { ensure_view(t); return; }
     if (hard) t->view->CallDevToolsProtocolMethod(L"Page.reload", L"{\"ignoreCache\":true}", NULL);
     else t->view->Reload();
 }
 void tab_stop() { Tab *t = active_tab(); if (t && t->view) t->view->Stop(); }
 void tab_mute(Tab *t) {
+    if (video_on(t)) { video_toggle_mute(t); t->muted = !t->muted; ui_invalidate(); return; }
     ComPtr<ICoreWebView2_8> v8;
     if (!t || !t->view || FAILED(t->view.As(&v8))) return;
     BOOL m = FALSE; v8->get_IsMuted(&m);
@@ -909,6 +923,7 @@ void tabs_trim(int mode) {
     std::vector<UINT32> keep;
     for (auto &t : g_tabs) {
         if (!t->view) continue;
+        if (t->video_mode && t->suspended) continue;   // asleep behind Pluma's player: it can give everything back
         bool on_screen = !everything && t.get() == active_tab();
         bool sounding = t->audible && mode != TRIM_IDLE;
         if (on_screen || sounding || (!everything && !t->suspended && !t->audible)) keep.push_back(main_frame(t.get()));
@@ -963,7 +978,8 @@ void tabs_on_hide() {
     for (auto &up : g_tabs) {
         Tab *t = up.get();
         if (!t->view) continue;
-        if (t->audible) { release_view(t); continue; }
+        // (a video in Pluma's player too: it would keep its memory; it comes back at its second)
+        if (t->audible || t->video) { release_view(t); continue; }
         t->hidden_since = now_ms();
         t->ctrl->put_IsVisible(FALSE);
         ComPtr<ICoreWebView2_19> v19;

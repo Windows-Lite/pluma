@@ -157,6 +157,7 @@ void settings_load() {
     g_set.recent_discard_min = std::max(0, _wtoi(ini_get(L"descargar_min", L"20").c_str()));
     g_set.spare = ini_get(L"reserva", L"0") == L"1";
     g_set.resident = ini_get(L"residente", L"1") != L"0";
+    g_set.native_video = ini_get(L"video_propio", L"1") != L"0";
     g_set.schemes.clear();
     std::wstring sc = ini_get(L"protocolos", L"ytmp3");
     size_t pos = 0;
@@ -177,6 +178,7 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"recientes", std::to_wstring(g_set.keep_recent).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"descargar_min", std::to_wstring(g_set.recent_discard_min).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"residente", g_set.resident ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"video_propio", g_set.native_video ? L"1" : L"0", f.c_str());
     std::wstring sc;
     for (auto &s : g_set.schemes) sc += (sc.empty() ? L"" : L",") + s;
     WritePrivateProfileStringW(L"pluma", L"protocolos", sc.c_str(), f.c_str());
@@ -407,7 +409,10 @@ static void show_window() {
     g_start_hidden = false;
     if (g_test) {
         // a test instance draws for real but off the screen, without taking the focus from the user
-        SetWindowPos(g_win, HWND_BOTTOM, -7000, 100, 1400, 900, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        int w = 1400, h = 900;
+        wchar_t size[32] = L"";
+        if (GetEnvironmentVariableW(L"PLUMA_TAMANO", size, 32)) swscanf_s(size, L"%dx%d", &w, &h);   // e.g. 1920x1040
+        SetWindowPos(g_win, HWND_BOTTOM, -7000, 100, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         return;
     }
     if (!IsWindowVisible(g_win)) ShowWindow(g_win, GetPropW(g_win, L"max") ? SW_SHOWMAXIMIZED : SW_SHOW);
@@ -516,6 +521,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOVE: case WM_MOVING:
         for (auto &t : g_tabs) if (t->ctrl) t->ctrl->NotifyParentWindowPositionChanged();
         ui_close_popups();
+        video_layout();   // the player's controls are windows of their own: they follow
         break;
     case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize = { 480, 320 }; return 0;
     case WM_DPICHANGED: {
@@ -529,6 +535,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_SETFOCUS: {
         Tab *t = active_tab();
+        if (!ui_address_focused() && video_focus()) return 0;
         if (t && t->ctrl && !t->url.empty() && !ui_address_focused()) t->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         else if (t && t->url.empty()) ui_focus_address(false);
         return 0;
@@ -577,6 +584,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_SHOW: open_urls({}); return 0;
     case WM_APP_QUIT: quit_now(); return 0;
+    case WM_APP + 90: if (g_test) video_debug_shot(g_state + L"\\foto.png"); return 0;   // tests: a picture with the player's controls
     case WM_TIMER:
         if (wp == kTimerQuit) { KillTimer(h, kTimerQuit); DestroyWindow(h); }
         else if (wp == kTimerHistory) { KillTimer(h, kTimerHistory); history_flush(); }
@@ -693,6 +701,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     if (!g_test) restore_placement();
     SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     ui_init();
+    video_init();
     SetTimer(g_win, kTimerTabs, 5000, NULL);
     if (!g_start_hidden) {
         session_restore();   // the tabs are drawn at once; their pages come when the engine is up
@@ -715,6 +724,8 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0)) { TranslateMessage(&m); DispatchMessageW(&m); }
+    // everything is saved by now: leave at once. Tearing the engine down politely made quitting take seconds, and a
+    // Pluma opened meanwhile could find this one still there; the engine closes itself when its host is gone
     if (mutex) CloseHandle(mutex);
-    return (int)m.wParam;
+    ExitProcess((UINT)m.wParam);
 }

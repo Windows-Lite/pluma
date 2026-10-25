@@ -74,6 +74,7 @@ struct Settings {
     int recent_discard_min = 20;       // this long
     bool spare = false;                // a view made ahead of time (the next page starts 35 ms sooner; costs ~10 MB)
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
+    bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
 extern Settings g_set;
@@ -122,6 +123,9 @@ struct Tab {
     bool restoring = false;            // unloaded and loaded again: put it back where it was
     float progress = 0;                // loading line, 0..1 (estimated: WebView2 does not give one)
     double load_started = 0, load_done = 0;
+    void *video = nullptr;             // Pluma's own player for its YouTube video (video.cpp), waiting or on
+    bool video_mode = false;           // ... on screen instead of the page, which sleeps behind it
+    std::wstring video_declined;       // the video the person went back to the page for: it stays on the page
     // the bar's geometry, animated
     Anim x, w, hover, close_hover;
     bool placed = false;
@@ -193,6 +197,21 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt);
 struct Palette { D2D1_COLOR_F bg, surface, text, sub, line, line_strong, accent, accent_soft, error, hover, press; };
 const Palette &pal();
 bool dark_theme();
+
+// ---------------------------------------------------------------- YouTube in Pluma's own player (video.cpp)
+void video_init();
+bool video_available();                   // the engine (motor-video\libmpv-2.dll) is there
+void video_page_changed(Tab *t);          // its address changed or it came on screen: a YouTube video starts the watch
+enum { VIDEO_ASKED, VIDEO_ENDED, VIDEO_LEAVE, VIDEO_FAILED };
+void video_back_to_page(Tab *t, int how); // the page again: ASKED (and stays there), ENDED, LEAVE (it navigates), FAILED
+void video_destroy(Tab *t);               // the tab or its page goes: the player too, the page untouched
+void video_layout();                      // window moved or resized, tab switched: the player follows
+bool video_on(Tab *t);
+double video_position(Tab *t);
+bool video_focus();                       // the keys to the player, if one is on screen
+void video_toggle_mute(Tab *t);
+void video_settings_changed();
+void video_debug_shot(const std::wstring &path);   // tests: the window with the controls' real transparency
 
 // ---------------------------------------------------------------- userscripts (scripts.cpp)
 struct UserScript { std::wstring file, name, version, description, run_at; bool enabled = true, noframes = false;

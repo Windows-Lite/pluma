@@ -1294,6 +1294,12 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sub(L"Scripts de usuario", G_CODE, son == 1 ? L"1 activo" : son ? std::to_wstring(son) + L" activos" : L"", PAGE_SCRIPTS));
         v.push_back(sub(L"Buscador", G_GLOBE, engine_name(g_set.engine), PAGE_ENGINE));
         v.push_back(sub(L"Tema", G_COLOR, g_set.theme == 1 ? L"Oscuro" : g_set.theme == 2 ? L"Como Windows" : L"Claro", PAGE_THEME));
+        if (video_available()) {
+            // YouTube in Pluma's own player (a fraction of the page's memory)
+            MItem yt; yt.kind = 3; yt.text = L"YouTube en el reproductor de Pluma"; yt.on = g_set.native_video;
+            yt.act = [] { g_set.native_video = !g_set.native_video; settings_save(); video_settings_changed(); };
+            v.push_back(yt);
+        }
         v.push_back(sub(L"Borrar datos", G_ERASE, L"", PAGE_CLEAR));
         v.push_back(item(L"Herramientas de desarrollo", G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
         v.push_back(sep());
