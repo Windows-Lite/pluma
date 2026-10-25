@@ -11,7 +11,7 @@
 
 // ---------------------------------------------------------------- metrics (DIP; multiplied by the screen's scale)
 static const float kTabRowH = 38, kToolRowH = 44, kNoticeH = 44, kCapW = 46, kTabMax = 236, kTabMin = 40, kTabGap = 2,
-                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30;
+                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30, kBmRowH = 32, kBmBtnH = 24;
 static const double kHoverMs = 120, kTabMs = 180, kPanelMs = 140;
 static float g_s = 1;
 float ui_scale() { return g_s; }
@@ -214,7 +214,7 @@ static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
 static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
 static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo g_hover, g_press;
 static std::unordered_map<int, Anim> g_btn_hover;  // per control
@@ -247,10 +247,12 @@ static bool page_on_screen() {
     return t && !t->url.empty() && (t->view || t->creating || !t->pending.empty());
 }
 static bool ntp_on_screen() { Tab *t = active_tab(); return !g_fullscreen && (!t || t->url.empty()); }
+static bool bm_bar_shown() { return g_set.bookmarks_bar && !g_fullscreen; }
+static float bm_bar_h() { return bm_bar_shown() ? S(kBmRowH) : 0; }
 float ui_band_height() {
     if (g_fullscreen) return 0;
     // the note's room is taken at once (the page is laid out once, not every frame); the card slides into it
-    return S(kTabRowH + kToolRowH) + S(kNoticeH) * g_notice_h.to;
+    return S(kTabRowH + kToolRowH) + bm_bar_h() + S(kNoticeH) * g_notice_h.to;
 }
 
 // ---------------------------------------------------------------- layout of the tab row
@@ -358,8 +360,30 @@ static D2D1_RECT_F zoom_rect() {
     return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
+// the optional bookmarks bar: a row under the toolbar with the "Barra de marcadores" folder's top-level items
+struct BmBtn { int id; bool folder; float x, w; std::wstring title; };
+static std::vector<BmBtn> bm_bar_items() {
+    std::vector<BmBtn> out;
+    if (!bm_bar_shown()) return out;
+    BmNode *f = bm_find(bm_bar_folder());
+    if (!f) return out;
+    float x = S(10);
+    for (auto &k : f->kids) {
+        std::wstring t = k.title.empty() ? (k.folder ? T(L"Carpeta") : url_host(k.url)) : k.title;
+        if (t.size() > 28) t = t.substr(0, 27) + L"…";
+        float w = text_w(g_f.menu.Get(), t) + S(28);
+        if (x + w > g_geo.W - S(10) && !out.empty()) break;   // no overflow menu yet: what fits
+        out.push_back({ k.id, k.folder, x, w, t });
+        x += w + S(4);
+    }
+    return out;
+}
+static D2D1_RECT_F bm_btn_rect(const BmBtn &b) {
+    float y = S(kTabRowH + kToolRowH) + (bm_bar_h() - S(kBmBtnH)) / 2;
+    return R(b.x, y, b.x + b.w, y + S(kBmBtnH));
+}
 static D2D1_RECT_F notice_rect() {
-    float y = S(kTabRowH + kToolRowH);
+    float y = S(kTabRowH + kToolRowH) + bm_bar_h();
     return R(0, y, g_geo.W, y + S(kNoticeH) * g_notice_h.to);
 }
 static D2D1_RECT_F notice_btn_rect() {
@@ -433,7 +457,11 @@ static HitInfo hit_test(float x, float y) {
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
     }
-    if (g_notice.on && y < S(kTabRowH + kToolRowH + kNoticeH)) {
+    if (bm_bar_shown() && y < S(kTabRowH + kToolRowH) + bm_bar_h()) {
+        for (auto &b : bm_bar_items()) if (inside(bm_btn_rect(b), x, y)) { h.what = H_BM; h.id = b.id; return h; }
+        return h;
+    }
+    if (g_notice.on && y < S(kTabRowH + kToolRowH) + bm_bar_h() + S(kNoticeH)) {
         if (inside(notice_btn_rect(), x, y)) h.what = H_NOTICE_BTN;
         else if (inside(notice_x_rect(), x, y)) h.what = H_NOTICE_X;
         return h;
@@ -759,6 +787,34 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     }
     return busy;
 }
+static bool paint_bm_bar(ID2D1RenderTarget *rt, double now) {
+    if (!bm_bar_shown()) return false;
+    const Palette &p = pal();
+    bool busy = false;
+    float y0 = S(kTabRowH + kToolRowH);
+    fill(rt, g_br.Get(), R(0, y0, g_geo.W, y0 + bm_bar_h()), 0, p.bg);
+    fill(rt, g_br.Get(), R(0, y0 + bm_bar_h() - S(1), g_geo.W, y0 + bm_bar_h()), 0, p.line);
+    auto items = bm_bar_items();
+    if (items.empty()) {
+        text(rt, g_br.Get(), g_f.hint.Get(), T(L"Marca páginas con la estrella para verlas aquí."), R(S(12), y0, g_geo.W - S(12), y0 + bm_bar_h()), p.sub);
+        return false;
+    }
+    for (auto &b : items) {
+        D2D1_RECT_F r = bm_btn_rect(b);
+        auto &a = g_btn_hover[hover_key(H_BM, b.id)];
+        busy |= a.running(now);
+        if (a.at(now) > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, a.at(now) * 1.3f));
+        float cy = (r.top + r.bottom) / 2;
+        if (b.folder) glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_FOLDER, R(r.left + S(4), cy - S(9), r.left + S(22), cy + S(9)), p.sub);
+        else {
+            auto ic = host_icon(rt, g_host_icons, bm_find(b.id) ? bm_find(b.id)->url : L"");
+            if (ic) draw_icon_bitmap(rt, ic.Get(), r.left + S(14), cy, S(16), 1);
+            else glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_GLOBE, R(r.left + S(4), cy - S(9), r.left + S(22), cy + S(9)), p.sub);
+        }
+        text(rt, g_br.Get(), g_f.menu.Get(), b.title, R(r.left + S(24), r.top, r.right - S(4), r.bottom), p.text);
+    }
+    return busy;
+}
 static bool paint_notice(ID2D1RenderTarget *rt, double now) {
     float k = g_notice_h.at(now);
     bool busy = g_notice_h.running(now);
@@ -905,6 +961,7 @@ static void paint() {
         busy |= paint_tabs(g_rt.Get(), now);
         busy |= paint_caption(g_rt.Get(), now);
         busy |= paint_toolbar(g_rt.Get(), now);
+        busy |= paint_bm_bar(g_rt.Get(), now);
         busy |= paint_notice(g_rt.Get(), now);
         if (ntp_on_screen()) busy |= paint_ntp(g_rt.Get(), now);
         // where the page starts, a hairline
@@ -1248,7 +1305,7 @@ std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1420,6 +1477,7 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sub(T(L"Extensiones"), G_PUZZLE, on == 1 ? T(L"1 activa") : on ? std::to_wstring(on) + T(L" activas") : L"", PAGE_EXT));
         size_t son = 0; for (auto &s : g_scripts) if (s.enabled) son++;
         v.push_back(sub(T(L"Scripts de usuario"), G_CODE, son == 1 ? T(L"1 activo") : son ? std::to_wstring(son) + T(L" activos") : L"", PAGE_SCRIPTS));
+        v.push_back(sub(T(L"Marcadores"), G_STAR, L"", PAGE_BOOKMARKS));
         v.push_back(sub(T(L"Buscador"), G_GLOBE, engine_name(g_set.engine), PAGE_ENGINE));
         v.push_back(sub(T(L"Tema"), G_COLOR, g_set.theme == 1 ? T(L"Oscuro") : g_set.theme == 2 ? T(L"Como Windows") : T(L"Claro"), PAGE_THEME));
         v.push_back(sub(T(L"Fuente"), G_FONT, g_set.font.empty() ? T(L"La de Windows") : g_set.font, PAGE_FONT));
@@ -1507,6 +1565,45 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(item(T(L"Cerrar las de la derecha"), G_X, L"", [id] { after_menu([id] { int i = tab_index(id); while (i >= 0 && (int)g_tabs.size() > i + 1) tab_close((int)g_tabs.size() - 1); }); }));
         v.push_back(item(T(L"Cerrar las demás"), G_X, L"", [id] { after_menu([id] { for (int k = (int)g_tabs.size() - 1; k >= 0; k--) if (g_tabs[k]->id != id) tab_close(k); }); }));
         v.push_back(item(T(L"Cerrar"), G_X, T(L"Ctrl+W"), [id] { after_menu([id] { tab_close(tab_index(id)); }); }));
+    } else if (page == PAGE_BOOKMARKS) {
+        v.push_back(back(T(L"Marcadores")));
+        v.push_back(item(T(L"Administrador de marcadores"), G_STAR, T(L"Ctrl+Mayús+O"), [] { after_menu([] { bookmarks_open(); }); }));
+        MItem bar; bar.kind = 3; bar.text = T(L"Mostrar barra de marcadores"); bar.on = g_set.bookmarks_bar; bar.hint = T(L"Ctrl+Mayús+B");
+        bar.act = [] { g_set.bookmarks_bar = !g_set.bookmarks_bar; settings_save(); ui_layout(); };
+        v.push_back(bar);
+        v.push_back(sep());
+        v.push_back(item(T(L"Importar de otro navegador"), G_DOWNLOAD, L"", [] { after_menu([] { import_open(); }); }));
+    } else if (page == PAGE_STAR) {
+        // right click on the star: which folder the page on screen goes in
+        v.push_back(note(T(L"Guardar en")));
+        Tab *t = active_tab();
+        std::wstring url = t ? t->url : L"", title = t ? (t->title.empty() ? url_host(t->url) : t->title) : L"";
+        std::function<void(const BmNode &, int)> add = [&](const BmNode &n, int depth) {
+            for (auto &k : n.kids) {
+                if (!k.folder) continue;
+                MItem m; m.kind = 4; m.on = bm_url_in(k.id, url);
+                m.text = std::wstring(depth * 2, L' ') + k.title;
+                int id = k.id;
+                m.act = [id, url, title] { bm_toggle_in(id, url, title); menu_rebuild(); panel_render(g_menu); ui_layout(); };
+                v.push_back(m);
+                add(k, depth + 1);
+            }
+        };
+        add(bm_root(), 0);
+        v.push_back(sep());
+        v.push_back(item(T(L"Administrador de marcadores"), G_STAR, L"", [] { after_menu([] { bookmarks_open(); }); }));
+    } else if (page == PAGE_BM_OPEN) {
+        // a folder on the bookmarks bar: open its bookmarks
+        BmNode *f = bm_find(g_menu_tab);
+        if (!f) return v;
+        bool any = false;
+        for (auto &k : f->kids) {
+            if (k.folder) continue;
+            any = true;
+            std::wstring u = k.url, t = k.title.empty() ? url_host(k.url) : k.title;
+            v.push_back(item(t, G_GLOBE, L"", [u] { after_menu([u] { Tab *a = active_tab(); if (a && a->url.empty()) tab_navigate(a, u); else tab_new(u, true); }); }));
+        }
+        if (!any) v.push_back(note(T(L"Carpeta vacía")));
     } else if (page == PAGE_ONE_EXT) {
         // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
         size_t i = (size_t)g_menu_tab;
@@ -1750,6 +1847,20 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_ROW: if (h.id < (int)g_ntp_rows.size()) { Tab *t = active_tab(); std::wstring u = g_ntp_rows[h.id].url; if (t) tab_navigate(t, u); else tab_new(u, true); } break;
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
+    case H_BM: {
+        BmNode *n = bm_find(h.id);
+        if (!n) break;
+        if (n->folder) {
+            for (auto &b : bm_bar_items()) if (b.id == h.id) {
+                D2D1_RECT_F r = bm_btn_rect(b);
+                POINT a = { (LONG)r.left, (LONG)r.top }, bb = { (LONG)r.right, (LONG)r.bottom };
+                ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &bb);
+                open_menu_page(PAGE_BM_OPEN, { a.x, a.y, bb.x, bb.y }, h.id);
+                break;
+            }
+        } else { std::wstring u = n->url; Tab *t = active_tab(); if (t && t->url.empty()) tab_navigate(t, u); else tab_new(u, true); }
+        break;
+    }
     default: break;
     }
 }
@@ -1840,7 +1951,13 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_RBUTTONUP: {
         HitInfo hi = hit_test((float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp));
-        if (hi.what == H_TAB || hi.what == H_TAB_CLOSE || hi.what == H_EXT) {
+        if (hi.what == H_STAR) {
+            // right click on the star: choose which folder the page goes in
+            D2D1_RECT_F s = star_rect();
+            POINT a = { (LONG)s.left, (LONG)s.top }, b = { (LONG)s.right, (LONG)s.bottom };
+            ClientToScreen(h, &a); ClientToScreen(h, &b);
+            open_menu_page(PAGE_STAR, { a.x, a.y, b.x, b.y });
+        } else if (hi.what == H_TAB || hi.what == H_TAB_CLOSE || hi.what == H_EXT) {
             POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
             ClientToScreen(h, &pt);
             open_menu_page(hi.what == H_EXT ? PAGE_ONE_EXT : PAGE_TAB, { pt.x, pt.y, pt.x, pt.y }, hi.id);
@@ -1926,6 +2043,8 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
         if (vk == 'L' || vk == 'E' || vk == 'K') { ui_focus_address(true); return true; }
         if (vk == 'J') { tab_downloads(); return true; }
         if (vk == 'D' && !shift) { ui_toggle_pin(); return true; }
+        if (vk == 'O' && shift) { bookmarks_open(); return true; }
+        if (vk == 'B' && shift) { g_set.bookmarks_bar = !g_set.bookmarks_bar; settings_save(); ui_layout(); return true; }
         if (vk == 'Q' && shift) { app_quit(); return true; }
         if (vk == 'R' && !shift) { tab_reload(false); return true; }
         if ((vk == 'R' && shift) || vk == VK_F5) { tab_reload(true); return true; }

@@ -1,0 +1,140 @@
+<!doctype html>
+<!-- Pluma's import wizard (pluma://importar), inside the exe; bookmarks.cpp serves it and answers its messages.
+     Written in Spanish, as the code: Pluma sends each text in the chosen language (data-t, T()). -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Importar</title>
+<style>
+:root { --bg:#f7f7f9; --card:#fff; --text:#1b1b1f; --sub:#5f6168; --line:#e2e3e8; --hover:#ededf1; --accent:#2f6fed; --accent-soft:#e6eefe; --danger:#c4314b; --field:#fff; color-scheme:light; }
+:root.dark { --bg:#1c1d21; --card:#26272c; --text:#ececf0; --sub:#a3a5ad; --line:#36373d; --hover:#303137; --accent:#6d9cff; --accent-soft:#2a3550; --danger:#ff6b81; --field:#1f2025; color-scheme:dark; }
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; }
+body { background:var(--bg); color:var(--text); font:14px/1.5 "Segoe UI Variable Text","Segoe UI",system-ui,sans-serif; }
+.page { max-width:620px; margin:0 auto; padding:40px 24px 80px; }
+h1 { font-size:26px; font-weight:600; margin:0 0 6px; }
+.lead { color:var(--sub); margin:0 0 24px; }
+h2 { font-size:15px; font-weight:600; margin:24px 0 10px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.prof { display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:default; }
+.prof + .prof { border-top:1px solid var(--line); }
+.prof:hover { background:var(--hover); }
+.prof input { width:18px; height:18px; accent-color:var(--accent); flex:none; }
+.prof .t { flex:1; min-width:0; }
+.prof .n { font-weight:500; }
+.prof .d { color:var(--sub); font-size:12.5px; }
+.badge { font-size:11px; color:var(--sub); border:1px solid var(--line); border-radius:10px; padding:1px 8px; }
+.opt { display:flex; align-items:center; gap:12px; padding:13px 16px; }
+.opt + .opt { border-top:1px solid var(--line); }
+.opt input { width:18px; height:18px; accent-color:var(--accent); flex:none; }
+.opt .t { flex:1; }
+.opt .n { font-weight:500; }
+.opt .d { color:var(--sub); font-size:12.5px; }
+.opt.off { opacity:.55; }
+.actions { margin-top:26px; display:flex; gap:12px; align-items:center; }
+button { font:inherit; color:var(--text); height:38px; padding:0 20px; border-radius:8px; border:1px solid var(--line); background:var(--field); cursor:default; }
+button:hover { background:var(--hover); }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+button:disabled { opacity:.5; }
+.note { color:var(--sub); font-size:13px; margin-top:14px; }
+.done { background:var(--accent-soft); border:1px solid var(--accent); border-radius:10px; padding:18px 20px; margin-top:20px; }
+.done h3 { margin:0 0 6px; }
+.hidden { display:none; }
+.spin { width:18px; height:18px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 0.8s linear infinite; }
+@keyframes s { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1 data-t="Importar de otro navegador">Importar de otro navegador</h1>
+  <p class="lead" data-t="Trae tus marcadores y tu historial. No se modifica el otro navegador.">Trae tus marcadores y tu historial. No se modifica el otro navegador.</p>
+
+  <div id="step1">
+    <h2 data-t="Elige un perfil">Elige un perfil</h2>
+    <div class="card" id="profiles"></div>
+    <div class="note hidden" id="none" data-t="No se ha encontrado ningún otro navegador compatible.">No se ha encontrado ningún otro navegador compatible.</div>
+
+    <h2 data-t="Qué traer">Qué traer</h2>
+    <div class="card">
+      <label class="opt"><input type="checkbox" id="bm" checked><span class="t"><div class="n" data-t="Marcadores">Marcadores</div><div class="d" data-t="En una carpeta nueva con el nombre del navegador">En una carpeta nueva con el nombre del navegador</div></span></label>
+      <label class="opt"><input type="checkbox" id="hi" checked><span class="t"><div class="n" data-t="Historial">Historial</div><div class="d" data-t="Se une a tu historial, sin duplicados">Se une a tu historial, sin duplicados</div></span></label>
+      <label class="opt off"><input type="checkbox" id="pw" disabled><span class="t"><div class="n" data-t="Contraseñas">Contraseñas</div><div class="d" id="pwd" data-t="El navegador las guarda protegidas y no se pueden importar">El navegador las guarda protegidas y no se pueden importar</div></span></label>
+    </div>
+
+    <div class="actions"><button class="primary" id="go" disabled data-t="Importar">Importar</button><div class="spin hidden" id="spin"></div><span id="status" class="note" style="margin:0"></span></div>
+  </div>
+
+  <div id="step2" class="hidden">
+    <div class="done">
+      <h3 data-t="Listo">Listo</h3>
+      <div id="summary"></div>
+    </div>
+    <div class="actions"><button class="primary" id="bookmarks" data-t="Ver marcadores">Ver marcadores</button><button id="again" data-t="Importar de otro">Importar de otro</button></div>
+  </div>
+</div>
+<script>
+const W = window.chrome && chrome.webview;
+const $ = id => document.getElementById(id);
+let S = null, texts = {}, chosen = -1;
+const tr = s => texts[s] || s;
+const send = o => W && W.postMessage(o);
+
+function translate() {
+  document.querySelectorAll('[data-t]').forEach(e => e.textContent = tr(e.dataset.t));
+  document.title = tr('Importar');
+}
+function render() {
+  document.documentElement.classList.toggle('dark', S.dark);
+  document.documentElement.lang = S.lang;
+  const box = $('profiles'); box.textContent = '';
+  (S.profiles || []).forEach(p => {
+    const l = document.createElement('label'); l.className = 'prof';
+    const r = document.createElement('input'); r.type = 'radio'; r.name = 'prof'; r.value = p.i;
+    r.onchange = () => { chosen = p.i; $('go').disabled = false; };
+    const t = document.createElement('div'); t.className = 't';
+    const n = document.createElement('div'); n.className = 'n'; n.textContent = p.browser + ' — ' + p.name;
+    const d = document.createElement('div'); d.className = 'd';
+    const bits = [];
+    if (p.bookmarks >= 0) bits.push(p.bookmarks + ' ' + tr('marcadores'));
+    bits.push(tr('con historial'));
+    d.textContent = bits.join(' · ');
+    t.append(n, d);
+    l.append(r, t);
+    if (p.running) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = tr('abierto'); l.append(b); }
+    box.append(l);
+  });
+  $('none').classList.toggle('hidden', (S.profiles || []).length > 0);
+  if (S.passwordKind === 10) { $('pwd').textContent = tr('No disponible en esta versión'); }
+}
+$('go').onclick = () => {
+  if (chosen < 0) return;
+  $('go').disabled = true; $('spin').classList.remove('hidden'); $('status').textContent = tr('Importando...');
+  send({ op: 'import', profile: chosen, bookmarks: $('bm').checked, history: $('hi').checked });
+};
+$('bookmarks').onclick = () => send({ op: 'open', url: 'https://pluma.local/bookmarks', background: false });
+$('again').onclick = () => { $('step2').classList.add('hidden'); $('step1').classList.remove('hidden'); chosen = -1; $('go').disabled = true; ask(); };
+function ask() {
+  const all = new Set();
+  document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
+  ['marcadores', 'con historial', 'abierto', 'Importando...', 'No disponible en esta versión',
+   'marcadores añadidos', 'páginas al historial', 'Importar'].forEach(s => all.add(s));
+  send({ op: 'get', texts: [...all] });
+}
+if (W) W.addEventListener('message', e => {
+  const m = e.data; if (!m) return;
+  if (m.op === 'state') { if (m.t) { texts = m.t; translate(); } S = m; render(); }
+  else if (m.op === 'done') {
+    $('spin').classList.add('hidden'); $('status').textContent = '';
+    const s = $('summary'); s.textContent = '';
+    const l1 = document.createElement('div'); l1.textContent = m.bookmarks + ' ' + tr('marcadores añadidos'); s.append(l1);
+    const l2 = document.createElement('div'); l2.textContent = m.history + ' ' + tr('páginas al historial'); s.append(l2);
+    if (m.note) { const l3 = document.createElement('div'); l3.className = 'note'; l3.style.marginTop = '8px'; l3.textContent = m.note; s.append(l3); }
+    $('step1').classList.add('hidden'); $('step2').classList.remove('hidden');
+  }
+});
+ask();
+</script>
+</body>
+</html>
