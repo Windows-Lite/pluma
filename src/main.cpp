@@ -588,6 +588,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         log_line(L"ventana destruida");
+        g_quitting = true;
         for (auto &t : g_tabs) if (t->ctrl) t->ctrl->Close();
         g_tabs.clear();
         PostQuitMessage(0);

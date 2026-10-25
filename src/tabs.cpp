@@ -2,6 +2,7 @@
 // something is typed, a restored tab until it is looked at, and a hidden tab is frozen, then let go.
 #include "pluma.h"
 #include <psapi.h>
+#include <thread>
 
 std::vector<std::unique_ptr<Tab>> g_tabs;
 int g_active = -1;
@@ -9,6 +10,10 @@ static int g_next_id = 1;
 struct Closed { std::wstring url, title; std::string icon; int index; };
 static std::vector<Closed> g_closed;
 static ComPtr<ICoreWebView2Controller> g_spare;   // made ahead of time, never navigated: the next page starts at once
+// The engine shuts itself down when its last view closes (all tabs let go, a new tab, a cancelled preload), and the
+// next page then waits for a cold start of over a second. This view keeps it awake: never navigated, size zero, out
+// of sight. (25/10: without it the engine stopped and started again while the user browsed.)
+static ComPtr<ICoreWebView2Controller> g_keeper;
 static bool g_spare_making;
 static std::vector<std::function<void(ComPtr<ICoreWebView2Controller>)>> g_view_waiters;
 static ComPtr<ICoreWebView2Profile> g_profile;
@@ -100,13 +105,22 @@ void env_create(std::function<void()> ready) {
             auto waiting = std::move(g_view_waiters);
             g_view_waiters.clear();
             for (auto &w : waiting) make_view(w);
+            make_view([](ComPtr<ICoreWebView2Controller> c) {
+                if (!c) return;
+                RECT none = { 0, 0, 0, 0 };
+                c->put_Bounds(none);
+                g_keeper = c;
+            });
             ComPtr<ICoreWebView2Environment5> e5;
             EventRegistrationToken tok;
             if (SUCCEEDED(g_env.As(&e5)))
                 e5->add_BrowserProcessExited(Callback<ICoreWebView2BrowserProcessExitedEventHandler>(
                     [](ICoreWebView2Environment *, ICoreWebView2BrowserProcessExitedEventArgs *a) -> HRESULT {
                         COREWEBVIEW2_BROWSER_PROCESS_EXIT_KIND k; a->get_BrowserProcessExitKind(&k);
-                        if (!g_quitting) on_browser_exited();
+                        if (!g_quitting) {
+                            log_line(k == COREWEBVIEW2_BROWSER_PROCESS_EXIT_KIND_NORMAL ? L"el motor se ha apagado (sin vistas)" : L"el motor ha fallado");
+                            on_browser_exited();
+                        }
                         return S_OK;
                     }).Get(), &tok);
             ready();
@@ -119,9 +133,9 @@ void env_create(std::function<void()> ready) {
 }
 static void on_browser_exited() {
     // the engine died (it happens with a broken update or a crash): start it again and bring the page back
-    log_line(L"el motor se ha cerrado: se arranca de nuevo");
-    for (auto &t : g_tabs) { t->ctrl.Reset(); t->view.Reset(); t->suspended = false; t->loading = false; t->scripts_ids.clear(); }
-    g_spare.Reset(); g_spare_making = false; g_profile.Reset();
+    log_line(L"se arranca el motor de nuevo");
+    for (auto &t : g_tabs) { t->ctrl.Reset(); t->view.Reset(); t->suspended = false; t->loading = false; t->creating = false; t->scripts_ids.clear(); }
+    g_spare.Reset(); g_spare_making = false; g_profile.Reset(); g_keeper.Reset();
     g_env.Reset();
     env_create([] { if (active_tab()) tab_activate(g_active); spare_prepare(); });
 }
@@ -806,7 +820,9 @@ void tabs_set_scripts() {
 void tabs_tick() {
     double now = now_ms();
     // minimized or closed for a while: everything gives back what it does not use (once every half minute)
-    static double last_full_trim = 0, last_idle_trim = 0;
+    static double last_full_trim = 0, last_idle_trim = 0, last_test_trim = 0;
+    static int test_every = [] { wchar_t v[8] = L""; return GetEnvironmentVariableW(L"PLUMA_RECORTE_CADA", v, 8) ? _wtoi(v) : 0; }();
+    if (test_every > 0 && now - last_test_trim > test_every * 1000.0) { last_test_trim = now; tabs_trim(TRIM_IDLE); }
     if ((!IsWindowVisible(g_win) || IsIconic(g_win)) && now - last_full_trim > 30000) { last_full_trim = now; tabs_trim(TRIM_ALL); }
     // on screen but nobody has touched the PC for a minute: the engine's own processes give back what they do not
     // use too (not the graphics, nor the tab on screen: nothing to notice when the person comes back)
@@ -900,6 +916,7 @@ void tabs_trim(int mode) {
     e13->GetProcessExtendedInfos(Callback<ICoreWebView2GetProcessExtendedInfosCompletedHandler>(
         [mode, everything, keep](HRESULT hr, ICoreWebView2ProcessExtendedInfoCollection *list) -> HRESULT {
             UINT n = 0;
+            std::vector<DWORD> pids;
             if (FAILED(hr) || !list) return S_OK;
             list->get_Count(&n);
             for (UINT i = 0; i < n; i++) {
@@ -926,9 +943,17 @@ void tabs_trim(int mode) {
                             needed = std::find(keep.begin(), keep.end(), r) != keep.end();
                         }
                 }
-                if (!needed) empty_ws((DWORD)pid);
+                if (!needed) pids.push_back((DWORD)pid);
             }
-            if (mode != TRIM_FROZEN) EmptyWorkingSet(GetCurrentProcess());
+            // the trimming itself takes a while (tens of ms for a big process): never on the window's thread, which
+            // shares its input with the pages (a busy window thread delays a click on a page)
+            bool self = everything;
+            std::thread([pids, self] {
+                double t0 = now_ms();
+                for (DWORD pid : pids) empty_ws(pid);
+                if (self) EmptyWorkingSet(GetCurrentProcess());
+                if (g_dev) log_line(L"recorte de " + std::to_wstring(pids.size()) + L" procesos en " + std::to_wstring((int)(now_ms() - t0)) + L" ms (aparte)");
+            }).detach();
             return S_OK;
         }).Get());
 }

@@ -17,6 +17,7 @@ static float g_s = 1;
 float ui_scale() { return g_s; }
 static float S(float v) { return v * g_s; }
 static std::wstring strip_scheme(const std::wstring &u);
+static std::wstring pretty_path(const std::wstring &s);
 
 // glyphs of Segoe Fluent Icons (Segoe MDL2 Assets on Windows 10)
 enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0xE711, G_ADD = 0xE710, G_MORE = 0xE712,
@@ -569,7 +570,26 @@ static std::wstring strip_scheme(const std::wstring &u) {
     std::wstring s = starts_with(u, L"https://") ? u.substr(8) : u;
     size_t slash = s.find(L'/');
     if (slash != std::wstring::npos && slash + 1 == s.size()) s.pop_back();   // "example.com/" reads "example.com"
-    return s;
+    return pretty_path(s);
+}
+static std::wstring pretty_path(const std::wstring &s) {
+    // what people read: "/wiki/España", not "/wiki/Espa%C3%B1a" (only for showing it; the address itself, the one
+    // that is edited and copied, stays as it is; and so does anything that does not decode to valid text)
+    if (s.find(L'%') == std::wstring::npos) return s;
+    std::string bytes;
+    for (size_t i = 0; i < s.size(); i++) {
+        if (s[i] == L'%' && i + 2 < s.size() && iswxdigit(s[i + 1]) && iswxdigit(s[i + 2])) {
+            bytes += (char)wcstol(s.substr(i + 1, 2).c_str(), NULL, 16);
+            i += 2;
+        } else if (s[i] < 0x80) bytes += (char)s[i];
+        else return s;
+    }
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes.data(), (int)bytes.size(), NULL, 0);
+    if (n <= 0) return s;
+    std::wstring out(n, 0);
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, bytes.data(), (int)bytes.size(), out.data(), n);
+    for (wchar_t c : out) if (c < 0x20 || c == 0x7F) return s;
+    return out;
 }
 static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     const Palette &p = pal();
@@ -660,7 +680,7 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
             }
             if (cut == std::wstring::npos) text(rt, g_br.Get(), g_f.addr.Get(), shown, tr, p.text);
             else {
-                std::wstring site = shown.substr(0, cut), rest = shown.substr(cut);
+                std::wstring site = shown.substr(0, cut), rest = pretty_path(shown.substr(cut));
                 if (rest == L"/") rest.clear();
                 float sw = text_w(g_f.addr.Get(), site);
                 text(rt, g_br.Get(), g_f.addr.Get(), site, R(tr.left, tr.top, std::min(tr.right, tr.left + sw + 1), tr.bottom), p.text);

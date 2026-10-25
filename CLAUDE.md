@@ -42,6 +42,10 @@ tools\captura.exe <clase> <png> [click x y | mclick | rclick | key vk | char tex
 node tools\cdp.js <puerto> <url> <expresión>  evalúa en una página (DevTools); tools\clic.js: clic de verdad
 tools\escenario.ps1 -Nombre x [-Ajustes 'clave=valor',...]   las 7 pestañas de la comparación con Firefox, medidas
 tools\tres.ps1 -Nombre x [-Ajustes ...]       3 pestañas (Wikipedia, GitHub, Google), medidas
+node tools\clics.js <puerto> <url> <n>        lo que tarda un clic en llegar a la página y en verse (ms)
+node tools\tirones.js <puerto> <url> <s>      fotogramas lentos al hacer scroll; tools\scroll.ps1 lo pasa por 3 webs
+node tools\rueda.js <puerto> <url> <pasos>    scroll con la rueda de verdad; con captura.exe ... burst n ms y
+                                              tools\hoja.py, una hoja de fotogramas para ver qué parpadea
 ```
 Las medidas varían mucho entre pasadas (la gráfica, de 47 a 120 MB en el mismo escenario): comparar ideas lanzándolas
 a la vez y repetir antes de creerse una diferencia pequeña.
@@ -86,5 +90,11 @@ Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada 
   pintura pendiente): no se cerraba, no guardaba la sesión. Por eso las animaciones van por el hilo de DwmFlush.
 - `@match` con `*`: escapar todo menos el asterisco y luego `*` -> `.*` (antes quedaba `/*` y nunca casaba).
 - Desde PowerShell, `FindWindowW` con título nulo pide `[NullString]::Value`.
+- El motor se apaga solo cuando se cierra su última vista (todas las pestañas soltadas, una pestaña nueva, una
+  precarga cancelada) y la siguiente página espera un arranque en frío de más de 1 s: por eso existe `g_keeper`, una
+  vista que no carga nada, de tamaño cero. Pasó el 25/10 con la reserva quitada («el motor se ha cerrado»).
+- Recortar memoria (EmptyWorkingSet) tarda 9-90 ms: nunca en el hilo de la ventana, que comparte la entrada con las
+  páginas (un hilo de la ventana ocupado retrasa los clics en la web). Va en un hilo aparte; y la interfaz de Pluma no
+  se recorta a sí misma mientras se ve. Medido con `clics.js` en YouTube: mediana 6 ms hasta verse el clic.
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.
