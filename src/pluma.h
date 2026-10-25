@@ -103,6 +103,7 @@ extern HINSTANCE g_inst;
 extern HWND g_win, g_bar, g_edit;
 extern std::wstring g_root, g_state;   // the exe's folder; %LOCALAPPDATA%\Pluma (or its test folder)
 extern bool g_test, g_dev, g_quitting, g_fullscreen;
+extern bool g_test_visible;   // a test instance on the screen (PLUMA_A_LA_VISTA), to record what the user would see
 extern double g_open_asked;               // when a page was asked for (start, or from memory): for the log
 extern ComPtr<ICoreWebView2Environment> g_env;
 
@@ -215,6 +216,12 @@ void video_settings_changed();
 void video_debug_shot(const std::wstring &path);   // tests: the window with the controls' real transparency
 void video_resized();                     // the player drew at a new size (the fullscreen zoom may end)
 double video_aspect();                    // the playing video's width/height, or 0 without Pluma's player
+// the zoom moves the picture inside the player's window (mpv's margins), from a thread of its own
+void *video_box_client();                 // a handle of its own on the player on screen (nullptr: none)
+void video_box(void *client, D2D1_RECT_F win, D2D1_RECT_F box);   // the picture fits in box (screen px); win: its window
+void video_box_done(void *client);
+RECT video_window_rect();                 // the player's window on the screen
+void video_zoom_done();                   // the picture is in place: the controls again
 
 // ---------------------------------------------------------------- fullscreen (main.cpp, with the zoom of zoom.cpp)
 void fullscreen_now(bool on);             // the change itself, at once
@@ -222,7 +229,9 @@ RECT fullscreen_rect();                   // the screen it fills (in tests, one 
 void zoom_start(bool on);
 bool zoom_busy();
 void zoom_want(bool on);                  // asked during a zoom: where it ends
-void zoom_message(WPARAM wp);
+void zoom_stop();                         // the window goes: the zoom ends at once
+void zoom_remember_area();                // going fullscreen: where the picture goes back to
+void zoom_message(WPARAM wp, LPARAM lp);
 bool zoom_into_player(RECT page_player, std::function<void()> change);   // a video from its page into Pluma's player
 
 // ---------------------------------------------------------------- userscripts (scripts.cpp)

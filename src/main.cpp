@@ -8,7 +8,7 @@
 HINSTANCE g_inst;
 HWND g_win, g_bar, g_edit;
 std::wstring g_root, g_state;
-bool g_test, g_dev, g_quitting, g_fullscreen, g_motion = true;
+bool g_test, g_test_visible, g_dev, g_quitting, g_fullscreen, g_motion = true;
 double g_open_asked = 0;
 ComPtr<ICoreWebView2Environment> g_env;
 Settings g_set;
@@ -17,7 +17,7 @@ std::vector<HistoryEntry> g_history;
 static std::wstring g_class = L"PlumaVentana", g_mutex = L"PlumaNavegadorUnico";
 static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_OPEN = WM_APP + 3;
 static const ULONG_PTR kCopyOpen = 0x504C55;   // WM_COPYDATA from a second Pluma.exe: urls, one per line
-static const UINT_PTR kTimerQuit = 1, kTimerHistory = 2, kTimerTabs = 3, kTimerSession = 4, kTimerBurst = 5;
+static const UINT_PTR kTimerQuit = 1, kTimerHistory = 2, kTimerTabs = 3, kTimerSession = 4, kTimerBurst = 5, kTimerTransitions = 6;
 static int g_burst_left, g_burst_n;   // tests: a burst of pictures
 static double g_burst_t0;
 static LARGE_INTEGER g_t0, g_freq;
@@ -404,20 +404,26 @@ RECT fullscreen_rect() {
 }
 void fullscreen_now(bool on) {
     if (on == g_fullscreen) return;
+    // without Windows' own animation of the window (it scaled the old picture of the page, half see-through, over
+    // the new one: "tosco", in the user's recording of a page in fullscreen, 25/10)
+    BOOL off = TRUE;
+    DwmSetWindowAttribute(g_win, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
+    SetTimer(g_win, kTimerTransitions, 700, NULL);
     if (on) {
+        zoom_remember_area();
         g_before_fs.length = sizeof(g_before_fs);
         GetWindowPlacement(g_win, &g_before_fs);
         GetWindowRect(g_win, &g_test_rect);
         RECT m = fullscreen_rect();
         g_fullscreen = true;
         SetWindowLongW(g_win, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
-        SetWindowPos(g_win, g_test ? HWND_BOTTOM : HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top,
+        SetWindowPos(g_win, g_test && !g_test_visible ? HWND_BOTTOM : HWND_TOP, m.left, m.top, m.right - m.left, m.bottom - m.top,
                      SWP_FRAMECHANGED | SWP_NOOWNERZORDER | (g_test ? SWP_NOACTIVATE : 0));
     } else {
         g_fullscreen = false;
         SetWindowLongW(g_win, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN);
         // (tests: not SetWindowPlacement, which brings a window off the screen back onto it)
-        if (g_test) SetWindowPos(g_win, HWND_BOTTOM, g_test_rect.left, g_test_rect.top, g_test_rect.right - g_test_rect.left,
+        if (g_test) SetWindowPos(g_win, g_test_visible ? HWND_TOP : HWND_BOTTOM, g_test_rect.left, g_test_rect.top, g_test_rect.right - g_test_rect.left,
                                  g_test_rect.bottom - g_test_rect.top, SWP_NOACTIVATE);
         else SetWindowPlacement(g_win, &g_before_fs);
         SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
@@ -426,8 +432,8 @@ void fullscreen_now(bool on) {
     tabs_layout_views();
 }
 void set_fullscreen(bool on) {
-    // with a zoom (zoom.cpp) for Pluma's video player; at once for a page (the page lays out its own fullscreen: a
-    // zoom of the whole page looked doubled and wrong in the user's recording, 25/10), and without Windows' animations
+    // with the picture moving (zoom.cpp) for Pluma's video player; at once for a page (the page lays out its own
+    // fullscreen: a zoom of the whole page looked doubled and wrong in the user's recording, 25/10)
     if (zoom_busy()) { zoom_want(on); return; }   // on its way: it ends where asked last
     if (on == g_fullscreen) return;
     if (!g_motion || !IsWindowVisible(g_win) || IsIconic(g_win) || video_aspect() <= 0) { fullscreen_now(on); return; }
@@ -437,10 +443,12 @@ static void show_window() {
     g_start_hidden = false;
     if (g_test) {
         // a test instance draws for real but off the screen, without taking the focus from the user
-        int w = 1400, h = 900;
-        wchar_t size[32] = L"";
+        int w = 1400, h = 900, x = -7000, y = 100;
+        wchar_t size[32] = L"", at[32] = L"";
         if (GetEnvironmentVariableW(L"PLUMA_TAMANO", size, 32)) swscanf_s(size, L"%dx%d", &w, &h);   // e.g. 1920x1040
-        SetWindowPos(g_win, HWND_BOTTOM, -7000, 100, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        // PLUMA_A_LA_VISTA=x,y: on the screen, over the rest (to record a transition as the user sees it)
+        if (GetEnvironmentVariableW(L"PLUMA_A_LA_VISTA", at, 32) && swscanf_s(at, L"%d,%d", &x, &y) == 2) g_test_visible = true;
+        SetWindowPos(g_win, g_test_visible ? HWND_TOP : HWND_BOTTOM, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         return;
     }
     if (!IsWindowVisible(g_win)) ShowWindow(g_win, GetPropW(g_win, L"max") ? SW_SHOWMAXIMIZED : SW_SHOW);
@@ -450,7 +458,7 @@ static void show_window() {
 static void hide_window() {
     // closed but kept warm: the session is saved, the pages frozen and the memory given back (tabs_on_hide)
     ui_close_popups();
-    if (zoom_busy()) zoom_want(false);
+    zoom_stop();
     if (g_fullscreen) fullscreen_now(false);   // (at once: the window goes)
     save_placement();
     if (IsZoomed(g_win)) SetPropW(g_win, L"max", (HANDLE)1); else RemovePropW(g_win, L"max");
@@ -613,7 +621,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_SHOW: open_urls({}); return 0;
     case WM_APP_QUIT: quit_now(); return 0;
-    case WM_APP + 30: zoom_message(wp); return 0;   // the fullscreen zoom (zoom.cpp)
+    case WM_APP + 30: zoom_message(wp, lp); return 0;   // the fullscreen zoom (zoom.cpp)
     case WM_APP + 90: if (g_test) video_debug_shot(g_state + L"\\foto.png"); return 0;   // tests: a picture with the player's controls
     case WM_APP + 91:
         // tests: wp pictures, one every lp ms (foto-00.png...), to see a transition; with the time of each in the log
@@ -624,6 +632,11 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         else if (wp == kTimerHistory) { KillTimer(h, kTimerHistory); history_flush(); }
         else if (wp == kTimerTabs) tabs_tick();
         else if (wp == kTimerSession) { KillTimer(h, kTimerSession); session_save(); }
+        else if (wp == kTimerTransitions) {
+            KillTimer(h, kTimerTransitions);
+            BOOL off = FALSE;
+            if (!zoom_busy()) DwmSetWindowAttribute(h, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
+        }
         else if (wp == kTimerBurst) {
             wchar_t name[32]; swprintf_s(name, L"\\foto-%02d.png", g_burst_n);
             double t = now_ms() - g_burst_t0;

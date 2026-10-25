@@ -36,6 +36,8 @@ static struct {
     int (*observe_property)(mpv_handle *, uint64_t, const char *, int);
     mpv_event *(*wait_event)(mpv_handle *, double);
     void (*set_wakeup_callback)(mpv_handle *, void (*)(void *), void *);
+    mpv_handle *(*create_client)(mpv_handle *, const char *);
+    void (*destroy)(mpv_handle *);
 } M;
 static HMODULE g_mpv;
 static bool g_mpv_failed;
@@ -55,6 +57,7 @@ static bool load_mpv() {
     LOAD(set_option_string, "mpv_set_option_string"); LOAD(command, "mpv_command"); LOAD(command_async, "mpv_command_async");
     LOAD(set_property, "mpv_set_property"); LOAD(get_property, "mpv_get_property");
     LOAD(observe_property, "mpv_observe_property"); LOAD(wait_event, "mpv_wait_event"); LOAD(set_wakeup_callback, "mpv_set_wakeup_callback");
+    LOAD(create_client, "mpv_create_client"); LOAD(destroy, "mpv_destroy");
 #undef LOAD
     if (!M.create || !M.initialize || !M.command || !M.command_async || !M.get_property || !M.wait_event || !M.set_wakeup_callback) {
         g_mpv_failed = true; FreeLibrary(g_mpv); g_mpv = NULL; return false;
@@ -567,7 +570,9 @@ static bool start_player(Video *v, double start) {
         { "audio-file-auto", "no" }, { "cover-art-auto", "no" },
         // captions as YouTube draws them: white on a dark box
         { "sub-fonts-dir", fonts }, { "sub-font", "Roboto" }, { "sub-font-size", "34" }, { "sub-color", "#FFFFFF" },
-        { "sub-border-style", "background-box" }, { "sub-back-color", "#BF080808" }, { "sub-shadow-offset", "0" }, { "sub-margin-y", "44" } };
+        { "sub-border-style", "background-box" }, { "sub-back-color", "#BF080808" }, { "sub-shadow-offset", "0" }, { "sub-margin-y", "44" },
+        // ... over the picture, and with it while the zoom moves it (not in the black around it)
+        { "sub-use-margins", "no" } };
     for (auto &o : opts) M.set_option_string(v->mpv, o.k, o.v.c_str());
     if (g_dev) { M.set_option_string(v->mpv, "log-file", utf8(g_state + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v"); }   // tests
     if (M.initialize(v->mpv) < 0) { M.terminate_destroy(v->mpv); v->mpv = nullptr; return false; }
@@ -961,7 +966,7 @@ static void paint_menu(Video *v) {
 static void paint_center(Video *v) {
     double now = now_ms(), k = (now - v->bezel_at) / 500.0, kt = (now - v->vol_text_at) / 900.0;
     bool spin = v->buffering && !v->paused;
-    if (k >= 1 && !spin && kt >= 1) { layer_hide(g_center); return; }
+    if ((k >= 1 && !spin && kt >= 1) || zoom_busy()) { layer_hide(g_center); return; }
     RECT vr = video_rect();
     POINT o = { vr.left, vr.top }; ClientToScreen(g_win, &o);
     int sz = (int)S(200);
@@ -1005,6 +1010,8 @@ static void paint_all(Video *v) {
     if (!v || v->stage != ST_ON) return;
     Tab *t = active_tab();
     if (!t || V(t) != v || !IsWindowVisible(g_win) || IsIconic(g_win)) { hide_controls_now(); return; }
+    // (while the picture moves, no controls: they come back once it is in place, video_zoom_done)
+    if (zoom_busy()) { layer_hide(g_bottom); layer_hide(g_top); layer_hide(g_menu); layer_hide(g_center); return; }
     make_fonts();
     RECT vr = video_rect();
     POINT o = { vr.left, vr.top }; ClientToScreen(g_win, &o);
@@ -1859,6 +1866,34 @@ void video_debug_shot(const std::wstring &path) {
         fr->Commit(); enc->Commit();
     }
     DeleteObject(bmp); DeleteDC(mdc);
+}
+void *video_box_client() {
+    Video *v = V(active_tab());
+    if (!v || v->stage != ST_ON || !v->mpv || !M.create_client || !M.destroy) return nullptr;
+    return M.create_client(v->mpv, NULL);
+}
+void video_box(void *client, D2D1_RECT_F win, D2D1_RECT_F box) {
+    // mpv's margins, as parts of its window: the picture fits in what they leave (libmpv may be called from any thread)
+    if (!client) return;
+    double w = std::max(1.0f, win.right - win.left), h = std::max(1.0f, win.bottom - win.top);
+    double m[4] = { (box.left - win.left) / w, (win.right - box.right) / w, (box.top - win.top) / h, (win.bottom - box.bottom) / h };
+    static const char *names[4] = { "video-margin-ratio-left", "video-margin-ratio-right", "video-margin-ratio-top", "video-margin-ratio-bottom" };
+    for (int i = 0; i < 4; i++) {
+        double d = std::max(0.0, std::min(0.9, m[i]));
+        M.set_property((mpv_handle *)client, names[i], MPV_FORMAT_DOUBLE, &d);
+    }
+}
+void video_box_done(void *client) { if (client) M.destroy((mpv_handle *)client); }
+RECT video_window_rect() {
+    Video *v = V(active_tab());
+    RECT r = {};
+    if (v && v->wnd) GetWindowRect(v->wnd, &r);
+    return r;
+}
+void video_zoom_done() {
+    // the picture is in place: the controls show again (as YouTube's, after its fullscreen button)
+    Video *v = V(active_tab());
+    if (v && v->stage == ST_ON) show_controls(v);
 }
 bool video_settled() {
     // the player on screen already draws at its window's size (the fullscreen zoom waits for it)

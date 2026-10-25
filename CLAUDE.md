@@ -131,7 +131,8 @@ ya tenga esa funcionalidad»).
 - Pluma solo coge el vídeo mientras la página lo reproduce (en su grabación lo cogió en mitad de un doble clic en el
   reproductor de la página, en pausa en 0:01, y ahí se quedó). Si mpv deja de avanzar 8 s sin pausa (30 cargando),
   vuelve la página en ese segundo. La pantalla completa que pide la página va de golpe, sin zoom (el zoom de la
-  página entera se veía doble).
+  página entera se veía doble). Al recargar, el reproductor de Pluma vuelve a cogerlo (la recarga no cambia la
+  dirección: se mira al acabar de cargar; antes se quedaba en la página).
 - Clic en el vídeo: pausa a los 250 ms, como YouTube (medido en su página: espera a ver si hay un segundo clic, y en
   un doble clic no pausa nunca). Doble clic: pantalla completa y el vídeo sigue igual.
 - Controles: los del reproductor nuevo de YouTube («delhi»), medidos en su página: sus iconos SVG, píldoras
@@ -170,14 +171,20 @@ ya tenga esa funcionalidad»).
 - Recortar memoria (EmptyWorkingSet) tarda 9-90 ms: nunca en el hilo de la ventana, que comparte la entrada con las
   páginas (un hilo de la ventana ocupado retrasa los clics en la web). Va en un hilo aparte; y la interfaz de Pluma no
   se recorta a sí misma mientras se ve. Medido con `clics.js` en YouTube: mediana 6 ms hasta verse el clic.
-- Pantalla completa (zoom.cpp): con un zoom, como los móviles y los Mac: foto de la pantalla por encima de todo, su
-  vídeo crece hasta llenarla (o encoge a su sitio) mientras lo demás se oscurece, la ventana cambia debajo y la foto
-  se desvanece cuando el reproductor ya dibuja al tamaño nuevo (240 ms de zoom, 120 de salida). Lo anima
-  DirectComposition, Windows mismo a la frecuencia de la pantalla. Antes: de golpe («tosco, laggy») y luego un fundido
-  a negro («tosca, no fluida», 25/10; con temporizadores de la ventana daba 3-6 pasos). Sin la animación de maximizar
-  de Windows durante el cambio. En las pruebas la pantalla completa ocurre fuera de la pantalla, del tamaño del monitor
-  (sin SetWindowPlacement, que devuelve a la pantalla una ventana que está fuera), y la foto sale negra: el aspecto
-  solo se ve en la pantalla de verdad (`tools\grabar.exe`).
+- Pantalla completa y paso de la página al reproductor (zoom.cpp): el vídeo se mueve EN VIVO. mpv lo dibuja en
+  cualquier caja de su ventana (`video-margin-ratio-*`) y un hilo cambia la caja en cada refresco de la pantalla
+  (`WaitForVBlank`) con un mpv_handle propio (`mpv_create_client`). Una foto de la pantalla solo tapa el instante en
+  que la ventana cambia de tamaño (~100 ms); lo de alrededor (barra, barra de tareas, la página) se funde sobre el
+  vídeo mientras crece, o aparece cuando ya ha encogido. Historia, todo del 25/10: de golpe («tosco, laggy»); fundido
+  a negro («tosca, no fluida»; con temporizadores, 3-6 pasos); foto del vídeo que crecía («no hay transiciones,
+  tosco y laggy»: el vídeo se quedaba quieto medio segundo y entre ventana y pantalla completa solo crece un 10 %).
+  Trampas: la ventana de la foto, en un hilo sin mensajes, sacaba el cursor de espera en cada cambio (va en el hilo
+  de la ventana con `HTTRANSPARENT`); sin `DWMWA_TRANSITIONS_FORCEDISABLED` en la foto, Windows la fundía al
+  aparecer y el cambio se veía a través; los márgenes de la ventana nueva se ponen ANTES del cambio (después, salió
+  un fotograma con el vídeo pequeño en medio); `sub-use-margins=no`, o los subtítulos se van al negro de alrededor.
+  La pantalla completa que pide la página va sin animación de Windows (escalaba la página vieja, medio transparente).
+- Pruebas de transiciones: fuera de la pantalla la foto sale negra. Con `PLUMA_A_LA_VISTA=x,y` la instancia de prueba
+  se pone en la pantalla, por encima (y su pantalla completa también), para grabarla con `tools\grabar.exe`.
 - Doble clic en el vídeo: el segundo «soltar» se ignora (llegaba a otra ventana tras el cambio de tamaño).
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.

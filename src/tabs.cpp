@@ -345,6 +345,9 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             t->crashed = false;
             if (ok && tab_index(t->id) >= 0) history_add(t->url, t->title);
             if (ok && t == active_tab()) trim_after_load();
+            // a reload keeps the address (no SourceChanged): Pluma's player takes the video again (it stayed on the
+            // page after reloading, in the user's recording, 25/10)
+            if (ok) video_page_changed(t);
             if (ok && t->restoring) {
                 // back to where the page was; again a moment later for pages that grow as they load, unless the
                 // person has scrolled by then
