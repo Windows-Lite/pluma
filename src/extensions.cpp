@@ -266,9 +266,25 @@ void ext_open_options(size_t i) {
 static HWND g_pop;
 static ComPtr<ICoreWebView2Controller> g_pop_ctrl;
 static RECT g_pop_anchor;
+// A dialog of the popup's page (the engine's "allow access to the clipboard?" when Authenticator copies a code, an
+// alert) is owned by the popup and disables it and the Pluma window under it until it is answered.
+static bool pop_owns(HWND w) { for (; w; w = GetWindow(w, GW_OWNER)) if (w == g_pop) return true; return false; }
+static HWND pop_dialog() {
+    HWND found = NULL;
+    if (g_pop) EnumWindows([](HWND w, LPARAM lp) -> BOOL {
+        if (w != g_pop && IsWindowVisible(w) && pop_owns(w)) { *(HWND *)lp = w; return FALSE; }
+        return TRUE;
+    }, (LPARAM)&found);
+    return found;
+}
 static void pop_close() {
+    // closed with its dialog still up, nothing gave the Pluma window back its clicks (26/10: the page under it looked
+    // frozen, "como si se pusiera una capa por encima")
+    HWND owner = g_pop ? GetWindow(g_pop, GW_OWNER) : NULL;
+    bool give_back = owner && !IsWindowEnabled(owner) && pop_dialog();
     if (g_pop_ctrl) { g_pop_ctrl->Close(); g_pop_ctrl.Reset(); }
     if (g_pop) { HWND h = g_pop; g_pop = NULL; DestroyWindow(h); }
+    if (give_back) EnableWindow(owner, TRUE);
 }
 static void pop_size(int w, int h) {
     float s = ui_scale();
@@ -277,8 +293,9 @@ static void pop_size(int w, int h) {
     int x = g_pop_anchor.right - w, y = g_pop_anchor.bottom + (int)(6 * s);
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(MonitorFromRect(&g_pop_anchor, MONITOR_DEFAULTTONEAREST), &mi);
-    x = std::max((int)mi.rcWork.left, std::min(x, (int)mi.rcWork.right - w));
-    SetWindowPos(g_pop, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW);
+    // (a test instance's popup stays off the screen with its window)
+    if (!g_test || g_test_visible) x = std::max((int)mi.rcWork.left, std::min(x, (int)mi.rcWork.right - w));
+    SetWindowPos(g_pop, HWND_TOP, x, y, w, h, SWP_SHOWWINDOW | (g_test && !g_test_visible ? SWP_NOACTIVATE : 0));
     if (g_pop_ctrl) { RECT r = { 0, 0, w, h }; g_pop_ctrl->put_Bounds(r); }
 }
 static void pop_measure(bool first) {
@@ -297,14 +314,19 @@ static void pop_measure(bool first) {
                 int nw = (int)(w * s), nh = (int)(h * s);
                 if (first || abs(nw - now.right) > 2 || abs(nh - now.bottom) > 2) pop_size(nw, nh);
             }
-            if (first) { SetForegroundWindow(g_pop); if (g_pop_ctrl) g_pop_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC); }
+            if (first) { if (!g_test || g_test_visible) SetForegroundWindow(g_pop); if (g_pop_ctrl) g_pop_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC); }
             return S_OK;
         }).Get());
 }
 static LRESULT CALLBACK pop_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_TIMER:
-        if (h == g_pop) {
+        if (h == g_pop && wp == 2) {
+            // its dialog answered: it stays if it got the activation back, as when it opened; if not, it goes
+            if (pop_dialog()) return 0;
+            KillTimer(h, wp);
+            if (GetActiveWindow() != h) PostMessageW(h, WM_CLOSE, 0, 0);
+        } else if (h == g_pop) {
             int n = (int)(INT_PTR)GetPropW(h, L"medidas") + 1;
             SetPropW(h, L"medidas", (HANDLE)(INT_PTR)n);
             pop_measure(false);
@@ -312,7 +334,10 @@ static LRESULT CALLBACK pop_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_ACTIVATE:
-        if (LOWORD(wp) == WA_INACTIVE && h == g_pop) {
+        if (LOWORD(wp) == WA_INACTIVE && h == g_pop && pop_owns((HWND)lp)) {
+            // its own dialog took the activation: closing now would take the dialog with it before it is answered
+            SetTimer(h, 2, 250, NULL);
+        } else if (LOWORD(wp) == WA_INACTIVE && h == g_pop) {
             // clicking anywhere else closes it, as in Chrome (after this message: not from inside it)
             PostMessageW(h, WM_CLOSE, 0, 0);
         } else if (g_pop_ctrl) g_pop_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
