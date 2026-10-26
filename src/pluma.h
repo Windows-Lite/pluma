@@ -96,7 +96,7 @@ struct Settings {
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
     int reader_size = 20;              // the reader view's font size, px (reader.cpp)
-    bool tr_offer = true;              // offer to translate pages in another language (translate.cpp)
+    bool tr_offer = false;             // automatic translation: offer it on pages in another language, and the "always" languages (translate.cpp)
     std::wstring tr_target;            // ... into this one (Google's code; empty = Pluma's language)
     std::vector<std::wstring> tr_always, tr_never;   // languages translated always, or never offered
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
@@ -490,6 +490,7 @@ void ui_notice(const std::wstring &text, const std::wstring &button, std::functi
 void ui_notice_drop(int tab_id);          // the tab a note was about went elsewhere: the note goes
 void ui_toast(const std::wstring &text);
 void ui_translate_changed();              // a page's translation started, moved on or ended: the icon and its popup
+void ui_translate_card_test(const std::wstring &what);   // tests: "opciones", or the card's button 1 or 2
 bool ui_translate_offer(Tab *t);          // the popup that offers to translate, quietly (never takes the focus); false: not now
 void ui_open_translate_menu();            // ... and opened by the person (the address bar's icon)
 void ui_open_menu_quietly(bool translate); // tests: the main menu or the translate popup, without the focus

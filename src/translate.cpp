@@ -1,18 +1,21 @@
 // Pluma: page translation, as Chrome's and Edge's translator (WebView2 brings none).
 // - The page's language is found locally: its lang attribute and its own words (translate_core.h); nothing of the
 //   page goes anywhere until the person asks. A page in another language than the target (Pluma's language unless
-//   chosen) lights the translate icon in the address bar and, once per site and language, offers it in a small
-//   popup (ui.cpp): Translate / Not now / Never this language / Never this site / Always this language.
+//   chosen) shows the translate icon in the address bar, quiet; a click opens the card (ui.cpp, as Chrome's bubble):
+//   the two languages, Translate / Not now and a "..." with the rest. Only with the automatic translation on
+//   (traducir_ofrecer, off by default) the card opens by itself, once per site and language, and the languages
+//   chosen as "always" are translated without asking.
 // - Translating: translate.js (RCDATA 221) goes into the page and hands out its text in pieces (a block's text
 //   nodes, the visible ones first); Pluma sends them to Google Translate's web endpoint (translate.googleapis.com,
 //   client=gtx, as Chrome's own; no account), from a worker thread with WinHTTP (the page's CSP never gets in the way),
 //   and gives the page back plain strings for the same text nodes. New text keeps being translated while the page is
 //   on screen: Pluma asks it every 700 ms (nothing is asked of a hidden, frozen or asleep page). "Show original" puts
-//   every node back. A page translated in a tab carries on into the next pages of that language in the same tab.
+//   every node back. With the automatic
+//   translation on, a page translated in a tab carries on into the next pages of that language in the same tab.
 // - Selected text: "Traducir «...»" in the page's context menu, the result in a small bubble near it, with a copy
 //   button (ui.cpp).
 // - Fails gracefully: offline or rate-limited, a toast, and what was translated stays.
-// - Settings (Configuración > Idioma): offers on/off, the target, the languages always or never translated
+// - Settings (Configuración > Idioma): automatic on/off, the target, the languages always or never translated
 //   (ajustes.ini: traducir_ofrecer, traducir_a, traducir_siempre, traducir_nunca) and the sites never translated
 //   (traducir-nunca.tsv, one host a line, each profile its own; an incognito window keeps them only in memory).
 #include "pluma.h"
@@ -411,12 +414,16 @@ static void detected(Tab *t, const std::wstring &attr, const std::wstring &sampl
     if (!foreign || t->tr_state) return;
     std::wstring site = site_of(t->url);
     if (translate_never_site(site)) return;
-    if (translate_always(lang) || t->tr_sticky == lang) { translate_page(t); return; }
+    // (with the automatic translation on, a language translated by hand carries on in that tab, as in Chrome; off,
+    // only the page it was asked on is translated)
+    if (g_set.tr_offer && (t->tr_sticky == lang || translate_always(lang))) { translate_page(t); return; }
     t->tr_sticky.clear();
+    // nothing by itself unless the automatic translation is on (26/10: "desactivado por defecto, que solo traduzca al
+    // activarlo en esa página"): the quiet icon in the address bar is the way in
     if (!g_set.tr_offer || translate_never(lang)) return;
     // (offered once; if the person was busy elsewhere, the next look at the page tries again)
     std::wstring key = site + L"|" + lang;
-    if (!g_offered.count(key) && ui_translate_offer(t)) g_offered.insert(key);
+    if (!g_offered.count(key) && ui_translate_offer(t)) { g_offered.insert(key); log_line(L"traducción: ofrecida (" + lang + L")"); }
 }
 static void detect(Tab *t) {
     if (!can_translate(t)) {

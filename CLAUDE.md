@@ -300,13 +300,30 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
 
 ## Traducción (`src/translate.cpp`, `src/translate.js`, `src/translate_core.h`)
 Pedido el 26/10: «necesito una opción para traducir», como Edge.
-- Página: icono en la barra (delante del libro o la estrella) y fila «Traducir página» / «Mostrar original» en ⋯.
-  Idioma de la página: su `lang` (o el meta), salvo que el texto diga claramente otro (`tr_guess_lang`: escritura y
-  palabras frecuentes, en Pluma; nada sale hasta que se pide traducir). Si no es el de destino (`traducir_a`, vacío = el
-  de Pluma), el icono se enciende y, una vez por sitio e idioma y sesión, la ventanita de la oferta (menú «quieto»: no
-  coge el foco, se va con un clic fuera, Esc, otra pestaña o 12 s sin tocarla): Traducir, Traducir a, Siempre, Nunca
-  este idioma, Nunca este sitio, Ahora no. `traducir_siempre` y `traducir_nunca` en `ajustes.ini`; sitios en
-  `traducir-nunca.tsv` (no se escribe desde incógnito). Un idioma traducido a mano se sigue traduciendo en esa pestaña.
+- Apagada por defecto (26/10, el usuario: «que el traductor esté desactivado por defecto, que solo traduzca al activarlo
+  en esa página»): nada se traduce ni se ofrece solo. Se traduce al pedirlo: icono de la barra, fila «Traducir página» /
+  «Mostrar original» en ⋯ o el clic derecho. Solo esa página: la siguiente de la pestaña sale sin traducir.
+- Icono en la barra (delante del libro o la estrella) en toda página en otro idioma, discreto (el color del libro y la
+  estrella); en el acento solo traducida. Idioma de la página: su `lang` (o el meta), salvo que el texto diga claramente
+  otro (`tr_guess_lang`: escritura y palabras frecuentes, en Pluma; nada sale hasta que se pide traducir). Destino:
+  `traducir_a`, vacío = el de Pluma.
+- Clic en el icono: la tarjeta (rediseñada el 26/10: «rediséñalo que se ve fatal»; antes era una lista), como la burbuja
+  de Chrome (`chrome/browser/ui/views/translate/translate_bubble_view.cc`) y la de Edge: icono, «¿Traducir esta página?»
+  y «Página en X», ⋯ y ×; la píldora del idioma de la página, una flecha y la del destino (clic: la lista de idiomas);
+  «Ahora no» y «Traducir» (principal, a la derecha). Traduciendo, el título lleva el % y una barra fina; traducida,
+  «Página traducida», «Ahora en X», «Mostrar original» y «Listo». Copiado: título + idiomas + botones + menú de opciones.
+  No copiado: las pestañas de Chrome como interruptor (aquí, botones que dicen lo que hacen). Es el menú de Pluma
+  (`PAGE_TRANSLATE`, filas 10-12 de `MItem`, `card_part`/`card_draw`); el ⋯ es `PAGE_TR_OPTIONS`: Traducir a,
+  «Traducción automática» y, solo con ella encendida, Siempre / Nunca este idioma / Nunca este sitio; Configuración.
+  Varias ventanas: la tarjeta, la oferta y la burbuja se abren sobre la ventana de la pestaña; sus botones actúan en la
+  ventana donde está la pestaña entonces (`WinScope(win_of_tab(t))`) y un cambio de la traducción redibuja la tarjeta
+  en la suya (como `ui_downloads_changed`). Probado moviendo la pestaña a otra ventana (`mover-nueva`) y traduciendo allí.
+- Traducción automática (`traducir_ofrecer`, Configuración > Idioma > Traducción, apagada): la tarjeta sale sola una vez
+  por sitio e idioma y sesión (quieta: no coge el foco, se va con un clic fuera, Esc, otra pestaña o 12 s sin tocarla; sus
+  botones no traen Pluma delante), los idiomas de `traducir_siempre` se traducen sin preguntar y un idioma traducido a
+  mano sigue traducido en las páginas siguientes de esa pestaña (como Chrome). Apagada, las listas se
+  guardan pero no actúan. Un `ajustes.ini` de antes de `ajustes_v=3` la tenía encendida de serie: se lee como apagada.
+  `traducir_nunca` en `ajustes.ini`; sitios en `traducir-nunca.tsv` (no se escribe desde incógnito).
 - Cómo (copiado de TWP, https://github.com/FilipePS/Traduzir-paginas-web `src/contentScript/pageTranslator.js`, y de
   Firefox, `toolkit/components/translations/content/translations-document.sys.mjs`): `translate.js` (RCDATA 221) se
   mete con ExecuteScript (pasa la CSP), junta en «trozos» los textos de cada bloque (`<a i=N>` por nodo, para que la
@@ -321,11 +338,15 @@ Pedido el 26/10: «necesito una opción para traducir», como Edge.
   nodos y la puntuación los arregla `apply` (sin «mantequilla .» ni dobles espacios).
 - Selección: «Traducir «…»» en el menú del clic derecho (tras Copiar) y una burbuja de Pluma junto a la selección,
   con copiar. Fallos (sin red, 429/403/503): aviso y la página se queda como estaba.
-- Configuración > Idioma > Traducción: ofrecer sí/no, destino y las listas para quitar.
+- Configuración > Idioma > Traducción: traducción automática sí/no, destino y las listas para quitar.
 - Pruebas: `tools\traducir-test.cpp` (marcadores y detección; `cl /EHsc /std:c++17`), `tools\traducir-prueba.ps1
-  -Salida <carpeta>` con `PLUMA_EXE` (de punta a punta: la página de prueba, Wikipedia en francés y japonés, YouTube,
-  Configuración, burbuja, menús; capturas hechas por Pluma). Órdenes de prueba: `Pluma.exe pluma-prueba:traducir|
-  original|seleccion|menu|menu-principal|oferta|clic-derecho|destino=xx|foto=<nombre>` (solo en instancias de prueba).
+  -Salida <carpeta>` con `PLUMA_EXE` (de punta a punta: un `ajustes.ini` viejo con la oferta encendida; la página de
+  prueba; Wikipedia en francés, en castellano con destino inglés y en japonés sin nada solo (`typeof __plumaTr` y el
+  log); la tarjeta, su ⋯ y sus botones; la automática encendida sí ofrece; YouTube, Configuración, burbuja, menús;
+  capturas hechas por Pluma, claro y oscuro). Órdenes de prueba: `Pluma.exe pluma-prueba:traducir|original|seleccion|
+  menu|menu-principal|oferta|clic-derecho|destino=xx|tarjeta=1|2|opciones|automatica=0|1|foto=<nombre>` (solo en
+  instancias de prueba; `menu` es la tarjeta, `tarjeta=1|2` pulsa su botón principal o el otro). La oferta deja
+  «traducción: ofrecida (xx)» en `pluma.log`.
 - El menú del clic derecho es del motor: no sale en las capturas. `clic-derecho` hace que el siguiente no se enseñe:
   sus filas van a `pluma.log` y se elige la de traducir, como un clic (`tools\clic.js ... right` para abrirlo).
 - RAM (26/10, 3 pestañas, `tres.ps1` a la vez): 151 MB sin esto, 156 con esto (dentro de lo que varía).
