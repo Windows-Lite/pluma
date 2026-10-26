@@ -66,10 +66,10 @@ $fails = 0
 function Check($what, $ok) { if ($ok) { "ok    $what" } else { "FALLA $what"; $script:fails++ } }
 function WaitFor($sb, $ms = 8000) { for ($i = 0; $i -lt $ms / 50; $i++) { if (& $sb) { return $true }; Start-Sleep -Milliseconds 50 }; return $false }
 function Shot($f) { & $cap $cls "$out\$f" | Out-Null }
-function Answer($root) {
+function Answer($root, $shot) {
   # the prompt's button, as the person would (UI Automation: no focus taken; the engine enables it a moment after)
   Start-Sleep -Milliseconds 1000
-  try { & "$src\tools\passgen\ventanas.ps1" -Root $root -Shot "$out\dialogo" -Invoke 'Permitir|Allow|Aceptar|OK' | Where-Object { $_ -match '^pulsado' } } catch { "no se pudo pulsar: $_" }
+  try { & "$src\tools\passgen\ventanas.ps1" -Root $root -Shot "$out\$shot" -Invoke 'Permitir|Allow|Aceptar|OK' | Where-Object { $_ -match '^pulsado' } } catch { "no se pudo pulsar: $_" }
 }
 function Ready($what) {
   Check "${what}: ventana de Pluma activa" ([P]::IsWindowEnabled((Main)))
@@ -110,7 +110,7 @@ try {
     Check 'su aviso sale y la ventanita sigue' $dlg
     Start-Sleep 1
     Check 'la ventanita sigue con el aviso arriba' ((Pop) -ne [IntPtr]::Zero)
-    Answer $root
+    Answer $root 'authenticator-aviso'
     [void](WaitFor { (Pop) -ne [IntPtr]::Zero -and [P]::Owned((Pop)) -eq [IntPtr]::Zero })
     Start-Sleep 1
     $clip = [Windows.Forms.Clipboard]::GetText()
@@ -142,7 +142,7 @@ try {
   Start-Sleep 2
   & $cap 'PlumaExtension|Pluma popup test' "$out\prueba-1-popup.png" | Out-Null
   & $node "$src\tools\clic.js" $cdp 'popup.html' '#copyclose' | Out-Null
-  if (WaitFor { (Pop) -ne [IntPtr]::Zero -and [P]::Owned((Pop)) -ne [IntPtr]::Zero } 3000) { Answer $root }
+  if (WaitFor { (Pop) -ne [IntPtr]::Zero -and [P]::Owned((Pop)) -ne [IntPtr]::Zero } 3000) { Answer $root 'prueba-aviso' }
   Check 'window.close(): se cierra' (WaitFor { (Pop) -eq [IntPtr]::Zero })
   Check 'copiado' ([Windows.Forms.Clipboard]::GetText() -eq '123456')
   Start-Sleep 1
