@@ -29,7 +29,8 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
                  G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
-                 G_COPY = 0xE8C8, G_WINDOW = 0xE78B, G_NEW_WINDOW_OUT = 0xE8A7, G_SWITCH = 0xE8AB, G_WARN = 0xE7BA };
+                 G_COPY = 0xE8C8, G_WINDOW = 0xE78B, G_NEW_WINDOW_OUT = 0xE8A7, G_SWITCH = 0xE8AB, G_WARN = 0xE7BA,
+                 G_CHEV_D = 0xE70D, G_BOLT = 0xE945, G_BLOCK = 0xE733 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -77,7 +78,7 @@ static D2D1_RENDER_TARGET_TYPE render_type() {
 }
 static ComPtr<ID2D1SolidColorBrush> &ui_g_br();
 #define g_br (ui_g_br())
-struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, chip, chip_b, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, title; };
+struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, chip, chip_b, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, title, card; };
 static Formats &ui_g_f();
 #define g_f (ui_g_f())
 static HFONT &ui_g_edit_font();
@@ -122,6 +123,7 @@ static void make_formats() {
     g_f.avatar = make_format(false, S(11.5f), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.avatar_lg = make_format(false, S(22), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.title = make_format(false, S(16), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.card = make_format(false, S(15), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING);   // the translate card's title
     if (g_edit_font) DeleteObject(g_edit_font);
     g_edit_font = CreateFontW(-(int)lroundf(S(14)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, g_ui_family.c_str());
@@ -441,8 +443,9 @@ static D2D1_RECT_F reader_rect() {
     D2D1_RECT_F s = star_rect();
     return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
 }
-// the translate icon before them: the page is in another language, or translated (translate.cpp)
-static bool translate_shown() { Tab *t = active_tab(); return star_shown() && (t->tr_state || (t->tr_offer && g_set.tr_offer)); }
+// the translate icon before them: the page is in another language, or translated (translate.cpp); always there for
+// such a page (it is how the person asks: nothing is translated or offered by itself unless the automatic one is on)
+static bool translate_shown() { Tab *t = active_tab(); return star_shown() && (t->tr_state || t->tr_offer); }
 static D2D1_RECT_F translate_rect() {
     D2D1_RECT_F s = reader_shown() ? reader_rect() : star_rect();
     return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
@@ -906,14 +909,14 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         right = r.left - S(4);
     }
     if (translate_shown()) {
-        // translate: in the accent while offered (the page is in another language), on a soft fill once translated
+        // translate: quiet as the book and the star while only offered; in the accent, on a soft fill, once translated
         D2D1_RECT_F r = translate_rect();
         auto &ta = g_btn_hover[hover_key(H_TRANSLATE, 0)];
         busy |= ta.running(now);
         float th = ta.at(now);
         if (t->tr_state) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
         else if (th > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, th * 1.3f));
-        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_LANG, r, t->tr_state || t->tr_offer ? p.accent : mix(p.sub, p.text, th));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_LANG, r, t->tr_state ? p.accent : mix(p.sub, p.text, th));
         right = r.left - S(4);
     }
     if (zoom_shown()) {
@@ -1471,10 +1474,11 @@ std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET, PAGE_INCOGNITO, PAGE_DOWNLOADS };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET, PAGE_INCOGNITO, PAGE_DOWNLOADS, PAGE_TR_OPTIONS };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back, 8 header (the profile's flyout),
-                    // 9 a download (name, its bar while on its way, its state under it; hint = the state)
+                    // 9 a download (name, its bar while on its way, its state under it; hint = the state),
+                    // 10-12 the translate card: 10 its title (with ... and x), 11 the two languages, 12 its buttons
     std::wstring text, hint;
     wchar_t icon = 0;
     bool on = false, enabled = true, danger = false;
@@ -1484,6 +1488,7 @@ struct MItem {
     bool avatar = false; Profile prof;      // a profile's row: its avatar instead of an icon
     std::function<void()> act1, act2;
     float progress = -1; int dl_state = 0;   // a download's row (DownloadRow)
+    int value = -1;                         // the translate card's title: how far the translation went (0-100)
 };
 static std::vector<MItem> g_items;
 static int g_menu_page = PAGE_MAIN, g_menu_tab = 0, g_menu_sel = -1, g_menu_hot_btn = 0;
@@ -1501,9 +1506,21 @@ static std::wstring fmt1(const wchar_t *tpl, const std::wstring &a) {
     return s;
 }
 static const float kMenuW = 344, kItemH = 34, kSepH = 9;
-static float item_h(const MItem &m) { return m.kind == 1 ? S(kSepH) : m.kind == 6 ? S(30) : m.kind == 8 ? S(76) : m.kind == 9 ? S(54) : S(kItemH); }
+static float item_h(const MItem &m) {
+    switch (m.kind) {
+    case 1: return S(kSepH);
+    case 6: return S(30);
+    case 8: return S(76);
+    case 9: return S(54);
+    case 10: return S(58);
+    case 11: return S(50);
+    case 12: return S(58);
+    default: return S(kItemH);
+    }
+}
 static std::vector<MItem> build_page(int page);
 static void menu_rebuild() { g_items = build_page(g_menu_page); }
+static void menu_refresh();
 static D2D1_RECT_F item_rect(size_t i) {
     float pad = S(kPanelPad), y = pad + S(6);
     for (size_t k = 0; k < i; k++) y += item_h(g_items[k]);
@@ -1514,6 +1531,93 @@ static D2D1_RECT_F item_btn(size_t i, int which) {   // 1 or 2, from the right
     float x = r.right - S(4) - which * S(30);
     if (g_items[i].kind == 9) { float cy = (r.top + r.bottom) / 2; return R(x, cy - S(15), x + S(28), cy + S(15)); }   // (a tall row: a square button)
     return R(x, r.top + S(3), x + S(28), r.bottom - S(3));
+}
+// the translate card's parts, as Chrome's and Edge's bubble (chrome/browser/ui/views/translate/translate_bubble_view.cc):
+// title with the options and close buttons; the page's language, an arrow and the target (a click changes it); the
+// main button and the secondary one, right-aligned. which: 1 the right one (x, the target, the main button), 2 the next
+static const float kCardIn = 12;   // inner margin of the card's rows (DIP), on top of the rows' own
+static D2D1_RECT_F card_part(const MItem &m, D2D1_RECT_F r, int which) {
+    float in = S(kCardIn);
+    if (m.kind == 10) {
+        float x = r.right - in + S(6) - which * S(32), cy = r.top + S(26);
+        return R(x, cy - S(15), x + S(30), cy + S(15));
+    }
+    float cy = (r.top + r.bottom) / 2;
+    if (m.kind == 11) {
+        // the source pill (static), the arrow, the target pill (which 1)
+        float lw = std::min(S(130), text_w(g_f.chip.Get(), m.text) + S(28));
+        float x = r.left + in + lw + S(30);
+        float tw = std::min(r.right - in - x, text_w(g_f.chip.Get(), m.hint) + S(50));
+        if (which == 0) return R(r.left + in, cy - S(16), r.left + in + lw, cy + S(16));
+        return R(x, cy - S(16), x + tw, cy + S(16));
+    }
+    if (m.kind == 12) {
+        float w1 = text_w(g_f.chip.Get(), m.text) + S(36), w2 = m.hint.empty() ? 0 : text_w(g_f.chip.Get(), m.hint) + S(32);
+        float x1 = r.right - in - w1;
+        if (which == 1) return R(x1, cy - S(17), r.right - in, cy + S(17));
+        if (w2 <= 0) return R(0, 0, 0, 0);
+        return R(x1 - S(8) - w2, cy - S(17), x1 - S(8), cy + S(17));
+    }
+    return R(0, 0, 0, 0);
+}
+static void card_draw(Panel &p, const MItem &m, size_t i, D2D1_RECT_F r) {
+    const Palette &c = pal();
+    ID2D1RenderTarget *rt = p.rt.Get();
+    ID2D1SolidColorBrush *br = p.br.Get();
+    bool dark = dark_theme();
+    auto hot = [&](int k) { return g_menu_sel == (int)i && g_menu_hot_btn == k; };
+    float in = S(kCardIn);
+    if (m.kind == 10) {
+        // the icon on a soft tile, the title and what the page is in (or how far it went)
+        D2D1_RECT_F tile = R(r.left + in, r.top + S(10), r.left + in + S(32), r.top + S(42));
+        fill(rt, br, tile, S(10), c.accent_soft);
+        glyph(rt, br, g_f.icon.Get(), G_LANG, tile, dark ? c.text : c.accent);
+        float tl = tile.right + S(12), tr = card_part(m, r, 2).left - S(4);
+        text(rt, br, g_f.card.Get(), m.text, R(tl, r.top + S(5), tr, r.top + S(27)), c.text);
+        text(rt, br, g_f.ntp.Get(), m.hint, R(tl, r.top + S(27), tr, r.top + S(45)), c.sub);
+        for (int k : { 2, 1 }) {
+            D2D1_RECT_F b = card_part(m, r, k);
+            if (hot(k)) fill(rt, br, b, S(8), c.hover);
+            glyph(rt, br, k == 1 ? g_f.icon_sm.Get() : g_f.icon.Get(), k == 1 ? G_X : G_MORE, b, hot(k) ? c.text : c.sub);
+        }
+        if (m.value >= 0) {
+            // translating: a thin bar under the title
+            D2D1_RECT_F bar = R(tl, r.bottom - S(6), r.right - in, r.bottom - S(3));
+            fill(rt, br, bar, S(1.5f), c.line);
+            float k = std::max(0.04f, std::min(1.0f, m.value / 100.0f));
+            fill(rt, br, R(bar.left, bar.top, bar.left + (bar.right - bar.left) * k, bar.bottom), S(1.5f), c.accent);
+        }
+        return;
+    }
+    if (m.kind == 11) {
+        D2D1_RECT_F a = card_part(m, r, 0), b = card_part(m, r, 1);
+        auto f = g_f.chip;
+        f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        fill(rt, br, a, S(10), m.on ? c.hover : alpha(c.accent, dark ? 0.16f : 0.08f));
+        text(rt, br, f.Get(), m.text, R(a.left + S(10), a.top, a.right - S(10), a.bottom), m.on ? c.sub : c.text);
+        f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        glyph(rt, br, g_f.icon_sm.Get(), G_FWD, R(a.right, a.top, b.left, a.bottom), c.sub);
+        // the target: on the accent once the page is in it; a click opens the list
+        D2D1_COLOR_F bg = m.on ? alpha(c.accent, dark ? 0.22f : 0.1f) : c.surface;
+        if (hot(1)) bg = m.on ? alpha(c.accent, dark ? 0.3f : 0.16f) : c.hover;
+        fill(rt, br, b, S(10), bg);
+        stroke(rt, br, b, S(10), m.on ? alpha(c.accent, 0.55f) : c.line_strong, S(1));
+        text(rt, br, f.Get(), m.hint, R(b.left + S(14), b.top, b.right - S(30), b.bottom), m.on ? c.accent : c.text);
+        glyph(rt, br, g_f.icon_sm.Get(), G_CHEV_D, R(b.right - S(30), b.top, b.right - S(8), b.bottom), m.on ? c.accent : c.sub);
+        return;
+    }
+    if (m.kind == 12) {
+        auto f = g_f.chip;
+        f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        D2D1_RECT_F b1 = card_part(m, r, 1), b2 = card_part(m, r, 2);
+        if (!m.hint.empty()) {
+            fill(rt, br, b2, S(10), hot(2) ? c.press : c.hover);
+            text(rt, br, f.Get(), m.hint, b2, c.text);
+        }
+        fill(rt, br, b1, S(10), hot(1) ? mix(c.accent, dark ? hex(0xffffff) : hex(0x000000), 0.12f) : c.accent);
+        text(rt, br, f.Get(), m.text, b1, dark ? hex(0x0f1a2e) : hex(0xffffff));
+        f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    }
 }
 static void menu_draw(Panel &p, double now) {
     const Palette &c = pal();
@@ -1545,6 +1649,7 @@ static void menu_draw(Panel &p, double now) {
             }
             continue;
         }
+        if (m.kind >= 10) { card_draw(p, m, i, r); continue; }
         if (m.kind == 9) {
             // a download, as in Edge's flyout: its file, its name, a bar while it comes, its state; the button at the right
             bool hot = (int)i == g_menu_sel && (m.act || (m.b1 && g_menu_hot_btn == 1));
@@ -1578,12 +1683,21 @@ static void menu_draw(Panel &p, double now) {
         D2D1_COLOR_F ink = !m.enabled ? alpha(c.sub, 0.55f) : m.danger ? c.error : c.text;
         float ix = r.left + S(18), cy = (r.top + r.bottom) / 2;
         wchar_t ig = m.icon;
-        if (m.kind == 3) ig = m.on ? G_CHECK : 0;
+        bool own_icon = m.kind == 3 && m.icon;   // (a check row with its own icon: a switch at the right, as in settings)
+        if (m.kind == 3 && !own_icon) ig = m.on ? G_CHECK : 0;
         if (m.kind == 4) ig = m.on ? G_CHECK : 0;
         if (m.kind == 7) ig = G_CHEV_L;
         if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), ix, cy, S(11), m.prof);
-        else if (ig) glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), m.kind >= 3 && m.kind <= 4 ? c.accent : (m.danger ? c.error : c.sub));
+        else if (ig) glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), m.kind >= 3 && m.kind <= 4 && !own_icon ? c.accent : (m.danger ? c.error : c.sub));
         float tr = r.right - S(12);
+        if (own_icon) {
+            D2D1_RECT_F sw = R(r.right - S(46), cy - S(9), r.right - S(12), cy + S(9));
+            fill(p.rt.Get(), p.br.Get(), sw, S(9), m.on ? c.accent : c.line_strong);
+            float kx = m.on ? sw.right - S(9) : sw.left + S(9);
+            p.br->SetColor(m.on && dark_theme() ? hex(0x0f1a2e) : hex(0xffffff));
+            p.rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(kx, cy), S(6.5f), S(6.5f)), p.br.Get());
+            tr = sw.left - S(8);
+        }
         if (m.kind == 2) { glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_CHEV_R, R(r.right - S(28), r.top, r.right - S(8), r.bottom), c.sub); tr -= S(18); }
         if (m.b1) {
             for (int k = 1; k <= 2; k++) {
@@ -1659,9 +1773,11 @@ static void menu_close() {
 }
 static void menu_go(int page) { g_menu_page = page; g_menu_sel = -1; menu_place(true); }
 static void after_menu(std::function<void()> f) {
-    // the menu goes first, then the action (some open dialogs or move the focus)
+    // the menu goes first, then the action (some open dialogs or move the focus); a quiet one never had the focus,
+    // so it gives none back (the offer must not pull Pluma in front)
+    bool quiet = g_menu_quiet;
     menu_close();
-    SetForegroundWindow(g_win);
+    if (!quiet) SetForegroundWindow(g_win);
     f();
 }
 void ui_open_menu() {
@@ -1916,39 +2032,75 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sep());
         v.push_back(item(T(L"Abrir carpeta de descargas"), G_FOLDER, L"", [] { after_menu([] { downloads_open_folder(); }); }));
     } else if (page == PAGE_TRANSLATE) {
-        // the translate icon (or the offer): as Edge's, with the page's language, the target and what to remember
+        // the translate card (the icon in the address bar, or the offer when the automatic translation is on), as
+        // Chrome's bubble: what to do, from which language into which, and the rest behind "..."
         int id = g_menu_tab;
         Tab *t = tab_by_id(id);
         if (!t) return v;
+        std::wstring lang = t->page_lang, tl = translate_target();
+        MItem head; head.kind = 10;
+        if (t->tr_state == 1) {
+            head.text = fmt1(T(L"Traduciendo… %1 %"), std::to_wstring(translate_progress(t)));
+            head.value = translate_progress(t);
+        } else head.text = t->tr_state ? T(L"Página traducida") : T(L"¿Traducir esta página?");
+        head.hint = t->tr_state ? fmt1(T(L"Ahora en %1"), translate_lang_name(tl, false))
+                                : lang.empty() ? std::wstring(T(L"Traducir esta página")) : fmt1(T(L"Página en %1"), translate_lang_name(lang, false));
+        head.act1 = [] { after_menu([] {}); };
+        head.act2 = [] { menu_go(PAGE_TR_OPTIONS); };
+        v.push_back(head);
+        MItem langs; langs.kind = 11; langs.on = t->tr_state != 0;
+        langs.text = lang.empty() ? std::wstring(T(L"Automático")) : translate_lang_name(lang, true);
+        langs.hint = translate_lang_name(tl, true);
+        langs.act1 = [] { menu_go(PAGE_TR_TARGET); };
+        v.push_back(langs);
+        MItem acts; acts.kind = 12;
+        if (t->tr_state) {
+            acts.text = T(L"Listo"); acts.act1 = [] { after_menu([] {}); };
+            acts.hint = T(L"Mostrar original"); acts.act2 = [id] { after_menu([id] { Tab *t = tab_by_id(id); WinScope ws(win_of_tab(t)); translate_original(t); }); };
+        } else {
+            acts.text = T(L"Traducir"); acts.act1 = [id] { after_menu([id] { Tab *t = tab_by_id(id); WinScope ws(win_of_tab(t)); translate_page(t); }); };
+            acts.hint = T(L"Ahora no"); acts.act2 = [] { after_menu([] {}); };
+        }
+        v.push_back(acts);
+    } else if (page == PAGE_TR_OPTIONS) {
+        // the card's "...": the target, the automatic translation and, with it on, what to remember
+        int id = g_menu_tab;
+        Tab *t = tab_by_id(id);
+        if (!t) return v;
+        MItem b = back(T(L"Más opciones"));
+        b.act = [] { menu_go(PAGE_TRANSLATE); };
+        v.push_back(b);
         std::wstring lang = t->page_lang, tl = translate_target(), site = translate_site(t);
         std::wstring tl1 = tl.substr(0, tl.find(L'-'));
-        v.push_back(note(lang.empty() ? std::wstring(T(L"Traducir esta página")) : fmt1(T(L"Página en %1"), translate_lang_name(lang, false))));
-        if (t->tr_state == 1) v.push_back(note(fmt1(T(L"Traduciendo… %1 %"), std::to_wstring(translate_progress(t)))));
-        if (t->tr_state) v.push_back(item(T(L"Mostrar original"), G_UNDO, L"", [id] { after_menu([id] { translate_original(tab_by_id(id)); }); }));
-        else v.push_back(item(T(L"Traducir"), G_LANG, translate_lang_name(tl, true), [id] { after_menu([id] { translate_page(tab_by_id(id)); }); }));
         v.push_back(sub(T(L"Traducir a"), G_GLOBE, translate_lang_name(tl, true), PAGE_TR_TARGET));
         v.push_back(sep());
-        if (!lang.empty() && lang != tl1) {
-            std::wstring name = translate_lang_name(lang, false);
-            MItem al; al.kind = 3; al.text = fmt1(T(L"Traducir siempre las páginas en %1"), name); al.on = translate_always(lang);
-            al.act = [id, lang] {
-                bool on = !translate_always(lang);
-                translate_set_always(lang, on);
-                Tab *t = tab_by_id(id);
-                if (on && t && !t->tr_state) translate_page(t);
-            };
-            v.push_back(al);
-            MItem nv; nv.kind = 3; nv.text = fmt1(T(L"No traducir nunca las páginas en %1"), name); nv.on = translate_never(lang);
-            nv.act = [lang] { translate_set_never(lang, !translate_never(lang)); };
-            v.push_back(nv);
-        }
-        if (!site.empty()) {
-            MItem ns; ns.kind = 3; ns.text = T(L"No traducir nunca este sitio"); ns.on = translate_never_site(site);
-            ns.act = [site] { translate_set_never_site(site, !translate_never_site(site)); };
-            v.push_back(ns);
+        MItem au; au.kind = 3; au.icon = G_BOLT; au.text = T(L"Traducción automática"); au.on = g_set.tr_offer;
+        au.act = [] { g_set.tr_offer = !g_set.tr_offer; settings_save(); ui_invalidate(); };
+        v.push_back(au);
+        if (g_set.tr_offer) {
+            // (they only act with the automatic translation on: without it nothing would ever look at them)
+            if (!lang.empty() && lang != tl1) {
+                std::wstring name = translate_lang_name(lang, false);
+                MItem al; al.kind = 3; al.icon = G_LANG; al.text = fmt1(T(L"Traducir siempre el %1"), name); al.on = translate_always(lang);
+                al.act = [id, lang] {
+                    bool on = !translate_always(lang);
+                    translate_set_always(lang, on);
+                    Tab *t = tab_by_id(id);
+                    WinScope ws(win_of_tab(t));   // (the tab may be in another window by now)
+                    if (on && t && !t->tr_state) translate_page(t);
+                };
+                v.push_back(al);
+                MItem nv; nv.kind = 3; nv.icon = G_BLOCK; nv.text = fmt1(T(L"No traducir nunca el %1"), name); nv.on = translate_never(lang);
+                nv.act = [lang] { translate_set_never(lang, !translate_never(lang)); };
+                v.push_back(nv);
+            }
+            if (!site.empty()) {
+                MItem ns; ns.kind = 3; ns.icon = G_GLOBE; ns.text = T(L"No traducir nunca este sitio"); ns.on = translate_never_site(site);
+                ns.act = [site] { translate_set_never_site(site, !translate_never_site(site)); };
+                v.push_back(ns);
+            }
         }
         v.push_back(sep());
-        if (!t->tr_state) v.push_back(item(T(L"Ahora no"), G_X, L"", [] { after_menu([] {}); }));
         v.push_back(item(T(L"Configuración de traducción"), G_GEAR, L"", [] { after_menu([] { settings_open(L"idioma"); }); }));
     } else if (page == PAGE_TR_TARGET) {
         MItem b = back(T(L"Traducir a"));
@@ -1961,7 +2113,7 @@ static std::vector<MItem> build_page(int page) {
                 bool changed = c != translate_target();
                 translate_set_target(c);
                 Tab *t = tab_by_id(g_menu_tab);
-                if (changed && t && t->tr_state) translate_page(t);   // (into the new one now)
+                if (changed && t && t->tr_state) { WinScope ws(win_of_tab(t)); translate_page(t); }   // (into the new one now)
                 menu_go(PAGE_TRANSLATE);
             };
             v.push_back(m);
@@ -1986,6 +2138,7 @@ static int menu_hit(int x, int y, int *btn) {
         D2D1_RECT_F r = item_rect(i);
         if (!inside(r, (float)x, (float)y)) continue;
         const MItem &m = g_items[i];
+        if (m.kind >= 10) { for (int k : { 1, 2 }) if (inside(card_part(m, r, k), (float)x, (float)y)) { *btn = k; break; } return (int)i; }
         if (m.kind == 5) { if (inside(item_btn(i, 4), (float)x, (float)y)) *btn = 4; else if (inside(item_btn(i, 1), (float)x, (float)y)) *btn = 1; }
         else if (m.b1 && inside(item_btn(i, 1), (float)x, (float)y)) *btn = 1;
         else if (m.b2 && inside(item_btn(i, 2), (float)x, (float)y)) *btn = 2;
@@ -1996,6 +2149,10 @@ static int menu_hit(int x, int y, int *btn) {
 static void menu_activate(int i, int btn) {
     if (i < 0 || i >= (int)g_items.size()) return;
     MItem m = g_items[i];
+    if (m.kind >= 10) {   // the translate card: only its buttons do something
+        if (btn == 1 && m.act1) m.act1(); else if (btn == 2 && m.act2) m.act2();
+        return;
+    }
     if (!m.enabled || m.kind == 1 || m.kind == 6) return;
     if (m.kind == 5) {
         if (btn == 4) tab_zoom(-1); else if (btn == 1) tab_zoom(1); else tab_zoom(0);
@@ -2007,14 +2164,23 @@ static void menu_activate(int i, int btn) {
     if (btn == 2 && m.act2) { m.act2(); return; }
     if (m.kind == 2) { menu_go(m.page); return; }
     if (m.act) m.act();
-    if (m.kind == 3 && g_menu.h && !g_menu.closing) { menu_rebuild(); panel_render(g_menu); ui_layout(); }
+    if (m.kind == 3 && g_menu.h && !g_menu.closing) { menu_refresh(); ui_layout(); }
 }
 static void menu_key(UINT vk) {
     int n = (int)g_items.size();
-    auto selectable = [](const MItem &m) { return m.enabled && m.kind != 1 && m.kind != 6; };
+    auto selectable = [](const MItem &m) { return m.enabled && m.kind != 1 && m.kind != 6 && m.kind < 10; };
+    if (g_menu_page == PAGE_TRANSLATE && vk != VK_ESCAPE) {
+        // the card: Enter is its main button, Down or Right the target's list, Apps its options
+        for (size_t i = 0; i < g_items.size(); i++) {
+            if (vk == VK_RETURN && g_items[i].kind == 12) { menu_activate((int)i, 1); return; }
+            if ((vk == VK_DOWN || vk == VK_RIGHT) && g_items[i].kind == 11) { menu_activate((int)i, 1); return; }
+            if (vk == VK_APPS && g_items[i].kind == 10) { menu_activate((int)i, 2); return; }
+        }
+        return;
+    }
     bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES || g_menu_page == PAGE_INCOGNITO || g_menu_page == PAGE_TRANSLATE ||
                g_menu_page == PAGE_DOWNLOADS;
-    int parent = g_menu_page == PAGE_TR_TARGET ? PAGE_TRANSLATE : PAGE_MAIN;
+    int parent = g_menu_page == PAGE_TR_TARGET || g_menu_page == PAGE_TR_OPTIONS ? PAGE_TRANSLATE : PAGE_MAIN;
     if (vk == VK_ESCAPE) { if (!top) menu_go(parent); else after_menu([] {}); return; }
     if (vk == VK_LEFT && !top) { menu_go(parent); return; }
     if (vk == VK_UP || vk == VK_DOWN) {
@@ -2096,16 +2262,21 @@ static void menu_refresh() {
 }
 void ui_translate_changed() {
     ui_invalidate();
-    if (g_menu.h && !g_menu.closing && (g_menu_page == PAGE_TRANSLATE || g_menu_page == PAGE_MAIN)) menu_refresh();
+    // (called in the tab's window: an open card or menu is redrawn in its own one, or it would move)
+    if (!g_menu.h || g_menu.closing || !(g_menu_page == PAGE_TRANSLATE || g_menu_page == PAGE_TR_OPTIONS || g_menu_page == PAGE_MAIN)) return;
+    WinScope ws(win_of_hwnd(GetWindow(g_menu.h, GW_OWNER)));
+    menu_refresh();
 }
 static RECT bar_rect_on_screen(D2D1_RECT_F r) {
     POINT a = { (LONG)r.left, (LONG)r.top }, b = { (LONG)r.right, (LONG)r.bottom };
     ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
     return { a.x, a.y, b.x, b.y };
 }
+static void bubble_close();
 static void open_translate_menu(bool quiet) {
     Tab *t = active_tab();
     if (!t) return;
+    bubble_close();   // (one translate popup at a time)
     open_menu_page(PAGE_TRANSLATE, bar_rect_on_screen(translate_shown() ? translate_rect() : menu_rect()), t->id, quiet);
 }
 void ui_open_translate_menu() { open_translate_menu(false); }
@@ -2137,6 +2308,12 @@ void ui_open_menu_quietly(bool translate) {
     // tests: a menu shown without taking the focus (a test instance never takes it from the user)
     if (translate) { open_translate_menu(true); return; }
     open_menu_page(PAGE_MAIN, bar_rect_on_screen(menu_rect()), 0, true);
+}
+void ui_translate_card_test(const std::wstring &what) {
+    // tests: the card's "..." page, or one of its buttons pressed as a click would (1 the main one, 2 the other)
+    if (what == L"opciones") { if (!g_menu.h || g_menu.closing || g_menu_page != PAGE_TRANSLATE) open_translate_menu(true); menu_go(PAGE_TR_OPTIONS); return; }
+    if (!g_menu.h || g_menu.closing || g_menu_page != PAGE_TRANSLATE) return;
+    for (size_t i = 0; i < g_items.size(); i++) if (g_items[i].kind == 12) { menu_activate((int)i, what == L"2" ? 2 : 1); return; }
 }
 bool ui_translate_offer(Tab *t) {
     // as Edge's: the popup under the icon, unless the person is busy elsewhere (then the lit icon is enough); it takes
@@ -2739,7 +2916,10 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
     case H_READER: reader_toggle(active_tab()); break;
-    case H_TRANSLATE: if (g_menu.h && !g_menu.closing && g_menu_page == PAGE_TRANSLATE && !g_menu_quiet) menu_close(); else ui_open_translate_menu(); break;
+    case H_TRANSLATE:
+        if (g_menu.h && !g_menu.closing && !g_menu_quiet && (g_menu_page == PAGE_TRANSLATE || g_menu_page == PAGE_TR_OPTIONS || g_menu_page == PAGE_TR_TARGET)) menu_close();
+        else ui_open_translate_menu();
+        break;
     case H_BM: {
         BmNode *n = bm_find(h.id);
         if (!n) break;

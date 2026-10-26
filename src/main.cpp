@@ -190,7 +190,9 @@ void settings_load() {
     g_set.suggest_passwords = ini_get(L"sugerir_contrasenas", L"1") != L"0";
     g_set.bookmarks_bar = ini_get(L"barra_marcadores", L"0") == L"1";
     g_set.reader_size = std::min(40, std::max(12, _wtoi(ini_get(L"lectura_letra", L"20").c_str())));
-    g_set.tr_offer = ini_get(L"traducir_ofrecer", L"1") != L"0";
+    // off unless turned on (26/10: "desactivado por defecto"); before ajustes_v 3 it was on by default, so a saved
+    // "1" was never a choice
+    g_set.tr_offer = _wtoi(ini_get(L"ajustes_v", L"1").c_str()) >= 3 && ini_get(L"traducir_ofrecer", L"0") == L"1";
     g_set.tr_target = trim(ini_get(L"traducir_a", L""));
     auto list = [](const std::wstring &v) {
         std::vector<std::wstring> out;
@@ -803,6 +805,8 @@ static void test_command(const std::wstring &what) {
     else if (what == L"menu-pestana") ui_open_tab_menu_quietly();
     else if (what == L"perfil") ui_open_profile_menu(true);
     else if (what == L"oferta") ui_translate_offer(t);
+    else if (starts_with(what, L"tarjeta=")) ui_translate_card_test(what.substr(8));
+    else if (starts_with(what, L"automatica=")) { g_set.tr_offer = what.substr(11) == L"1"; settings_save(); ui_invalidate(); }
     else if (what == L"clic-derecho") translate_test_pick_menu();   // the next page menu: logged, Pluma's row chosen
     else if (starts_with(what, L"destino=")) translate_set_target(what.substr(8));
     else if (what == L"descargas") ui_open_downloads(true);

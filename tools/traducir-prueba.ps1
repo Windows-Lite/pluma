@@ -2,8 +2,10 @@
 #   $env:PLUMA_EXE = '<Pluma.exe compilado aparte>'; tools\traducir-prueba.ps1 -Salida <carpeta> [-Nombre tr] [-Puerto 9473]
 # Lanzarlo en la sesión con escritorio (las vistas no dibujan por ssh), sin sonido. Deja en -Salida las capturas y un
 # resumen (resumen.txt). Pasos: la página de prueba de tools\traducir-prueba.js (qué se traduce, qué no, el texto
-# nuevo, «Mostrar original» deja el HTML igual), Wikipedia en francés (oferta, burbuja de la selección, traducida,
-# su menú), en japonés, YouTube (resultados de búsqueda) y Configuración > Idioma, en oscuro y en claro.
+# nuevo, «Mostrar original» deja el HTML igual), Wikipedia en francés (nada sale solo; la tarjeta del icono, sus
+# botones y su «⋯»; burbuja de la selección; la página siguiente de esa pestaña no se traduce sola), una en castellano con destino inglés (el caso del 26/10), en japonés,
+# YouTube (resultados de búsqueda), la traducción automática encendida (la oferta sí sale) y Configuración > Idioma,
+# en oscuro y en claro, y una pestaña movida a otra ventana (su tarjeta, traducir y el original allí). El ajustes.ini de partida es uno de antes (ajustes_v=2, traducir_ofrecer=1): debe quedar apagada.
 param([string]$Salida, [string]$Nombre = 'tr', [int]$Puerto = 9473)
 $ErrorActionPreference = 'Continue'
 $exe = $env:PLUMA_EXE
@@ -28,7 +30,7 @@ $data = Join-Path $env:LOCALAPPDATA "Pluma\prueba.$Nombre"
 & (Join-Path $tools 'prueba.ps1') -Nombre $Nombre -Salir
 Remove-Item -Recurse -Force $data -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $data | Out-Null
-Set-Content (Join-Path $data 'ajustes.ini') "[pluma]`r`nidioma=es`r`najustes_v=2`r`ntema=oscuro`r`n" -Encoding Unicode
+Set-Content (Join-Path $data 'ajustes.ini') "[pluma]`r`nidioma=es`r`najustes_v=2`r`ntema=oscuro`r`ntraducir_ofrecer=1`r`n" -Encoding Unicode
 
 function Pluma([string]$what) { & $exe $what; Start-Sleep -Milliseconds 400 }
 function Shot([string]$name) {
@@ -54,6 +56,15 @@ function WaitTranslated([string]$part, [int]$s = 40) {
     }
     Note "no se tradujo del todo: $part $r"; return $false
 }
+function Quiet([string]$part, [switch]$OnlyPage) {
+    # nothing by itself: no translator in the page and no offer in the log (-OnlyPage: once the log already has one)
+    $r = (Cdp $part 'typeof window.__plumaTr').Trim()
+    $pl = Join-Path $data 'pluma.log'
+    $offered = -not $OnlyPage -and (Test-Path $pl) -and (Select-String -Path $pl -Pattern 'traducción: ofrecida' -Quiet)
+    $good = $r -match 'undefined' -and -not $offered
+    Note "sin traducir ni ofrecer solo (${part}): $(if ($good) { 'bien' } else { "MAL ($r, ofrecida: $offered)" })" | Out-Null
+    return $good
+}
 $ok = $true
 try {
     & (Join-Path $tools 'prueba.ps1') -Nombre $Nombre -Puerto $Puerto -Url 'https://example.com/'
@@ -71,7 +82,8 @@ try {
     WaitPage 'fr.wikipedia.org' | Out-Null
     Start-Sleep 2
     Note ("idioma detectado: " + (Cdp 'fr.wikipedia.org' 'document.documentElement.lang').Trim()) | Out-Null
-    Shot 'fr-oferta'
+    if (-not (Quiet 'fr.wikipedia.org')) { $ok = $false }
+    Shot 'fr-sin-oferta'
     Cdp 'fr.wikipedia.org' "(() => { const p = [...document.querySelectorAll('#mw-content-text p')].find(x => x.textContent.trim().length > 80); scrollTo(0, 0); getSelection().selectAllChildren(p); return p.textContent.slice(0, 60); })()" | Out-Null
     Pluma 'pluma-prueba:seleccion'
     Start-Sleep 3
@@ -80,25 +92,50 @@ try {
     Pluma 'pluma-prueba:menu-principal'
     Start-Sleep 1
     Shot 'menu-principal'
-    Pluma 'pluma-prueba:traducir'
+    # the card (the icon's click) and its "Traducir"
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Shot 'tarjeta-oscuro'
+    Pluma 'pluma-prueba:tarjeta=opciones'
+    Start-Sleep 1
+    Shot 'tarjeta-opciones-oscuro'
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Pluma 'pluma-prueba:tarjeta=1'
     if (-not (WaitTranslated 'fr.wikipedia.org')) { $ok = $false }
     Shot 'fr-traducida'
     Pluma 'pluma-prueba:menu'
     Start-Sleep 1
-    Shot 'fr-menu-traducida'
+    Shot 'tarjeta-traducida-oscuro'
     Pluma 'pluma-prueba:menu-principal'
     Start-Sleep 1
     Shot 'menu-principal-traducida'
-    Pluma 'pluma-prueba:original'
+    # "Mostrar original" from the card
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Pluma 'pluma-prueba:tarjeta=2'
     Start-Sleep 2
     Shot 'fr-original'
     $r = Cdp 'fr.wikipedia.org' "document.querySelector('#firstHeading').textContent"
     Note "original otra vez: $($r.Trim())" | Out-Null
+    $r = Cdp 'fr.wikipedia.org' 'window.__plumaTr ? JSON.stringify(__plumaTr.stats()) : "no"'
+    Note "tras mostrar original: $($r.Trim())" | Out-Null
+    # 2b. a Spanish page with English as the target (what the person saw on 26/10): nothing by itself
+    Pluma 'pluma-prueba:destino=en'
+    Pluma 'https://es.wikipedia.org/wiki/Churro'
+    WaitPage 'es.wikipedia.org' | Out-Null
+    Start-Sleep 3
+    if (-not (Quiet 'es.wikipedia.org')) { $ok = $false }
+    Shot 'es-destino-en'
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Shot 'tarjeta-es-en'
+    Pluma 'pluma-prueba:destino=es'
     # 3. Japanese
     Pluma 'https://ja.wikipedia.org/wiki/%E5%AF%BF%E5%8F%B8'
     WaitPage 'ja.wikipedia.org' | Out-Null
     Start-Sleep 2
-    Shot 'ja-oferta'
+    if (-not (Quiet 'ja.wikipedia.org')) { $ok = $false }
     Pluma 'pluma-prueba:traducir'
     if (-not (WaitTranslated 'ja.wikipedia.org')) { $ok = $false }
     Shot 'ja-traducida'
@@ -124,6 +161,17 @@ try {
     Cdp 'youtube.com' 'scrollTo(0, 0); 1' | Out-Null
     $r = Cdp 'youtube.com' 'window.__plumaTr ? JSON.stringify(__plumaTr.stats()) : "no"'
     Note "youtube tras bajar: $($r.Trim())" | Out-Null
+    # 4b. the automatic translation turned on: the offer opens by itself on a new site
+    Pluma 'pluma-prueba:automatica=1'
+    Pluma 'https://de.wikipedia.org/wiki/Brezel'
+    WaitPage 'de.wikipedia.org' | Out-Null
+    Start-Sleep 3
+    $pl = Join-Path $data 'pluma.log'
+    $offered = (Test-Path $pl) -and (Select-String -Path $pl -Pattern 'traducción: ofrecida \(de\)' -Quiet)
+    Note "automática encendida, oferta sola: $(if ($offered) { 'bien' } else { 'MAL' })" | Out-Null
+    if (-not $offered) { $ok = $false }
+    Shot 'oferta-automatica'
+    Pluma 'pluma-prueba:automatica=0'
     # 5. settings, dark then light; the bubble in light
     Pluma 'https://pluma.local/settings#idioma'
     WaitPage 'pluma.local' | Out-Null
@@ -143,11 +191,46 @@ try {
     Pluma 'pluma-prueba:seleccion'
     Start-Sleep 3
     Shot 'claro-burbuja'
-    Pluma 'pluma-prueba:traducir'
+    Cdp 'Baguette' 'getSelection().removeAllRanges(); 1' | Out-Null
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Shot 'tarjeta-claro'
+    Pluma 'pluma-prueba:automatica=1'   # (its ... with the automatic translation on: all its rows)
+    Pluma 'pluma-prueba:tarjeta=opciones'
+    Start-Sleep 1
+    Shot 'tarjeta-opciones-claro'
+    Pluma 'pluma-prueba:automatica=0'
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Pluma 'pluma-prueba:tarjeta=1'
     WaitTranslated 'Baguette' | Out-Null
     Pluma 'pluma-prueba:menu'
     Start-Sleep 1
-    Shot 'claro-menu-traducida'
+    Shot 'tarjeta-traducida-claro'
+    # the next page in that tab: not translated by itself (only the page it was asked on)
+    Cdp 'Baguette' "location.href = 'https://fr.wikipedia.org/wiki/Pain_au_chocolat'; 1" | Out-Null
+    Start-Sleep 2
+    WaitPage 'Pain_au_chocolat' | Out-Null
+    Start-Sleep 2
+    if (-not (Quiet 'Pain_au_chocolat' -OnlyPage)) { $ok = $false }
+    # 6. the tab moved to a second window: its card opens there, and translating and showing the original work there
+    Pluma 'pluma-prueba:mover-nueva'
+    Start-Sleep 2
+    Pluma 'pluma-prueba:ventanas'
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Shot 'ventana2-tarjeta'
+    Pluma 'pluma-prueba:tarjeta=1'
+    if (-not (WaitTranslated 'Pain_au_chocolat')) { $ok = $false }
+    Shot 'ventana2-traducida'
+    Pluma 'pluma-prueba:menu'
+    Start-Sleep 1
+    Pluma 'pluma-prueba:tarjeta=2'
+    Start-Sleep 2
+    $r = Cdp 'Pain_au_chocolat' 'window.__plumaTr ? JSON.stringify(__plumaTr.stats()) : "no"'
+    $back = $r -match '\\"on\\":false'
+    Note "segunda ventana, original otra vez: $(if ($back) { 'bien' } else { "MAL $($r.Trim())" })" | Out-Null
+    if (-not $back) { $ok = $false }
     # what the log says
     $pl = Join-Path $data 'pluma.log'
     if (Test-Path $pl) { Get-Content $pl -Encoding UTF8 | Select-String 'traducción' | ForEach-Object { Note "log: $_" | Out-Null } }
