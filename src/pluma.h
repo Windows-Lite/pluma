@@ -502,6 +502,7 @@ void ui_bubble_text(const std::wstring &title, const std::wstring &text, bool lo
 void ui_blend_panels(BYTE *bits, int w, int h, POINT origin);   // tests: the open panels into a picture (video_debug_shot)
 IStream *ui_glyph_png(wchar_t glyph);     // an icon of the bar's font as a PNG (the page's context menu); Release it
 void ui_open_menu();
+void ui_open_sound_panel();               // the sound panel under ⋯ (its menu's «Sonido», and tests)
 void ui_close_popups();
 void ui_caption_hover(int code);          // HTMINBUTTON/HTMAXBUTTON/HTCLOSE under the mouse, or 0
 void ui_caption_press(int code, bool down);
@@ -541,6 +542,9 @@ bool audio_on(Tab *t);                    // that tab's music plays in Pluma's p
 void audio_toggle_mute(Tab *t);
 void video_settings_changed();
 void video_sound_changed();               // the sound effects changed: every player plays them now
+void video_sound_panel(RECT anchor);      // ⋯ > Sonido: the sound panel under anchor (screen), in Pluma's colours
+void video_sound_panel_close();           // ... it goes (another popup, a click on the bar or a page)
+bool video_sound_useful();                // something is on in Pluma's player (a video, or YouTube Music's sound)
 bool video_playing(Tab *t);               // Pluma's player is on in this tab and not paused
 void video_debug_shot(const std::wstring &path);   // tests: the window with the controls' real transparency
 void video_resized();                     // the player drew at a new size (the fullscreen zoom may end)
