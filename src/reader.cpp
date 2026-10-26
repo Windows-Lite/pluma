@@ -4,7 +4,7 @@
 //   by the page itself), isProbablyReaderable runs in it (1-3 ms). An article (not a site's home) shows the book in the
 //   address bar (ui.cpp).
 // - the book or F9: Readability parses a copy of the document in the page (15-70 ms) and Pluma loads the same address
-//   again (with a mark, below), answering that one document itself (WebResourceRequested, as youtube.cpp) with reader.html (RCDATA 210)
+//   again (with a mark, below), answering that one document itself (WebResourceRequested, as lite.cpp) with reader.html (RCDATA 210)
 //   and the article written into it. Same address and origin: the address bar, the star, history, the tab's icon and
 //   the article's images work as before, and none of the page's own scripts run. The page's CSP allows only its own
 //   script (a nonce per page) and it keeps only an allowlist of the article's HTML (clean() in reader.html).
@@ -104,11 +104,11 @@ static const std::wstring &parse_js() {
 }
 
 static bool can_read(Tab *t) {
-    return t && t->view && !t->yt_lite && !settings_page_url(t->url) && (starts_with(t->url, L"https://") || starts_with(t->url, L"http://"));
+    return t && t->view && t->lite == LITE_NONE && !t->yt_lite && !settings_page_url(t->url) && (starts_with(t->url, L"https://") || starts_with(t->url, L"http://"));
 }
 
 static void filter(Tab *t, const std::wstring &nf, bool add) {
-    // documents only, also those a service worker of the site asks for in the page's name (as youtube.cpp)
+    // documents only, also those a service worker of the site asks for in the page's name (as lite.cpp)
     ComPtr<ICoreWebView2_22> v22;
     if (SUCCEEDED(t->view.As(&v22))) {
         if (add) v22->AddWebResourceRequestedFilterWithRequestSourceKinds(nf.c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL);

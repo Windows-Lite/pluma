@@ -108,6 +108,7 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
     <a href="#idioma"><svg viewBox="0 0 20 20"><path d="M3 5h8M7 3v2M5 5c0 3 2 6 5 7M9 5c0 3-2 6-5 7M11 17l3-8 3 8M12 14.5h4"/></svg><span data-t="Idioma">Idioma</span></a>
     <a href="#descargas"><svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span data-t="Descargas">Descargas</span></a>
     <a href="#video"><svg viewBox="0 0 20 20"><rect x="2.5" y="4.5" width="15" height="11" rx="2.5"/><path d="m8.5 8 4 2-4 2Z"/></svg><span data-t="YouTube y vídeo">YouTube y vídeo</span></a>
+    <a href="#ligeras"><svg viewBox="0 0 20 20"><path d="M11 2.5 4.5 11H10l-1 6.5L15.5 9H10l1-6.5Z"/></svg><span data-t="Webs ligeras">Webs ligeras</span></a>
     <a href="#lectura"><svg viewBox="0 0 20 20"><path d="M10 5.5C8.5 4.3 6 4 3 4.5v10c3-.5 5.5-.2 7 1 1.5-1.2 4-1.5 7-1v-10c-3-.5-5.5-.2-7 1Zm0 0v10"/></svg><span data-t="Modo lectura">Modo lectura</span></a>
     <a href="#sistema"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M7 17h6M10 14v3"/></svg><span data-t="Sistema y rendimiento">Sistema y rendimiento</span></a>
     <hr>
@@ -229,9 +230,19 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
           <div class="txt"><div class="name" data-t="YouTube en el reproductor de Pluma">YouTube en el reproductor de Pluma</div><div class="desc" id="videodesc" data-t="Los vídeos usan mucha menos memoria que en la página">Los vídeos usan mucha menos memoria que en la página</div></div>
           <label class="toggle"><input type="checkbox" id="video-on"><span></span></label>
         </div>
+      </div>
+    </section>
+
+    <section id="ligeras">
+      <h2 data-t="Webs ligeras">Webs ligeras</h2>
+      <div class="card">
         <div class="row" data-k="youtube ligero rapido memoria">
           <div class="txt"><div class="name" data-t="YouTube ligero">YouTube ligero</div><div class="desc" data-t="Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta">Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta</div></div>
           <label class="toggle"><input type="checkbox" id="ytlite"><span></span></label>
+        </div>
+        <div class="row" data-k="youtube music musica ligero rapido memoria">
+          <div class="txt"><div class="name" data-t="YouTube Music ligero">YouTube Music ligero</div><div class="desc" data-t="Una página propia de Pluma para YouTube Music; la música suena en el reproductor de Pluma y sigue mientras navegas">Una página propia de Pluma para YouTube Music; la música suena en el reproductor de Pluma y sigue mientras navegas</div></div>
+          <label class="toggle"><input type="checkbox" id="musiclite"><span></span></label>
         </div>
       </div>
       <h3 class="sub" data-t="Sonido">Sonido</h3>
@@ -417,6 +428,7 @@ function render() {
   fill($('idioma-sel'), S.langs, S.idioma);
   $('suggest').checked = S.suggest;
   $('ytlite').checked = S.ytlite;
+  $('musiclite').checked = S.musiclite;
   $('video-on').checked = S.video; $('video-on').disabled = !S.videoAvailable;
   if (!S.videoAvailable) $('videodesc').textContent = tr('Falta el motor de vídeo de Pluma (motor-video)');
   $('startup').checked = S.startup; $('resident').checked = S.resident; $('spare').checked = S.spare;
@@ -510,7 +522,7 @@ $('engine').onchange = e => set('engine', e.target.value);
 $('idioma-sel').onchange = e => { set('idioma', e.target.value); setTimeout(ask, 100); };
 $('update').onchange = e => set('update', +e.target.value);
 $('sleep').onchange = e => set('sleep', +e.target.value);
-for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
+for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['musiclite', 'musiclite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
   $(id).onchange = e => set(key, e.target.checked);
 $('profnew').onclick = () => send({ op: 'profile', what: 'new' });
 document.querySelectorAll('[data-do]').forEach(b => b.addEventListener('click', () => send({ op: 'do', what: b.dataset.do })));

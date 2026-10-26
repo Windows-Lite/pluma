@@ -116,7 +116,7 @@ struct Video {
     double photo_at = 0;
     bool photo_asked = false;
     double warm_at = 0;   // when its page was last awake behind the photo (it sleeps once left alone a while)
-    // on Pluma's light YouTube page (youtube.cpp): no page player to meet nor a page to put to sleep, see lite_tick
+    // on Pluma's light YouTube page (lite.cpp): no page player to meet nor a page to put to sleep, see lite_tick
     bool lite = false, lite_cover = false;
     double lite_asked = 0;
 };
@@ -584,6 +584,7 @@ static void load_streams(Video *v, double start, bool paused) {
 }
 static bool http_get(const std::wstring &url, std::string &out);
 static bool safe_playlist(const std::string &text);
+static std::string absolute_list(const std::string &text, const std::string &base);
 // tests: PLUMA_PRUEBA_ROMPER_VIDEO=K breaks the pieces of a video list from piece K on (counted from 0), the first
 // time that list is read (K! every time), as when they fail to download near the end: their addresses get a 404
 static int g_break_from = -2;
@@ -646,6 +647,7 @@ static void fetch_playlists(Video *v, std::vector<int> which, std::function<void
             th.emplace_back([&, k] {
                 std::string text;
                 if (!http_get(wide(todo[k].url), text)) { why[k] = L"no se pudo leer"; return; }
+                if (text.rfind("#EXTM3U", 0) == 0) text = absolute_list(text, todo[k].url);
                 if (text.rfind("#EXTM3U", 0) != 0 || !safe_playlist(text)) { why[k] = L"no vale"; return; }
                 // a whole list of a video ends so; one cut short would leave mpv without the last pieces
                 if (text.find("#EXT-X-ENDLIST") == std::string::npos) { why[k] = L"cortada (" + std::to_wstring(text.size()) + L" bytes)"; return; }
@@ -811,6 +813,37 @@ static bool google_url(const std::string &u, bool captions = false) {
     return host.size() > dom.size() && host.compare(host.size() - dom.size(), dom.size(), dom) == 0 &&
            host.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-.") == std::string::npos;
 }
+static bool media_url(const std::string &u) { return google_url(u); }
+// an address of a list as written in it (some are relative to the list), made whole
+static std::string resolve(const std::string &base, const std::string &u) {
+    if (u.rfind("https://", 0) == 0 || u.rfind("http://", 0) == 0 || base.empty()) return u;
+    size_t host_end = base.find('/', 8);
+    if (host_end == std::string::npos) return u;
+    if (!u.empty() && u[0] == '/') return base.substr(0, host_end) + u;
+    std::string dir = base.substr(0, base.find_first_of("?#"));
+    return dir.substr(0, dir.rfind('/') + 1) + u;
+}
+static std::string absolute_list(const std::string &text, const std::string &base) {
+    // every address of a list (its pieces, the URI="..." of its tags) whole: mpv reads it from the disk
+    std::string out;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t nl = text.find('\n', pos);
+        std::string line = text.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+        pos = nl == std::string::npos ? text.size() : nl + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty() && line[0] != '#') line = resolve(base, line);
+        else {
+            size_t u = line.find("URI=\"");
+            if (u != std::string::npos) {
+                size_t e = line.find('"', u + 5);
+                if (e != std::string::npos) line = line.substr(0, u + 5) + resolve(base, line.substr(u + 5, e - u - 5)) + line.substr(e);
+            }
+        }
+        out += line + "\n";
+    }
+    return out;
+}
 static bool safe_playlist(const std::string &text) {
     // every address in a playlist mpv will open (pieces, its initial piece) on those servers too
     size_t pos = 0;
@@ -820,11 +853,11 @@ static bool safe_playlist(const std::string &text) {
         pos = nl == std::string::npos ? text.size() : nl + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.empty()) continue;
-        if (line[0] != '#') { if (!google_url(line)) return false; continue; }
+        if (line[0] != '#') { if (!media_url(line)) return false; continue; }
         size_t u = line.find("URI=\"");
         if (u != std::string::npos) {
             size_t e = line.find('"', u + 5);
-            if (e == std::string::npos || !google_url(line.substr(u + 5, e - u - 5))) return false;
+            if (e == std::string::npos || !media_url(line.substr(u + 5, e - u - 5))) return false;
         }
     }
     return true;
@@ -843,7 +876,8 @@ static std::string attr(const std::string &line, const char *name) {
     size_t e = line.find(',', p);
     return line.substr(p, e == std::string::npos ? std::string::npos : e - p);
 }
-static std::vector<Fmt> parse_master(const std::string &m3u8) {
+static std::vector<Fmt> parse_master(const std::string &raw, const std::string &base = "") {
+    std::string m3u8 = absolute_list(raw, base);
     std::vector<Fmt> out;
     size_t pos = 0;
     std::string pending;
@@ -858,7 +892,7 @@ static std::vector<Fmt> parse_master(const std::string &m3u8) {
             f.main_audio = def.empty() || def == "YES" || name.find("original") != std::string::npos;
             std::string loud = attr(line, "YT-EXT-ABSOLUTE-LOUDNESS");
             if (!loud.empty()) f.loud = atof(loud.c_str());
-            if (google_url(f.url)) out.push_back(f);
+            if (media_url(f.url)) out.push_back(f);
         } else if (line.rfind("#EXT-X-STREAM-INF:", 0) == 0) pending = line;
         else if (!pending.empty() && !line.empty() && line[0] != '#') {
             Fmt f; f.url = line; f.group = attr(pending, "AUDIO");
@@ -872,7 +906,7 @@ static std::vector<Fmt> parse_master(const std::string &m3u8) {
             std::string tag = first.substr(0, first.find('.'));
             if (tag == "vp09" && first.rfind("vp09.00", 0) != 0) tag = "vp09hdr";   // profile 2: 10-bit HDR
             f.codec = wide(tag);
-            if (f.h > 0 && google_url(f.url)) out.push_back(f);
+            if (f.h > 0 && media_url(f.url)) out.push_back(f);
             pending.clear();
         }
     }
@@ -1467,7 +1501,9 @@ static void mpv_log(const Video *v, const Tab *t, const mpv_event_log_message *m
     log_line(L"mpv: " + wide(line));
 }
 static void sync_tick(Tab *t, Video *v);
+static void audio_events();
 static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_VIDEO_EVENTS && lp == -1) { audio_events(); return 0; }
     if (msg == WM_VIDEO_EVENTS) {
         Tab *t = tab_by_id((int)lp);
         Video *v = V(t);
@@ -2283,13 +2319,14 @@ static const wchar_t *kLiteExtract = L"window.__pluma ? __pluma.extract() : { er
 static void lite_fail(Tab *t, const std::wstring &why);
 static void video_try(Tab *t) {
     if (!t || !t->view || t->video || !g_set.native_video) return;
+    bool page_lite = t->yt_lite;
     std::wstring vid = watch_id(t->url);
     if (vid.empty() || vid == t->video_declined || !load_mpv()) return;
     auto *v = new Video();
     v->tab = t->id;
     v->id = vid;
     v->asked = now_ms();
-    v->lite = t->yt_lite;
+    v->lite = page_lite;
     t->video = v;
     int id = t->id;
     eval(t, v->lite ? kLiteExtract : kExtract, [id](const Json &r) {
@@ -2334,13 +2371,13 @@ static void video_try(Tab *t) {
         std::thread([id, serial, hls, pt, at] {
             std::string m3u8;
             bool ok = http_get(hls, m3u8);
-            ui_post([id, serial, ok, m3u8, pt, at] {
+            ui_post([id, serial, ok, m3u8, pt, at, hls] {
                 Tab *t = tab_by_id(id);
                 Video *v = V(t);
                 if (!v || v->serial != serial || v->stage != ST_WAITING || v->mpv) return;
                 auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); if (v->lite) lite_fail(t, why); t->video = nullptr; delete v; };
                 if (!ok) { give_up(L"no se pudo leer la lista HLS"); return; }
-                v->fmts = parse_master(m3u8);
+                v->fmts = parse_master(m3u8, utf8(hls));
                 v->vf = pick_video(v, target_height(v));
                 v->af = pick_audio(v);
                 if (v->vf < 0 || v->af < 0) { give_up(L"no hay formatos que valgan"); return; }
@@ -2407,14 +2444,16 @@ static void watch(Tab *t) {
 void video_page_changed(Tab *t) {
     // the tab's address changed (YouTube moves between videos without loading a page), or it came on screen
     if (!t || !g_msg) return;
-    std::wstring id = watch_id(t->url);
+    if (t->lite == LITE_MUSIC) return;   // (its music: audio_page_loaded; the page moves without loading)
     Video *v = V(t);
     if (t->yt_lite) {
+        std::wstring id = watch_id(t->url);
         // Pluma's light page: no page player to wait for; Pluma's goes in as soon as the page has loaded
         if (v && v->id != id) video_destroy(t);
         if (!id.empty() && !t->video && !t->loading && t->view && g_set.native_video && id != t->video_declined) video_try(t);
         return;
     }
+    std::wstring id = watch_id(t->url);
     if (v && v->id != id && v->stage == ST_WAITING) video_destroy(t);
     if (id.empty() || t->video || !g_set.native_video || !video_available() || id == t->video_declined) return;
     if (!g_watch.count(t->id)) watch(t);
@@ -2474,7 +2513,8 @@ void video_back_to_page(Tab *t, int how) {
     ui_invalidate();
 }
 void video_destroy(Tab *t) {
-    // the tab goes, or its page: the player goes with it (without touching the page)
+    // the tab goes, or its page: the player goes with it (without touching the page); and its music
+    if (t) audio_stop(t);
     Video *v = V(t);
     if (!v) return;
     if (v->stage == ST_ON) t->saved_media = refresh_pos(v);
@@ -2524,7 +2564,7 @@ void video_layout() {
     else hide_controls_now();
     check_page(act);
 }
-// ---------------------------------------------------------------- Pluma's light YouTube page (youtube.cpp)
+// ---------------------------------------------------------------- Pluma's light YouTube page (lite.cpp)
 // Its watch page has no player of its own: Pluma's goes in at once, in the page's player box, and the page (light)
 // stays awake and on screen around it. Four times a second the page gets the player's time and says where its box
 // is, which second a timestamp asked for, and whether something of the page (the search suggestions) needs the box.
@@ -2591,6 +2631,248 @@ static void CALLBACK lite_tick(HWND, UINT, UINT_PTR tid, DWORD) {
         }
     });
 }
+// ---------------------------------------------------------------- sound only: Pluma's light YouTube Music page
+// The page is the player: its bar, its queue, next, shuffle. Pluma only plays one song at a time, with no window,
+// and asks the page four times a second (once a second from a tab out of sight) what to do: __pluma.music(state)
+// gets where the song is and gives back what the person asked for (play this list, pause, go to a second, the
+// volume). The page moves between its views without loading (history.pushState), so the music goes on.
+struct Audio {
+    int tab = 0, serial = 0;
+    mpv_handle *mpv = nullptr;
+    std::wstring id, error;
+    double dur = 0, volume = 100, start = 0, asked = 0, still_since = 0, last_pos = -1;
+    bool paused = false, eof = false, loading = false, loaded = false, muted = false, buffering = false;
+};
+static Audio g_audio;   // one for all of Pluma: a second Music tab that plays takes it over
+static std::map<int, double> g_music_asked;   // light Music tabs being asked, and when the last question went
+static const UINT_PTR kMusicTimer = 0x600000;
+static void audio_close() {
+    // the music stops; mpv winds down on a thread of its own
+    Tab *t = tab_by_id(g_audio.tab);
+    if (t) { t->audible = false; ui_invalidate(); }
+    if (g_audio.mpv) {
+        mpv_handle *h = g_audio.mpv;
+        g_audio.mpv = nullptr;
+        M.set_wakeup_callback(h, NULL, NULL);
+        std::thread([h] { M.terminate_destroy(h); }).detach();
+    }
+    int serial = g_audio.serial + 1;
+    g_audio = Audio();
+    g_audio.serial = serial;
+}
+static void audio_audible() {
+    Tab *t = tab_by_id(g_audio.tab);
+    if (!t) return;
+    // (audible: a tab out of sight with music is not frozen, so its page goes on with the queue)
+    bool a = g_audio.mpv && g_audio.loaded && !g_audio.paused && !g_audio.eof;   // (muted too: the tab shows it, and is not frozen)
+    if (t->audible != a) { t->audible = a; ui_invalidate(); }
+}
+static bool audio_mpv() {
+    if (g_audio.mpv) return true;
+    if (!load_mpv()) return false;
+    mpv_handle *h = M.create();
+    if (!h) return false;
+    struct { const char *k; const char *v; } opts[] = {
+        { "config", "no" }, { "load-scripts", "no" }, { "ytdl", "no" }, { "osc", "no" }, { "terminal", "no" }, { "msg-level", "all=no" },
+        // sound only: no picture, no window, no cover
+        { "vid", "no" }, { "force-window", "no" }, { "audio-display", "no" }, { "cover-art-auto", "no" }, { "audio-file-auto", "no" },
+        { "input-default-bindings", "no" }, { "input-vo-keyboard", "no" },
+        { "cache", "yes" }, { "demuxer-max-bytes", "2MiB" }, { "demuxer-max-back-bytes", "256KiB" }, { "demuxer-readahead-secs", "20" },
+        // (the same short waits and retries as the videos)
+        { "network-timeout", "10" }, { "curl-connect-timeout", "4" }, { "demuxer-lavf-o", "seg_max_retry=3" },
+        { "keep-open", "yes" }, { "idle", "yes" } };
+    for (auto &o : opts) M.set_option_string(h, o.k, o.v);
+    if (g_test && GetEnvironmentVariableW(L"PLUMA_SIN_SONIDO", NULL, 0) > 0) M.set_option_string(h, "ao", "null");   // tests: silent
+    if (g_dev && !GetEnvironmentVariableW(L"PLUMA_SIN_MPV_LOG", NULL, 0)) {
+        M.set_option_string(h, "log-file", utf8(g_state + L"\\mpv-audio.log").c_str()); M.set_option_string(h, "msg-level", "all=v");
+    }
+    if (M.initialize(h) < 0) { M.terminate_destroy(h); return false; }
+    if (M.request_log_messages) M.request_log_messages(h, "warn");
+    static const char *props[] = { "duration", "pause", "eof-reached", "paused-for-cache", "mute" };
+    static const int fmt[] = { MPV_FORMAT_DOUBLE, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG, MPV_FORMAT_FLAG };
+    for (int i = 0; i < 5; i++) M.observe_property(h, (uint64_t)i, props[i], fmt[i]);
+    M.set_wakeup_callback(h, post_events, (void *)(INT_PTR)-1);
+    g_audio.mpv = h;
+    return true;
+}
+static void audio_set_volume() {
+    if (!g_audio.mpv) return;
+    double vol = 100.0 * cbrt(std::max(0.0, std::min(100.0, g_audio.volume)) / 100.0);   // (the page's slider is linear, as YouTube's)
+    M.set_property(g_audio.mpv, "volume", MPV_FORMAT_DOUBLE, &vol);
+    int m = g_audio.muted ? 1 : 0;
+    M.set_property(g_audio.mpv, "mute", MPV_FORMAT_FLAG, &m);
+}
+static void audio_events() {
+    while (g_audio.mpv) {
+        mpv_event *e = M.wait_event(g_audio.mpv, 0);
+        if (!e || e->event_id == MPV_EVENT_NONE) break;
+        if (e->event_id == MPV_EVENT_PROPERTY_CHANGE) {
+            auto *p = (mpv_event_property *)e->data;
+            if (!p->data) continue;
+            bool f = p->format == MPV_FORMAT_FLAG ? *(int *)p->data != 0 : false;
+            switch (e->reply_userdata) {
+            case 0: if (p->format == MPV_FORMAT_DOUBLE && *(double *)p->data > 0) g_audio.dur = *(double *)p->data; break;
+            case 1: g_audio.paused = f; break;
+            case 2: g_audio.eof = f && g_audio.loaded; break;
+            case 3: g_audio.buffering = f; break;
+            case 4: g_audio.muted = f; break;
+            }
+            audio_audible();
+        } else if (e->event_id == MPV_EVENT_LOG_MESSAGE) {
+            auto *m = (mpv_event_log_message *)e->data;
+            if (m && m->text) log_line(L"música: mpv " + wide(m->prefix ? m->prefix : "") + L": " + wide(m->text));
+        } else if (e->event_id == MPV_EVENT_FILE_LOADED) { g_audio.loaded = true; g_audio.loading = false; g_audio.eof = false; audio_audible(); }
+        else if (e->event_id == MPV_EVENT_END_FILE) {
+            auto *ef = (mpv_event_end_file *)e->data;
+            if (ef && ef->reason == MPV_END_FILE_REASON_ERROR) {
+                log_line(L"música: mpv no pudo con la lista (error " + std::to_wstring(ef->error) + L")");
+                g_audio.error = L"mpv"; g_audio.loading = false; g_audio.loaded = false; audio_audible();
+            }
+        }
+    }
+}
+static void audio_play(Tab *t, const Json &c) {
+    // a song: its HLS list (from the page: the visionOS answer, as the light YouTube's), its best sound, from disk
+    std::wstring hls = c[L"hls"].s, id = c[L"id"].s;
+    if (!google_url(utf8(hls)) || id.empty() || id.size() > 20) { g_audio.error = L"lista"; return; }
+    if (g_audio.tab && g_audio.tab != t->id) audio_close();   // (another tab's music stops)
+    g_audio.tab = t->id;
+    g_audio.id = id;
+    g_audio.start = c[L"start"].kind == Json::NUM ? std::max(0.0, c[L"start"].n) : 0;
+    if (c[L"volume"].kind == Json::NUM) g_audio.volume = c[L"volume"].n;
+    g_audio.muted = c[L"muted"].b;
+    g_audio.loading = true; g_audio.loaded = false; g_audio.eof = false; g_audio.error.clear(); g_audio.dur = 0; g_audio.still_since = 0;
+    g_audio.asked = now_ms();
+    int serial = ++g_audio.serial;
+    std::wstring dir = g_state + L"\\cache-video";
+    bool incognito = t->incognito;
+    std::thread([serial, hls, id, dir, incognito] {
+        std::string master, list, local;
+        std::wstring why;
+        if (!http_get(hls, master) || master.rfind("#EXTM3U", 0) != 0) why = L"no se pudo leer la lista";
+        else {
+            std::vector<Fmt> f = parse_master(master, utf8(hls));
+            // the original sound, of the group the best pictures use (YouTube's groups are its formats: the larger
+            // the pictures that come with it, the better the sound)
+            int best = -1; long long top = -1;
+            for (size_t i = 0; i < f.size(); i++) {
+                if (!f[i].audio) continue;
+                long long br = 0;
+                for (auto &x : f) if (!x.audio && x.group == f[i].group) br = std::max(br, x.br);
+                long long score = (f[i].main_audio ? 1LL << 40 : 0) + br;
+                if (score > top) { top = score; best = (int)i; }
+            }
+            if (best < 0) why = L"la lista no trae sonido";
+            else if (!http_get(wide(f[best].url), list) || list.rfind("#EXTM3U", 0) != 0) why = L"no se pudo leer el sonido";
+            else {
+                list = absolute_list(list, f[best].url);
+                if (list.find("#EXT-X-ENDLIST") == std::string::npos || !safe_playlist(list)) why = L"la lista del sonido no vale";
+                else {
+                    SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
+                    std::wstring p = dir + L"\\" + id + L"-audio.m3u8";
+                    if (write_file(p, list)) local = utf8(p); else why = L"no se pudo guardar";
+                }
+            }
+        }
+        ui_post([serial, local, why, id, incognito, dir] {
+            if (g_audio.serial != serial) return;
+            if (!why.empty()) { log_line(L"música: no (" + why + L")"); g_audio.error = why; g_audio.loading = false; return; }
+            if (!audio_mpv()) { g_audio.error = L"motor"; g_audio.loading = false; return; }
+            audio_set_volume();
+            char st[64]; sprintf_s(st, "start=%.3f,pause=no", g_audio.start);
+            const char *args[] = { "loadfile", local.c_str(), "replace", "-1", st, NULL };
+            M.command_async(g_audio.mpv, 0, args);
+            log_line(L"música: lista en " + std::to_wstring((int)(now_ms() - g_audio.asked)) + L" ms");
+            if (incognito) {
+                std::wstring path = dir + L"\\" + id + L"-audio.m3u8";
+                std::thread([path] { Sleep(60000); DeleteFileW(path.c_str()); }).detach();
+            }
+        });
+    }).detach();
+}
+static void audio_command(Tab *t, const Json &c) {
+    std::wstring op = c[L"op"].s;
+    if (op == L"play") { audio_play(t, c); return; }
+    if (g_audio.tab != t->id) return;
+    if (op == L"stop") { audio_close(); return; }
+    if (!g_audio.mpv) return;
+    if (op == L"pause") {
+        int f = c[L"v"].b ? 1 : 0;
+        if (!f && g_audio.eof) { double z = 0; M.set_property(g_audio.mpv, "time-pos", MPV_FORMAT_DOUBLE, &z); }
+        M.set_property(g_audio.mpv, "pause", MPV_FORMAT_FLAG, &f);
+    } else if (op == L"seek" && c[L"s"].kind == Json::NUM) {
+        char b[32]; sprintf_s(b, "%.2f", std::max(0.0, c[L"s"].n));
+        const char *args[] = { "seek", b, "absolute", NULL };
+        M.command_async(g_audio.mpv, 0, args);
+        g_audio.eof = false;
+    } else if (op == L"volume") {
+        if (c[L"v"].kind == Json::NUM) g_audio.volume = c[L"v"].n;
+        g_audio.muted = c[L"muted"].b;
+        audio_set_volume();
+    }
+    audio_audible();
+}
+static void CALLBACK music_tick(HWND, UINT, UINT_PTR tid, DWORD) {
+    int id = (int)(tid - kMusicTimer);
+    Tab *t = tab_by_id(id);
+    if (!t || !t->view || t->lite != LITE_MUSIC) {
+        KillTimer(g_msg, tid);
+        g_music_asked.erase(id);
+        if (g_audio.tab == id) audio_close();
+        return;
+    }
+    bool mine = g_audio.tab == id && g_audio.mpv;
+    SetTimer(g_msg, tid, t == active_tab() || (mine && !g_audio.paused) ? 250 : 1000, music_tick);
+    if (t->suspended) return;
+    double &asked = g_music_asked[id];
+    if (now_ms() - asked < 3000) return;   // (the last one not answered yet: a page busy or asleep)
+    asked = now_ms();
+    double pos = 0;
+    if (mine && g_audio.loaded) M.get_property(g_audio.mpv, "time-pos", MPV_FORMAT_DOUBLE, &pos);
+    // a watchman: playing and the time does not move for 20 s (40 loading): the page hears it failed (it goes on
+    // with the next one, or to YouTube Music's own page)
+    if (mine && g_audio.loaded && !g_audio.paused && !g_audio.eof) {
+        if (fabs(pos - g_audio.last_pos) > 0.01) g_audio.still_since = 0;
+        else if (!g_audio.still_since) g_audio.still_since = now_ms();
+        else if (now_ms() - g_audio.still_since > (g_audio.buffering ? 40000 : 20000)) { g_audio.error = L"parado"; g_audio.still_since = 0; log_line(L"música: mpv dejó de avanzar"); }
+    } else g_audio.still_since = 0;
+    g_audio.last_pos = pos;
+    std::wstring st = L"null";
+    if (g_audio.tab == id) {
+        wchar_t b[200];
+        swprintf_s(b, L"{\"pos\":%.2f,\"dur\":%.2f,\"paused\":%s,\"ended\":%s,\"loading\":%s,\"buffering\":%s,\"volume\":%.0f,\"muted\":%s,\"id\":",
+                   pos, g_audio.dur, g_audio.paused ? L"true" : L"false", g_audio.eof ? L"true" : L"false", g_audio.loading ? L"true" : L"false",
+                   g_audio.buffering ? L"true" : L"false", g_audio.volume, g_audio.muted ? L"true" : L"false");
+        st = b + json_escape(g_audio.id) + L",\"error\":" + json_escape(g_audio.error) + L"}";
+        g_audio.error.clear();   // (said once)
+    }
+    eval(t, L"window.__pluma && __pluma.music ? __pluma.music(" + st + L") : null", [id](const Json &r) {
+        g_music_asked[id] = 0;
+        Tab *t = tab_by_id(id);
+        if (!t || t->lite != LITE_MUSIC || r.kind != Json::ARR) return;
+        for (auto &c : r.arr) if (c.kind == Json::OBJ) audio_command(t, c);
+    });
+}
+void audio_page_loaded(Tab *t) {
+    if (!t || !g_msg) return;
+    if (g_audio.tab == t->id) audio_close();   // (a page of its own again: what played before is gone with the old one)
+    g_music_asked[t->id] = 0;
+    SetTimer(g_msg, kMusicTimer + t->id, 250, music_tick);
+}
+void audio_stop(Tab *t) {
+    if (!t) return;
+    if (g_audio.tab == t->id) audio_close();
+    KillTimer(g_msg, kMusicTimer + t->id);
+    g_music_asked.erase(t->id);
+}
+bool audio_on(Tab *t) { return t && g_audio.tab == t->id && g_audio.mpv && g_audio.loaded; }
+void audio_toggle_mute(Tab *t) {
+    if (!audio_on(t)) return;
+    g_audio.muted = !g_audio.muted;
+    audio_set_volume();
+    audio_audible();
+}
+
 void video_debug_shot(const std::wstring &path) {
     // tests: the window as the screen shows it, the player's controls blended in with their real transparency (a
     // picture taken from outside gets the layered windows opaque)

@@ -1,0 +1,89 @@
+<!-- What Pluma's light pages share (lite.cpp puts it in place of the PLUMA_COMUN mark as it serves them; youtube.html
+     keeps its own): the colours of both themes, the bar on top with its "normal version" button, the texts in the
+     person's language, the way back to the site's own page. -->
+<style>
+:root {
+  --bg: #f4f6f9; --card: #ffffff; --text: #1d2733; --sub: #5c6976; --line: #e2e7ed; --strong: #b9c4cf;
+  --accent: #2f6fed; --hover: rgba(29, 39, 51, .06); --press: rgba(29, 39, 51, .11); --chip: #e9edf2;
+  color-scheme: light;
+}
+:root.dark {
+  --bg: #1b1f24; --card: #242a31; --text: #e7eaee; --sub: #95a0ab; --line: #313840; --strong: #56616d;
+  --accent: #6596fa; --hover: rgba(255, 255, 255, .07); --press: rgba(255, 255, 255, .12); --chip: #2c333b;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; color: var(--text); font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+img { display: block; }
+#top { position: sticky; top: 0; z-index: 5; height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 18px;
+  background: var(--bg); border-bottom: 1px solid var(--line); }
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 17px; letter-spacing: -.2px; flex: none; }
+.logo svg { width: 24px; height: 24px; }
+.logo small { font-weight: 500; font-size: 11px; color: var(--sub); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; }
+.sf { position: relative; flex: 1; max-width: 620px; margin: 0 auto; display: flex; }
+.sf input { flex: 1; min-width: 0; height: 36px; border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+  color: var(--text); font: inherit; padding: 0 14px; outline: none; }
+.sf input:focus { border-color: var(--accent); }
+.links { display: flex; gap: 2px; flex: none; }
+.links a, .btn { height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 10px; white-space: nowrap; cursor: pointer; }
+.links a:hover, .btn:hover { background: var(--hover); }
+.links a.on { background: var(--press); }
+.btn { border: 1px solid var(--line); background: var(--card); }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn.on { background: var(--press); }
+.btn svg { width: 18px; height: 18px; fill: currentColor; }
+main { padding: 18px 22px 60px; max-width: 1400px; margin: 0 auto; }
+.note { color: var(--sub); text-align: center; padding: 60px 20px; font-size: 15px; }
+.note b { display: block; color: var(--text); font-size: 18px; margin-bottom: 6px; }
+.sub { color: var(--sub); font-size: 13px; }
+.spin { width: 36px; height: 36px; border-radius: 50%; border: 4px solid var(--line); border-top-color: var(--text); animation: r 0.9s linear infinite; margin: 60px auto; }
+@keyframes r { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+/* long lists: what is out of sight costs no layout nor painting */
+.row-lazy { content-visibility: auto; contain-intrinsic-size: auto 80px; }
+@media (max-width: 760px) { .links { display: none; } }
+</style>
+<script>
+const CFG = /*PLUMA_CFG*/{"dark":false,"hl":"es","t":{}}/*PLUMA_CFG_FIN*/;
+const t = (s) => (CFG.t && CFG.t[s]) || s;
+if (CFG.dark) document.documentElement.classList.add('dark');
+document.documentElement.lang = CFG.hl;
+const HL = CFG.hl || 'es';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const safeHref = (u) => /^(https?:\/\/|\/)/.test(u || '') ? u : '#';
+function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; }
+const store = { get: (k) => { try { return localStorage.getItem('pluma.' + k); } catch (e) { return null; } },
+                set: (k, v) => { try { localStorage.setItem('pluma.' + k, v); } catch (e) {} } };
+function cookies() {
+  const o = {};
+  for (const c of document.cookie.split('; ')) { const i = c.indexOf('='); if (i > 0) o[c.slice(0, i)] = c.slice(i + 1); }
+  return o;
+}
+// the site's own page: pluma_normal=1 (this address, in this tab) or 2 (all of the site in this tab, its button).
+// Pluma takes the mark off before anything goes out
+function normalUrl(kind, url) {
+  const u = new URL(url || location.href, location.href);
+  u.searchParams.set('pluma_normal', String(kind));
+  return u.pathname + u.search + u.hash;
+}
+let leaving = false;
+function fallback(why, url) {
+  // something did not work: the site's own page, for this address
+  if (leaving) return;
+  leaving = true;
+  console.warn('Pluma ligero:', why);
+  location.replace(normalUrl(1, url));
+}
+function normalButton(a, label, title, at) {
+  // the bar's "normal version" button: this same page (at() gives the address it is at now, for pages that move)
+  a.textContent = label;
+  a.title = title;
+  const go = () => normalUrl(2, at ? at() : location.href);
+  a.href = go();
+  a.addEventListener('click', (e) => { e.preventDefault(); leaving = true; location.href = go(); });
+}
+</script>
