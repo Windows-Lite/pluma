@@ -84,9 +84,12 @@ h1#title { font-size: 1.75em; line-height: 1.22; font-weight: 650; margin: .3em 
 const D = JSON.parse(document.getElementById('pluma-data').textContent);
 const A = D.a || {}, C = D.cfg || {};
 const t = s => (C.t && C.t[s]) || s;
+// the address without Pluma's mark (pluma_lector=1), as the article's own: what the bar, history and the session keep
+if (C.base) try { history.replaceState(null, '', C.base); } catch (e) {}
 const $ = id => document.getElementById(id);
 // Pluma hears the page through requests to lector.pluma.local (no page may message Pluma); the token is this page's
-const tell = q => { if (C.token) new Image().src = 'https://lector.pluma.local/' + C.token + '?' + q; };
+let told = 0;
+const tell = q => { if (C.token) new Image().src = 'https://lector.pluma.local/' + C.token + '?' + q + '&n=' + (++told); };
 
 // ------------------------------------------------------------ the cleaner: an allowlist, on the browser's own parser
 const HTML_NS = 'http://www.w3.org/1999/xhtml';

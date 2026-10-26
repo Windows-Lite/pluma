@@ -4,11 +4,14 @@
 //   by the page itself), isProbablyReaderable runs in it (1-3 ms). An article (not a site's home) shows the book in the
 //   address bar (ui.cpp).
 // - the book or F9: Readability parses a copy of the document in the page (15-70 ms) and Pluma loads the same address
-//   again, answering that one document itself (WebResourceRequested, as youtube.cpp) with reader.html (RCDATA 210)
+//   again (with a mark, below), answering that one document itself (WebResourceRequested, as youtube.cpp) with reader.html (RCDATA 210)
 //   and the article written into it. Same address and origin: the address bar, the star, history, the tab's icon and
 //   the article's images work as before, and none of the page's own scripts run. The page's CSP allows only its own
 //   script (a nonce per page) and it keeps only an allowlist of the article's HTML (clean() in reader.html).
-// - the book, F9 or "Salir del modo lectura": the page loads again, its own (the answer is served once).
+//   That load carries a mark (pluma_lector=1) so the reader page is an entry of its own in the history; the page
+//   takes it off the address at once.
+// - the book, F9, "Salir del modo lectura" or Back: the article again, itself (the answer is served once), and an
+//   automatic reader view does not take it again.
 // - the reader page speaks to Pluma through requests to https://lector.pluma.local/<token>?... (no page may message
 //   Pluma): the font size (lectura_letra in ajustes.ini), "Abrir siempre en modo lectura" for its site (lectura.tsv,
 //   one host a line; then an article of that site opens straight in the reader view) and leaving.
@@ -18,15 +21,26 @@
 #include <map>
 #include <set>
 
-struct Pending { std::wstring nf, article; };        // a reader page about to be served (the address, the article's JSON)
+struct Pending { std::wstring nf, article; };        // a reader page about to be served (the article's address, its JSON)
 static std::map<int, Pending> g_pending;              // ... in each tab
 static std::map<int, std::wstring> g_token;           // the last reader page served in each tab
+static std::map<int, bool> g_back_ok;                 // ... and the article is the entry right before it (Back leaves)
 static std::map<UINT_PTR, int> g_recheck;             // timers: an address the page changed itself, checked again
 static std::set<std::wstring> g_always;               // sites opened straight in the reader view
 static bool g_always_read = false;
 static const wchar_t *kBeacon = L"https://lector.pluma.local/";
 
 static std::wstring no_fragment(const std::wstring &u) { return u.substr(0, u.find(L'#')); }
+// the reader page loads at the article's address with this mark at the end (its own entry in the history, so Back
+// goes to the article); the page takes it off at once (history.replaceState), and nothing keeps it
+static const wchar_t *kMark = L"pluma_lector=1";
+static std::wstring with_mark(const std::wstring &nf) { return nf + (nf.find(L'?') == std::wstring::npos ? L"?" : L"&") + kMark; }
+static bool marked(const std::wstring &nf, std::wstring *clean = nullptr) {
+    size_t n = wcslen(kMark);
+    if (nf.size() <= n + 1 || nf.compare(nf.size() - n, n, kMark) || (nf[nf.size() - n - 1] != L'?' && nf[nf.size() - n - 1] != L'&')) return false;
+    if (clean) *clean = nf.substr(0, nf.size() - n - 1);
+    return true;
+}
 static std::wstring site_of(const std::wstring &url) {
     std::wstring h = lower(url_host(url));
     return starts_with(h, L"www.") ? h.substr(4) : h;
@@ -105,7 +119,7 @@ static void filter(Tab *t, const std::wstring &nf, bool add) {
 static void drop_pending(Tab *t) {
     auto p = g_pending.find(t->id);
     if (p == g_pending.end()) return;
-    if (t->view) filter(t, p->second.nf, false);
+    if (t->view) filter(t, with_mark(p->second.nf), false);
     g_pending.erase(p);
 }
 
@@ -127,8 +141,8 @@ static void open_reader(Tab *t, bool automatic) {
                      (automatic ? L", automático" : L""));
             std::wstring nf = no_fragment(url);
             g_pending[id] = { nf, a };
-            filter(t, nf, true);
-            t->view->Navigate(nf.c_str());
+            filter(t, with_mark(nf), true);
+            t->view->Navigate(with_mark(nf).c_str());
             return S_OK;
         }).Get());
 }
@@ -181,6 +195,7 @@ static void heard(int id, const std::wstring &u) {
     Tab *t = tab_by_id(id);
     if (!t || tok == g_token.end() || rest.substr(0, q) != tok->second || !t->reader) return;
     std::wstring query = rest.substr(q + 1);
+    query = query.substr(0, query.find(L'&'));   // (then n=<count>: every request a new address, never the image cache)
     size_t eq = query.find(L'=');
     std::wstring key = query.substr(0, eq), val = eq == std::wstring::npos ? L"" : query.substr(eq + 1);
     if (key == L"size") {
@@ -217,11 +232,13 @@ void reader_toggle(Tab *t) {
     // the book or F9: into the reader view, or back to the page
     if (!t || !t->view) return;
     if (t->reader) {
+        // back to the article: the entry before (as Back), or loaded again if the person moved within the article
         t->reader_declined = t->url;   // (its site may open in the reader view by itself: not this time)
         t->reader = false;
         g_token.erase(t->id);
         drop_pending(t);
-        t->view->Reload();
+        if (g_back_ok[t->id] && t->can_back) t->view->GoBack();
+        else t->view->Navigate(no_fragment(t->url).c_str());
         ui_invalidate();
     } else if (t->readerable) open_reader(t, false);
 }
@@ -231,7 +248,11 @@ void reader_attach(Tab *t) {
     ICoreWebView2 *v = t->view.Get();
     if (!v) return;
     EventRegistrationToken tok;
-    v->AddWebResourceRequestedFilter((std::wstring(kBeacon) + L"*").c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+    ComPtr<ICoreWebView2_22> v22;   // (also if a service worker of the site fetches the page's images itself)
+    if (SUCCEEDED(t->view.As(&v22)))
+        v22->AddWebResourceRequestedFilterWithRequestSourceKinds((std::wstring(kBeacon) + L"*").c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                                                                 COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL);
+    else v->AddWebResourceRequestedFilter((std::wstring(kBeacon) + L"*").c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
             Tab *t = tab_by_id(id);
@@ -240,13 +261,22 @@ void reader_attach(Tab *t) {
             a->get_Uri(&uri);
             std::wstring u = uri ? uri : L"";
             CoTaskMemFree(uri);
-            std::wstring nf = no_fragment(u);
-            // (a link to a part of the article keeps the reader view)
-            bool part = t->reader && u.find(L'#') != std::wstring::npos && nf == no_fragment(t->url);
-            if (!part && (t->reader || t->readerable)) { t->reader = t->readerable = false; ui_invalidate(); }
+            std::wstring nf = no_fragment(u), clean;
             auto p = g_pending.find(id);
-            if (p != g_pending.end() && p->second.nf != nf) drop_pending(t);
+            if (marked(nf, &clean) && (p == g_pending.end() || p->second.nf != clean)) {
+                // the mark without a reader page waiting for it (it never shows, but just in case): the article itself
+                a->put_Cancel(TRUE);
+                ui_post([id, clean] { Tab *t = tab_by_id(id); if (t && t->view) t->view->Navigate(clean.c_str()); });
+                return S_OK;
+            }
+            if (p != g_pending.end() && with_mark(p->second.nf) != nf) drop_pending(t);
+            // (a link to a part of the article keeps the reader view; and it is no longer the entry right after the article)
+            bool part = t->reader && u.find(L'#') != std::wstring::npos && nf == no_fragment(t->url);
+            if (part) g_back_ok[id] = false;
             if (!t->reader_declined.empty() && no_fragment(t->reader_declined) != nf) t->reader_declined.clear();
+            // Back, reload or the article's own address from the reader view: the article, and it stays itself
+            if (t->reader && !part && nf == no_fragment(t->url)) t->reader_declined = nf;
+            if (!part && (t->reader || t->readerable)) { t->reader = t->readerable = false; ui_invalidate(); }
             return S_OK;
         }).Get(), &tok);
     v->add_WebResourceRequested(Callback<ICoreWebView2WebResourceRequestedEventHandler>(
@@ -262,7 +292,7 @@ void reader_attach(Tab *t) {
                 return S_OK;
             }
             auto p = g_pending.find(id);
-            if (p == g_pending.end() || no_fragment(u) != p->second.nf) return S_OK;
+            if (p == g_pending.end() || no_fragment(u) != with_mark(p->second.nf)) return S_OK;
             req->get_Method(&method);
             bool get = method && !wcscmp(method, L"GET");
             CoTaskMemFree(method);
@@ -277,6 +307,7 @@ void reader_attach(Tab *t) {
                     L"Content-Security-Policy: default-src 'none'; script-src 'nonce-" + nonce + L"'; style-src 'unsafe-inline'; "
                     L"img-src https: http: data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'");
             g_token[id] = token;
+            g_back_ok[id] = true;
             return S_OK;
         }).Get(), &tok);
     ComPtr<ICoreWebView2_2> v2;

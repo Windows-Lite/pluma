@@ -219,10 +219,14 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   En cada página (DOMContentLoaded; otra vez al acabar de cargar y 1,5 s después de un cambio de dirección hecho por
   la propia página) `isProbablyReaderable` en la página (1-3 ms; nunca la portada de un sitio: ruta `/`). Si es un
   artículo, sale el libro en la barra, delante de la estrella. Clic o F9: Readability lee una copia del documento en la
-  página (15-70 ms) y Pluma vuelve a cargar esa misma dirección contestando ese documento (WebResourceRequested, un
-  filtro solo para esa dirección que se quita al servir) con `reader.html` (RCDATA 210) y el artículo dentro. Misma
-  dirección y origen: barra, estrella, historial, icono e imágenes como siempre; ningún script de la web corre.
-  Salir (libro, F9, «Salir del modo lectura»): recarga, y la web vuelve a ser la suya (se sirve una sola vez).
+  página (15-70 ms) y Pluma carga esa misma dirección con `pluma_lector=1` al final, contestando ese documento
+  (WebResourceRequested, un filtro solo para esa dirección que se quita al servir) con `reader.html` (RCDATA 210) y
+  el artículo dentro; la página quita la marca enseguida (`history.replaceState`). Así el modo lectura es una entrada
+  propia del historial (cargar la misma dirección sin marca la reemplazaba y Atrás se saltaba el artículo) y la
+  barra, la estrella, el historial y la sesión ven la dirección limpia (comprobado: la marca no queda en
+  `historial.tsv` ni `sesion.tsv`). Mismo origen: icono e imágenes como siempre; ningún script de la web corre.
+  Salir (libro, F9, «Salir del modo lectura», Atrás): el artículo otra vez, el suyo (se sirve una sola vez), y el
+  automático no lo vuelve a coger.
 - Seguridad: el HTML del artículo no es de fiar. CSP propia (solo el script de la página, con un nonce por página;
   nada de frames, formularios ni conexiones), el JSON del artículo sin ningún `<` y `clean()` en la página: lista
   blanca de etiquetas y atributos, solo direcciones http(s) (y `data:image` de mapa de bits), los id con `r-` delante.
@@ -234,9 +238,11 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   incógnito no se escribe); entonces sus artículos (los que dicen serlo: `og:type` article o JSON-LD Article/Posting)
   pasan solos al modo lectura en DOMContentLoaded, salvo la dirección de la que se acaba de salir. Configuración >
   Modo lectura lista esos sitios para quitarlos.
-- Medido el 26/10 (artículo cargado y luego modo lectura): El País 204 -> 198 MB, The Verge 348 -> 231 MB; el modo
-  lectura pide 18-155 KB (sus fotos) frente a 0,4-3 MB de la página, pero va después de cargarla: ahorra al leer, no
-  al abrir (salvo el automático, que corta la página en DOMContentLoaded).
+- Medido el 26/10, perfil limpio cada vez. A mano (el artículo cargado y luego el libro): la memoria no baja (The
+  Verge 344 -> 340 y 338 -> 336 MB; El País 140 -> 172 y 137 -> 172: el proceso del sitio sigue vivo) y los datos
+  son los de la página (1,7-3 MB) más los del modo lectura (18-155 KB, sus fotos): mejora la lectura, no ahorra.
+  Automático: la página se corta en DOMContentLoaded y el modo lectura sale a los 1,0-1,8 s; datos The Verge 1,9-2,0
+  MB frente a 3,0, El País 1,4-1,5 frente a 1,75.
 
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en
