@@ -81,10 +81,10 @@ struct Settings {
     int update = 2;                    // 0 never, 1 tell me, 2 automatic (the default; update.cpp)
     std::wstring lang;                 // the interface's language: es, en, pt, fr, de, it (empty = Windows's)
     std::wstring font;                 // the bar's typeface: a family installed in Windows or one in fuentes\ (empty = Windows's)
-    int sleep_s = 45;                  // a hidden tab is frozen after this
+    int sleep_s = 45;                  // a hidden tab is frozen after this (TrySuspend: its page stays as it was)
     int discard_s = 0;                 // ... and unloaded after this (0 = never, the default), except the most recent ones:
     int keep_recent = 2;               // the last tabs looked at stay frozen (to come back at once) for
-    int recent_discard_min = 0;        // this long (0 = never)
+    int recent_discard_min = 0;        // this long (0 = never). Never unloaded at all: a tab with something to lose (tabs.cpp)
     bool spare = false;                // a view made ahead of time (the next page starts 35 ms sooner; costs ~10 MB)
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
     bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
@@ -375,6 +375,12 @@ struct Tab {
     std::wstring passgen_id;           // the injected password suggestion (passgen.cpp), to swap it
     double saved_x = 0, saved_y = 0, saved_media = 0;   // where the page was when it was last hidden
     bool restoring = false;            // unloaded and loaded again: put it back where it was
+    // what letting it go would lose (read from the page when it is hidden; tabs_tick never unloads such a tab):
+    bool typed = false;                // something typed into a form or an editor of its page since it loaded
+    bool notifies = false;             // its site may show notifications
+    bool in_call = false;              // its page asked for the microphone or the camera: not frozen either
+    bool busy = false;                 // the engine would not freeze it: not let go either
+    std::wstring kept_why;             // the reason last written to the log, to write it once
     float progress = 0;                // loading line, 0..1 (estimated: WebView2 does not give one)
     double load_started = 0, load_done = 0;
     void *video = nullptr;             // Pluma's own player for its YouTube video (video.cpp), waiting or on
