@@ -48,6 +48,7 @@ void settings_open(const std::wstring &section) {
         }
     tab_new(u, true);
 }
+void settings_open_sync() { settings_open(L"sincronizar"); }
 
 static std::string page_html(int id) {
     HRSRC r = FindResourceW(g_inst, MAKEINTRESOURCEW(id), RT_RCDATA);
@@ -115,6 +116,7 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"readerSites\":[";
     { bool f = true; for (auto &s : reader_sites()) { o += (f ? L"" : L",") + json_escape(s); f = false; } }
     o += L"]";
+    o += L",\"sync\":" + sync_state_json();
     o += L",\"profiles\":" + profiles_state_json();
     size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
     size_t son = 0; for (auto &s : g_scripts) if (s.enabled) son++;
@@ -205,6 +207,31 @@ static void act(const std::wstring &what) {
     else if (what == L"repo") tab_new(L"https://github.com/Windows-Lite/pluma", true);
 }
 
+static void handle_sync(ICoreWebView2 *v, const Json &j) {
+    std::wstring cmd = j[L"cmd"].s;
+    if (cmd == L"auto") sync_set_auto(j[L"on"].b);
+    else if (cmd == L"password") sync_set_password(j[L"pw"].s, j[L"hint"].s);
+    else if (cmd == L"dest") sync_set_destination(j[L"value"].s);
+    else if (cmd == L"folder") sync_pick_folder();
+    else if (cmd == L"now") sync_backup_now();
+    else if (cmd == L"connect") sync_connect(j[L"provider"].s);
+    else if (cmd == L"disconnect") sync_disconnect();
+    else if (cmd == L"pickRestore") {
+        std::wstring p = sync_pick_restore_file();
+        if (!p.empty()) {
+            std::wstring info = sync_inspect_json(p);
+            // the file's header plus its path, so the page can ask for the password and send it back
+            std::wstring msg = L"{\"op\":\"restoreInfo\",\"path\":" + json_escape(p) + L",\"info\":" + info + L"}";
+            v->PostWebMessageAsJson(msg.c_str());
+        }
+    } else if (cmd == L"restore") {
+        sync_restore(j[L"path"].s, j[L"password"].s);   // off the UI thread; it posts restoreResult when done
+    }
+}
+void settings_broadcast(const std::wstring &msg) {
+    for (auto &t : g_tabs) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) t->view->PostWebMessageAsJson(msg.c_str());
+}
+
 void settings_attach(ICoreWebView2 *v) {
     // every view: Pluma's own page is served from the exe, and only it may talk to Pluma
     v->AddWebResourceRequestedFilter(L"https://pluma.local/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
@@ -250,6 +277,7 @@ void settings_attach(ICoreWebView2 *v) {
             CoTaskMemFree(msg);
             if (page_resource(from) != 200) { bm_page_do(v, from, j); return S_OK; }   // the bookmarks and import pages
             std::wstring op = j[L"op"].s;
+            if (op == L"sync") { handle_sync(v, j); return S_OK; }
             if (op == L"get") { post_state(v, j[L"texts"]); return S_OK; }
             if (op == L"set") { apply(j[L"key"].s, j[L"value"]); if (j[L"key"].s == L"startup") settings_page_refresh(); }
             else if (op == L"do") act(j[L"what"].s);

@@ -12,6 +12,9 @@
 // silent (the engine and mpv), PLUMA_PRUEBA_ROMPER_VIDEO=K breaks a video list's pieces from piece K on (video.cpp).
 // PLUMA_SIN_MPV_LOG=1 leaves mpv logging as in a normal build (no mpv.log; only its warnings, in pluma.log).
 #pragma once
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00   // Windows 10: WebView2, the compression API (backup) and the BCrypt calls Pluma uses
+#endif
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
@@ -109,9 +112,11 @@ bool settings_page_url(const std::wstring &u);              // https://pluma.loc
 std::wstring settings_page_display(const std::wstring &u);  // ... shown as pluma://...
 std::wstring settings_page_from_typed(const std::wstring &typed);   // pluma://settings typed -> its url ("" if not)
 void settings_open(const std::wstring &section = L"");   // opens it (or goes to the tab that has it), at a section
+void settings_open_sync();           // ... at the Sync section
 void settings_attach(ICoreWebView2 *v);   // every view: serves the page and listens to it
 void settings_page_refresh();        // the open settings pages show what changed
 void settings_page_refresh_soon();
+void settings_broadcast(const std::wstring &msg);   // posts a JSON message to every open settings page
 void data_clear_all();               // cookies, cache and history (not passwords)
 void ui_ntp_changed();               // the new tab page's rows are read again
 void ui_open_menu_page(const std::wstring &which);   // the menu, open at "ext" or "scripts"
@@ -216,6 +221,35 @@ void passwords_open_edge_export();   // opens edge://settings/passwords in Edge,
 ImportResult passwords_import_pick();   // a file picker, then import the chosen CSV (passwords = how many; -1 cancelled)
 bool passwords_delete_csv();        // overwrites and deletes the CSV just imported (asked first on the page)
 int passwords_apply_pending();       // at the next start, before the engine runs: writes the ready rows into Login Data
+
+// ---------------------------------------------------------------- sync / backup (sync.cpp)
+// An encrypted backup of the profile (bookmarks, history, open tabs, settings, scripts, extensions and their
+// settings) to a folder or, once its app is registered, to the account's private cloud folder. Passwords and cookies
+// are not in this build: the backup format keeps an opaque "engine key" slot (meta/clave) for them, filled elsewhere.
+void sync_init();                         // load the config and start the background worker
+void sync_shutdown();                     // stop the worker (at quit), after any running backup finishes
+void sync_on_close();                     // the window closed or Pluma is quitting: back up now if due (does not block)
+bool sync_wait_idle(int ms);              // wait up to ms for a running backup to end (before ExitProcess)
+void sync_snapshot_engine();               // at start, before the engine: a copy of its databases it keeps locked later
+bool sync_apply_restore();                // true if one was applied; at start, before settings_load: a staged restore moves the old data aside
+bool sync_has_pending_restore();          // a restore is staged (asked for from the restore flow)
+// the settings page (settings.cpp) talks to these:
+std::wstring sync_state_json();           // destination, account, whether a password is set, last backup, status, hint
+void sync_set_password(const std::wstring &pw, const std::wstring &hint);   // remembers it on this machine (DPAPI); "" forgets
+void sync_set_auto(bool on);
+bool sync_pick_folder();                  // a folder picker; sets the folder destination
+void sync_set_destination(const std::wstring &kind);   // "", "carpeta", "gdrive", "onedrive", "dropbox"
+void sync_backup_now();                   // asks the worker to back up now
+void sync_connect(const std::wstring &provider);       // OAuth sign-in (system browser, PKCE, loopback)
+void sync_disconnect();
+std::wstring sync_pick_restore_file();    // a file picker for a .plumabk; "" if cancelled
+std::wstring sync_inspect_json(const std::wstring &path);   // a backup's header (no password): when, machine, hint, size
+void sync_restore(const std::wstring &path, const std::wstring &password);   // off the UI thread; result as a restoreResult message
+void sync_page_refresh();                 // the open settings pages show what changed
+// the engine's key (passwords.cpp): it encrypts the saved passwords and the cookies, and Windows guards it for this
+// account only. The backup carries it (under the backup password) and a restore guards it again for the new account.
+bool engine_key_get(std::string &key);   // 32 bytes
+bool engine_key_put(const std::string &key, const std::wstring &aside);   // Local State's old copy goes to aside
 
 void set_fullscreen(bool on);
 void app_quit();                          // closes Pluma for good (not just the window)

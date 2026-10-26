@@ -27,7 +27,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
-                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736 };
+                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -1544,6 +1544,8 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sub(T(L"Fuente"), G_FONT, g_set.font.empty() ? T(L"La de Windows") : g_set.font, PAGE_FONT));
         v.push_back(sub(T(L"Borrar datos"), G_ERASE, L"", PAGE_CLEAR));
         v.push_back(item(T(L"Configuración"), G_GEAR, L"", [] { after_menu([] { settings_open(); }); }));
+        if (!g_incognito)
+            v.push_back(item(T(L"Sincronizar"), G_CLOUD, L"", [] { after_menu([] { settings_open_sync(); }); }));
         v.push_back(item(T(L"Herramientas de desarrollo"), G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
         if (!g_incognito)
             v.push_back(item(T(L"Buscar actualizaciones"), G_UPDATE, update_version(), [] { after_menu([] { update_check_now(); }); }));

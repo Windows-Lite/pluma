@@ -69,6 +69,44 @@ static bool master_key(std::vector<BYTE> &out) {
     LocalFree(keyb.pbData);
     return out.size() == 32;
 }
+bool engine_key_get(std::string &key) {
+    std::vector<BYTE> k;
+    if (!master_key(k)) return false;
+    key.assign((const char *)k.data(), k.size());
+    SecureZeroMemory(k.data(), k.size());
+    return true;
+}
+// guards the key for this Windows account and writes it in Local State (engine stopped). Only os_crypt.encrypted_key
+// changes; with no Local State yet, a minimal one (the engine fills in the rest).
+bool engine_key_put(const std::string &key, const std::wstring &aside) {
+    if (key.size() != 32) return false;
+    DATA_BLOB in{ (DWORD)key.size(), (BYTE *)key.data() }, prot{};
+    if (!CryptProtectData(&in, NULL, NULL, NULL, NULL, 0, &prot)) return false;
+    std::string raw = "DPAPI" + std::string((const char *)prot.pbData, prot.cbData);
+    LocalFree(prot.pbData);
+    DWORD n = 0;
+    CryptBinaryToStringA((const BYTE *)raw.data(), (DWORD)raw.size(), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &n);
+    std::string b64(n, 0);
+    if (!CryptBinaryToStringA((const BYTE *)raw.data(), (DWORD)raw.size(), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, &b64[0], &n)) return false;
+    b64.resize(n);
+    std::wstring dir = g_state + L"\\webview2\\EBWebView";
+    std::wstring ls = dir + L"\\Local State";
+    std::string s;
+    if (read_file(ls, s)) {
+        write_file(aside + L"\\Local State", s);
+        const std::string tag = "\"encrypted_key\":\"";
+        size_t os = s.find("\"os_crypt\"");
+        size_t a = os == std::string::npos ? os : s.find(tag, os);
+        size_t b = a == std::string::npos ? a : s.find('"', a + tag.size());
+        if (b != std::string::npos) s = s.substr(0, a + tag.size()) + b64 + s.substr(b);
+        else if (os == std::string::npos && s.size() > 1 && s[0] == '{') s = "{\"os_crypt\":{\"encrypted_key\":\"" + b64 + "\"}," + s.substr(1);
+        else return false;   // an os_crypt without the field: not a layout we know, leave it
+    } else {
+        SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
+        s = "{\"os_crypt\":{\"encrypted_key\":\"" + b64 + "\"}}";
+    }
+    return write_file(ls, s);
+}
 // v10 = "v10" + 12-byte nonce + AES-256-GCM ciphertext + 16-byte tag
 static bool encrypt_v10(const std::vector<BYTE> &key, const std::string &plain, std::vector<BYTE> &out) {
     BCRYPT_ALG_HANDLE alg = NULL; BCRYPT_KEY_HANDLE k = NULL;

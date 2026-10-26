@@ -47,6 +47,7 @@ jobs:
           # third-party code inside Pluma.exe: its license goes with it
           New-Item -ItemType Directory "$d\licencias" | Out-Null
           Copy-Item src\readability\LICENSE.md "$d\licencias\readability-LICENSE.md"
+          Copy-Item src\monocypher\LICENCE.md "$d\licencias\monocypher-LICENCE.md"
           Compress-Archive $d "$d.zip"
           # "<sha256>  <file>": Pluma checks the download against it before updating
           "$((Get-FileHash "$d.zip" -Algorithm SHA256).Hash.ToLower())  $d.zip" | Set-Content -NoNewline -Encoding ascii "$d.zip.sha256"
