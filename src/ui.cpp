@@ -30,7 +30,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
                  G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
                  G_COPY = 0xE8C8, G_WINDOW = 0xE78B, G_NEW_WINDOW_OUT = 0xE8A7, G_SWITCH = 0xE8AB, G_WARN = 0xE7BA,
-                 G_CHEV_D = 0xE70D, G_BOLT = 0xE945, G_BLOCK = 0xE733 };
+                 G_CHEV_D = 0xE70D, G_BOLT = 0xE945, G_BLOCK = 0xE733, G_EQ = 0xE9E9 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -1806,6 +1806,12 @@ void data_clear_all() {
     else ui_toast(T(L"Historial borrado"));
 }
 void ui_ntp_changed() { g_ntp_filled = false; ui_invalidate(); }
+void ui_open_sound_panel() {
+    D2D1_RECT_F m = menu_rect();
+    POINT a = { (LONG)m.left, (LONG)m.top }, b = { (LONG)m.right, (LONG)m.bottom };
+    ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+    video_sound_panel({ a.x, a.y, b.x, b.y });
+}
 void ui_open_menu_page(const std::wstring &which) {
     // the settings page's "Extensiones" and "Scripts": the menu, open at that page
     D2D1_RECT_F m = menu_rect();
@@ -1837,6 +1843,10 @@ static std::vector<MItem> build_page(int page) {
         if (at && at->view && !settings_page_url(at->url) && (starts_with(at->url, L"https://") || starts_with(at->url, L"http://"))) {
             if (at->tr_state) v.push_back(item(T(L"Mostrar original"), G_LANG, L"", [] { after_menu([] { translate_original(active_tab()); }); }));
             else v.push_back(item(T(L"Traducir página"), G_LANG, translate_lang_name(translate_target(), true), [] { after_menu([] { translate_page(active_tab()); }); }));
+        }
+        if (video_sound_useful()) {   // (while Pluma's player plays: a video, or YouTube Music's sound in any tab)
+            const SoundPreset *fx = sound_preset(g_set.sound.preset);
+            v.push_back(item(T(L"Sonido"), G_EQ, T(fx ? fx->name : L"Desactivado"), [] { after_menu([] { ui_open_sound_panel(); }); }));
         }
         v.push_back(sep());
         size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
@@ -2549,6 +2559,7 @@ void ui_close_popups() {
     // (only the current window's: the others' stay as they are)
     if (panel_here(g_sug)) close_suggestions();
     if (panel_here(g_menu) && !g_menu.closing) menu_close();
+    video_sound_panel_close();
     if (panel_here(g_bubble) && !g_bubble.closing && now_ms() - g_bub_opened > 500) bubble_close();   // (not the page taking the focus back from its own menu)
 }
 

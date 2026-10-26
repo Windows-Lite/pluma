@@ -803,6 +803,7 @@ static void test_command(const std::wstring &what) {
     else if (what == L"menu") ui_open_menu_quietly(true);
     else if (what == L"menu-principal") ui_open_menu_quietly(false);
     else if (what == L"menu-pestana") ui_open_tab_menu_quietly();
+    else if (what == L"sonido") ui_open_sound_panel();   // ⋯ > Sonido
     else if (what == L"perfil") ui_open_profile_menu(true);
     else if (what == L"oferta") ui_translate_offer(t);
     else if (starts_with(what, L"tarjeta=")) ui_translate_card_test(what.substr(8));

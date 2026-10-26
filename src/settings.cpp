@@ -95,18 +95,6 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"musiclite\":" + std::wstring(b(g_set.music_lite));
     o += L",\"redditlite\":" + std::wstring(b(g_set.reddit_lite));
     o += L",\"videoAvailable\":" + std::wstring(b(video_available()));
-    // the sound effects: what is chosen, the person's own values, and what each preset does (the sliders show it)
-    auto fx_json = [](const SoundFx &f) {
-        std::wstring e = L"{\"eq\":[";
-        for (int i = 0; i < kEqBands; i++) e += (i ? L"," : L"") + std::to_wstring(f.eq[i]);
-        return e + L"],\"bass\":" + std::to_wstring(f.bass) + L",\"reverb\":" + std::to_wstring(f.reverb) + L"}";
-    };
-    o += L",\"sound\":{\"preset\":" + json_escape(g_set.sound.preset) + L",\"pitch\":" + std::to_wstring(g_set.sound.pitch) +
-         L",\"custom\":" + fx_json(g_set.sound.custom) + L",\"presets\":[";
-    for (int i = 0; i < kSoundPresetCount; i++)
-        o += (i ? L"," : L"") + std::wstring(L"[") + json_escape(kSoundPresets[i].id) + L"," + json_escape(T(kSoundPresets[i].name)) + L"," +
-             fx_json(kSoundPresets[i].fx) + L"]";
-    o += L"]}";
     o += L",\"resident\":" + std::wstring(b(g_set.resident));
     o += L",\"startup\":" + std::wstring(b(startup_on()));
     o += L",\"spare\":" + std::wstring(b(g_set.spare));
@@ -186,22 +174,6 @@ static void apply(const std::wstring &key, const Json &val) {
     }
     else if (key == L"startup") startup_set(val.b);
     else if (key == L"readerSiteOff") reader_site_set(val.s, false);
-    else if (key == L"sound") {
-        // the whole block at once: the preset, the person's own values and the pitch; the player plays it now
-        SoundSettings &snd = g_set.sound;
-        if (val[L"preset"].is_str()) snd.preset = val[L"preset"].s;
-        if (val[L"pitch"].kind == Json::NUM) snd.pitch = (int)lround(val[L"pitch"].n);
-        const Json &c = val[L"custom"];
-        if (c.kind == Json::OBJ) {
-            const Json &eq = c[L"eq"];
-            if (eq.kind == Json::ARR) for (int i = 0; i < kEqBands && i < (int)eq.arr.size(); i++) snd.custom.eq[i] = (int)lround(eq.arr[i].n);
-            if (c[L"bass"].kind == Json::NUM) snd.custom.bass = (int)lround(c[L"bass"].n);
-            if (c[L"reverb"].kind == Json::NUM) snd.custom.reverb = (int)lround(c[L"reverb"].n);
-        }
-        sound_clamp(snd);
-        settings_save();
-        video_sound_changed();
-    }
 }
 static void act(const std::wstring &what) {
     if (what == L"clearHistory") { history_clear(); ui_toast(T(L"Historial borrado")); }

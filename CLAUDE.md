@@ -195,17 +195,39 @@ ya tenga esa funcionalidad»).
   el final nunca devuelve el vídeo a la página. Una pestaña de fondo con el reproductor sonando no se congela ni se
   suelta aunque esté en silencio (`video_playing`): soltarla cerraba el reproductor.
 - Efectos de sonido (pedido el 26/10: «equalizer para poner bass boost etc, configurable», «ajustar pitch, modo
-  nightcore, filtros»): `src/sound.cpp` arma el `af` de mpv. Presets (Desactivado, Más graves, Graves fuertes, Voces
-  claras, Más agudos, Nightcore, Slowed + reverb, 8D, Sala, Personalizado) en el menú del reproductor y en
-  Configuración > YouTube y vídeo > Sonido (ecualizador de 10 bandas, graves, reverberación); el tono (-6..+6
-  semitonos) va aparte y vale con cualquiera. El tono, con el `rubberband` de mpv (que entonces hace también la
-  velocidad); Nightcore y Slowed suben o bajan velocidad y tono juntos (velocidad de mpv = la elegida × la del
-  efecto: el menú enseña la elegida). El resto, un grafo de lavfi: `equalizer` por banda, `bass`, `apulsator` (8D),
-  `aecho` y `alimiter` al final (sin su nivel automático) tras quitar la mitad del mayor realce. Desactivado y tono 0:
-  ningún filtro. Se aplica al momento a todos los reproductores. Prueba de las cadenas: `tools\sonido-test.cpp`
+  nightcore, filtros»): `src/sound.cpp` arma el `af` de mpv. Presets: Desactivado, Más graves, Graves fuertes, Voces
+  claras, Más agudos, Nightcore, Slowed + reverb, 8D, Sala, Personalizado; ecualizador de 10 bandas, graves,
+  reverberación y el tono (-6..+6 semitonos, aparte: vale con cualquiera). El tono, con el `rubberband` de mpv (que
+  entonces hace también la velocidad); Nightcore y Slowed suben o bajan velocidad y tono juntos (velocidad de mpv = la
+  elegida × la del efecto: el menú enseña la elegida). El resto, un grafo de lavfi: `equalizer` por banda, `bass`,
+  `apulsator` (8D), `aecho` y `alimiter` al final (sin su nivel automático) tras quitar la mitad del mayor realce.
+  Desactivado y tono 0: ningún filtro. Se aplica al momento a todos los reproductores, también a la música de YouTube
+  Music ligero (`audio_apply_sound`, con su velocidad). Prueba de las cadenas: `tools\sonido-test.cpp`
   (`c++ -std=c++17`; `--grafos` las saca para probarlas con `ffmpeg -af`).
+- Panel de sonido (26/10, el usuario: «la parte de ecualización está como muy mal metida, está en el apartado de
+  ajustes... no me mola mucho»): donde se escucha, no en Configuración (allí queda una línea que dice dónde está,
+  para el buscador). Menú del reproductor > «Sonido» (abre el panel en el sitio del menú, `g_menu_page` 5, con el
+  aspecto del menú «delhi») y ⋯ > «Sonido» mientras algo suena en el reproductor de Pluma (`video_sound_useful`: un
+  vídeo, o la música de Music ligero en cualquier pestaña), con los colores de Pluma (claro/oscuro) bajo ⋯
+  (`g_snd`, otra capa `PlumaControlesVideo`). Un solo dibujo (`snd_draw`) con dos aspectos (`SndLook`): chips de los
+  presets, la curva de las 10 bandas (Catmull-Rom; se arrastran sus puntos, con el valor encima), graves,
+  reverberación, tono y «Restablecer». Pulsar ya pone el valor (un clic basta, como en cualquier deslizador); mover
+  la EQ, los graves o la reverberación pasa a Personalizado desde lo que sonaba. Mientras se arrastra, a mpv como
+  mucho cada 90 ms (cada cambio rehace sus filtros) y se guarda al soltar. Sobre el vídeo, a la derecha encima de los
+  controles, entre 340 y 560 DIP de ancho (los chips en dos filas, para que quepa sobre un vídeo a 1080p); si no
+  cabe, sube sobre la página hasta justo debajo de la barra de Pluma y la rueda lo mueve. El de ⋯ se cierra con un clic fuera,
+  Esc, otro menú o pidiéndolo otra vez (las páginas no avisan de sus clics: lo vigila un temporizador, `snd_watch`).
+  Mirado antes cómo lo hacen otros: Spotify (presets + puntos que se arrastran, pero escondido en Ajustes, que es
+  justo lo que no le gustaba; https://support.spotify.com/us/article/equalizer/), las extensiones tipo «Ears» y
+  «Turn It Up» (panel desde el botón de la barra, presets como fichas, mezcla con todo a la vista;
+  https://github.com/jestemKox123/Turn-It-Up-Son-Volume-Booster-Mixer, https://github.com/addavriance/ReEQ).
+  Copiado: fichas, curva con puntos, todo en vivo y un «Restablecer». No copiado: preamplificador y limitador a la
+  vista (el nuestro es automático), EQ por web, analizador de espectro (gasta CPU), varios perfiles guardados.
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
-  en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
+  en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos. `Pluma.exe pluma-prueba:sonido` abre (o
+  cierra) el panel de sonido bajo ⋯. Un script que calcule coordenadas tiene que ser consciente del DPI
+  (`SetProcessDpiAwarenessContext(-4)` antes de nada): si no, a 125 % Windows le da todo escalado a 96 ppp y los
+  clics caen en otro sitio.
 
 ## Webs ligeras (`src/lite.cpp`)
 - Una tabla de webs (`kSites`): origen que se contesta, RCDATA de su página, ajuste, qué direcciones hace y el aviso de
@@ -535,6 +557,7 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
   + `put_UserAgent` quita la marca (probado).
 - Repintar en bucle (InvalidateRect tras cada fotograma) deja sin turno a los WM_TIMER (Windows solo los da sin
   pintura pendiente): no se cerraba, no guardaba la sesión. Por eso las animaciones van por el hilo de DwmFlush.
+- `small` es una macro de Windows (`rpcndr.h`: `char`): un campo que se llame así no compila con mensajes absurdos.
 - `@match` con `*`: escapar todo menos el asterisco y luego `*` -> `.*` (antes quedaba `/*` y nunca casaba).
 - Desde PowerShell, `FindWindowW` con título nulo pide `[NullString]::Value`.
 - `tools\passgen\ventanas.ps1` solo mira procesos `msedgewebview2.exe`: con todos, un id de proceso reutilizado metió en

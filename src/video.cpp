@@ -137,14 +137,14 @@ static D2D1_COLOR_F rgba(float r, float g, float b, float a) { return { r, g, b,
 static const D2D1_COLOR_F kWhite = { 1, 1, 1, 1 }, kText = { 238 / 255.0f, 238 / 255.0f, 238 / 255.0f, 1 }, kRed = { 1, 0, 51 / 255.0f, 1 },
                           kPill = { 0, 0, 0, 0.3f };
 
-// SVG paths (YouTube's icons come from the page as SVG): M L H V C A Z, absolute and relative
+// SVG paths (YouTube's icons come from the page as SVG): M L H V C S A Z, absolute and relative
 static ComPtr<ID2D1PathGeometry> svg(const char *d) {
     ComPtr<ID2D1PathGeometry> g;
     ComPtr<ID2D1GeometrySink> sk;
     if (FAILED(g_d2d->CreatePathGeometry(&g)) || FAILED(g->Open(&sk))) return nullptr;
     sk->SetFillMode(D2D1_FILL_MODE_WINDING);
-    float x = 0, y = 0, sx = 0, sy = 0;
-    bool open = false;
+    float x = 0, y = 0, sx = 0, sy = 0, cx = 0, cy = 0;   // (cx, cy: the last curve's second control point, for S)
+    bool open = false, curve = false;
     char cmd = 0;
     const char *p = d;
     auto skip = [&] { while (*p == ' ' || *p == ',' || *p == '\n' || *p == '\t') p++; };
@@ -155,7 +155,8 @@ static ComPtr<ID2D1PathGeometry> svg(const char *d) {
         skip();
         if (!*p) break;
         if (isalpha((unsigned char)*p)) cmd = *p++;
-        bool rel = islower((unsigned char)cmd) != 0;
+        bool rel = islower((unsigned char)cmd) != 0, was_curve = curve;
+        curve = false;
         switch (tolower(cmd)) {
         case 'm': {
             float nx = num(), ny = num();
@@ -174,7 +175,17 @@ static ComPtr<ID2D1PathGeometry> svg(const char *d) {
             if (rel) { x1 += x; y1 += y; x2 += x; y2 += y; nx += x; ny += y; }
             begin();
             sk->AddBezier(D2D1::BezierSegment(D2D1::Point2F(x1, y1), D2D1::Point2F(x2, y2), D2D1::Point2F(nx, ny)));
-            x = nx; y = ny;
+            x = nx; y = ny; cx = x2; cy = y2; curve = true;
+            break;
+        }
+        case 's': {
+            // the first control point mirrors the last curve's second one
+            float x2 = num(), y2 = num(), nx = num(), ny = num();
+            if (rel) { x2 += x; y2 += y; nx += x; ny += y; }
+            float x1 = was_curve ? 2 * x - cx : x, y1 = was_curve ? 2 * y - cy : y;
+            begin();
+            sk->AddBezier(D2D1::BezierSegment(D2D1::Point2F(x1, y1), D2D1::Point2F(x2, y2), D2D1::Point2F(nx, ny)));
+            x = nx; y = ny; cx = x2; cy = y2; curve = true;
             break;
         }
         case 'a': {
@@ -198,7 +209,7 @@ static ComPtr<ID2D1PathGeometry> svg(const char *d) {
     return g;
 }
 enum Icon { I_PLAY, I_PAUSE, I_REPLAY, I_SPEAKER, I_WAVE1, I_WAVE2, I_MUTED, I_CC_ON, I_CC_OFF, I_GEAR, I_PAGE, I_FULL, I_FULL_EXIT,
-            I_SPEED, I_QUALITY, I_CHEV_R, I_CHEV_L, I_CHECK, I_EQ, I_NOTE, I_COUNT };
+            I_SPEED, I_QUALITY, I_CHEV_R, I_CHEV_L, I_CHECK, I_EQ, I_NOTE, I_BASS, I_ROOM, I_COUNT };
 struct IconDef { float vb; const char *d; };
 static const IconDef kIcons[I_COUNT] = {
     // play and pause: YouTube's, on its 36 grid
@@ -317,7 +328,14 @@ static const IconDef kIcons[I_COUNT] = {
     { 24, "M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" },
     // the sound effects (an equalizer's bars) and the pitch (a note)
     { 24, "M7 18h2V6H7v12zm4 4h2V2h-2v20zm-8-8h2v-4H3v4zm12 4h2V6h-2v12zm4-8v4h2v-4h-2z" },
-    { 24, "M12 3V13.55C11.41 13.21 10.73 13 10 13C7.79 13 6 14.79 6 17C6 19.21 7.79 21 10 21C12.21 21 14 19.21 14 17V7H18V3H12Z" } };
+    { 24, "M12 3V13.55C11.41 13.21 10.73 13 10 13C7.79 13 6 14.79 6 17C6 19.21 7.79 21 10 21C12.21 21 14 19.21 14 17V7H18V3H12Z" },
+    // the sound panel's bass (a speaker's cone) and reverb (sound filling a room): Material's speaker and surround_sound
+    { 24, "M17 2H7c-1.1 0-2 .9-2 2v16c0 1.1.9 1.99 2 1.99L17 22c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-5 2c1.1 0 2 .9 2 2s-.9 2-2 2"
+          "c-1.11 0-2-.9-2-2s.89-2 2-2zm0 16c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" },
+    { 24, "M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM7.76 16.24l-1.41 1.41C4.78 16.1 4 14.05 4 12"
+          "c0-2.05.78-4.1 2.34-5.66l1.41 1.41C6.59 8.93 6 10.46 6 12s.59 3.07 1.76 4.24zM12 16c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z"
+          "m5.66 1.66l-1.41-1.41C17.41 15.07 18 13.54 18 12s-.59-3.07-1.76-4.24l1.41-1.41C19.22 7.9 20 9.95 20 12c0 2.05-.78 4.1-2.34 5.66z"
+          "M12 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" } };
 static ComPtr<ID2D1PathGeometry> g_icons[I_COUNT];
 static void draw_icon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, Icon ic, float cx, float cy, float size, D2D1_COLOR_F c) {
     // size: the icon's whole box (24 px for YouTube's buttons), centred on cx, cy
@@ -416,7 +434,7 @@ static Anim g_bar_hot;          // the progress bar growing under the mouse
 static int g_hot = 0;           // control under the mouse
 static bool g_drag_seek, g_drag_vol;
 static float g_mouse_x = -1;    // over the progress bar
-static int g_menu_page = 0;     // 0 closed, 1 main, 2 quality, 3 speed, 4 captions, 5 sound effects, 6 pitch
+static int g_menu_page = 0;     // 0 closed, 1 main, 2 quality, 3 speed, 4 captions, 5 the sound panel
 static int g_menu_hot = -1;
 static int g_menu_top = 0;      // the first row shown (a page taller than the video scrolls with the wheel)
 static POINT g_last_cursor = { -1, -1 };
@@ -544,30 +562,34 @@ static void audio_gain(Video *v) {
 static void apply_speed(Video *v) {
     set_double(v, "speed", v->speed * v->fx_rate);
 }
-// the sound effects (Configuración > YouTube y vídeo > Sonido, or the player's menu): mpv's audio filters. Nothing
+// the sound effects (the sound panel: the player's menu > Sonido, or ⋯ > Sonido): mpv's audio filters. Nothing
 // when they are off. mpv's rubberband does the pitch; if this mpv has none, lavfi's asetrate + atempo
 static bool g_rubberband = true;
-static int set_af(Video *v, const std::string &af) {
+static int set_af(mpv_handle *mpv, const std::string &af) {
     const char *c = af.c_str();
-    return M.set_property(v->mpv, "af", MPV_FORMAT_STRING, (void *)&c);
+    return M.set_property(mpv, "af", MPV_FORMAT_STRING, (void *)&c);
 }
-static void apply_sound(Video *v) {
-    if (!v || !v->mpv) return;
+static SoundFx apply_af(mpv_handle *mpv, std::string &have) {
+    // (have: what that mpv has now, so the same filters are never set again)
     SoundFx fx = sound_fx(g_set.sound);
     std::string af = sound_af(fx, g_set.sound.pitch, g_rubberband);
-    if (af != v->filters) {
-        int r = set_af(v, af);
+    if (af != have) {
+        int r = set_af(mpv, af);
         if (r < 0 && g_rubberband && af.find("rubberband") != std::string::npos) {
             log_line(L"vídeo propio: sin rubberband en el motor (" + std::to_wstring(r) + L"); el tono, con lavfi");
             g_rubberband = false;
             af = sound_af(fx, g_set.sound.pitch, false);
-            r = set_af(v, af);
+            r = set_af(mpv, af);
         }
-        if (r < 0) { log_line(L"vídeo propio: los efectos no valen (" + std::to_wstring(r) + L"): " + wide(af)); af.clear(); set_af(v, af); }
+        if (r < 0) { log_line(L"vídeo propio: los efectos no valen (" + std::to_wstring(r) + L"): " + wide(af)); af.clear(); set_af(mpv, af); }
         else if (g_dev) log_line(L"vídeo propio: efectos «" + g_set.sound.preset + L"», tono " + std::to_wstring(g_set.sound.pitch) + L": af=" + wide(af));
-        v->filters = af;
+        have = af;
     }
-    v->fx_rate = fx.rate;
+    return fx;
+}
+static void apply_sound(Video *v) {
+    if (!v || !v->mpv) return;
+    v->fx_rate = apply_af(v->mpv, v->filters).rate;
     apply_speed(v);
 }
 static std::string escaped(const std::string &s) { return "%" + std::to_string(s.size()) + "%" + s; }   // mpv's quoting for option values
@@ -777,9 +799,11 @@ static void stop_player(Video *v) {
     } else if (w) DestroyWindow(w);
 }
 static bool controls_here() { return !g_ctl_win || g_ctl_win == g_cw->id || !win_by_id(g_ctl_win); }
+static void snd_let_go();   // (the sound panel: a drag that was on ends, and is saved)
 static void hide_controls_now() {
     if (!controls_here()) return;   // (another window's: they stay)
     layer_hide(g_bottom); layer_hide(g_top); layer_hide(g_menu); layer_hide(g_center);
+    if (g_menu_page == 5) snd_let_go();
     g_menu_page = 0; g_menu_top = 0; g_hot = C_NONE; g_mouse_x = -1;
 }
 
@@ -1120,6 +1144,427 @@ static void paint_top(Video *v, float alpha) {
         text(rt, b, f_author.Get(), v->author, D2D1::RectF(S(24), S(40), g_top.w - S(24), S(62)), rgba(1, 1, 1, 0.8f), true);
     }, alpha);
 }
+// ---------------------------------------------------------------- the sound panel
+// Where the sound is heard (26/10: in Configuración it was «muy mal metido»): the player's menu > Sonido, and ⋯ >
+// Sonido while something plays in Pluma's player (YouTube Music's light page has no player on screen). One panel,
+// two looks: over the video, YouTube's (the menu's dark glass); from the bar, Pluma's own colours. As Spotify's and
+// the "Ears" extension's: the presets as chips, the equalizer as a curve whose points are dragged, then the bass, the
+// reverb and the pitch, and a reset. Everything sounds at once in every player; the setting is saved on release.
+static D2D1_COLOR_F alpha_of(D2D1_COLOR_F c, float a) { c.a *= a; return c; }
+struct SndLook {
+    bool video;   // over the video (YouTube's look) or from the bar (Pluma's)
+    D2D1_COLOR_F bg, ink, sub, line, track, fill, chip, chip_hot, chip_on, chip_on_ink, hot;
+    IDWriteTextFormat *label, *tiny, *head, *chip_f;   // (not "small": a macro of Windows)
+};
+enum { SP_NONE = -1, SP_BACK = 1, SP_RESET, SP_CURVE, SP_BASS, SP_REVERB, SP_PITCH, SP_CHIP = 100, SP_BAND = 200 };
+struct SndLayout {
+    float w = 0, h = 0, margin = 0;   // margin: around the card (the bar's look has a shadow there)
+    D2D1_RECT_F card{}, back{}, reset{}, graph{}, chips[16]{}, rows[3]{}, tracks[3]{};
+};
+static Layer g_snd;                  // the bar's panel (over the video it is the menu's layer, page 5)
+static int g_snd_win;                // ... its window
+static RECT g_snd_anchor;            // ... the button it hangs from (screen)
+static double g_snd_opened;
+static int g_snd_hot = SP_NONE, g_snd_drag = SP_NONE;
+static float g_snd_scroll;           // taller than the room it has: the wheel moves it
+static float g_snd_view_h;           // ... the part that shows
+static bool g_snd_pending;           // a change waits for its turn to reach the players
+static const UINT_PTR kSndTimer = 15, kSndWatch = 16;
+static ComPtr<IDWriteTextFormat> f_bar_label, f_bar_small, f_bar_head, f_bar_chip, f_chip;
+static std::wstring g_bar_fonts_for;
+static void make_bar_fonts() {
+    // Pluma's own typeface (the bar's): Windows's, or the one chosen
+    std::wstring key = std::to_wstring(ui_scale()) + L"|" + g_set.font;
+    if (key == g_bar_fonts_for && f_bar_label) return;
+    g_bar_fonts_for = key;
+    std::wstring fam = g_set.font.empty() ? L"Segoe UI Variable Text" : g_set.font;
+    IDWriteFontCollection *coll = fam == L"Roboto" ? g_roboto.Get() : nullptr;
+    auto mk = [&](float px, DWRITE_FONT_WEIGHT w) {
+        ComPtr<IDWriteTextFormat> f;
+        g_dw->CreateTextFormat(fam.c_str(), coll, w, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, L"es-es", &f);
+        if (!f) g_dw->CreateTextFormat(L"Segoe UI", nullptr, w, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px, L"es-es", &f);
+        if (f) { f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER); f->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP); }
+        return f;
+    };
+    f_bar_label = mk(S(14), DWRITE_FONT_WEIGHT_NORMAL);
+    f_bar_small = mk(S(11.5f), DWRITE_FONT_WEIGHT_NORMAL);
+    f_bar_head = mk(S(15), DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    f_bar_chip = mk(S(13), DWRITE_FONT_WEIGHT_NORMAL);
+}
+static SndLook snd_look(bool video) {
+    SndLook k;
+    k.video = video;
+    make_fonts();
+    static float chip_scale;
+    if (!f_chip || chip_scale != ui_scale()) { chip_scale = ui_scale(); f_chip = font(S(13), DWRITE_FONT_WEIGHT_MEDIUM); }
+    if (video) {
+        // the menu's glass; the chips as YouTube's (the chosen one white with dark text)
+        k.bg = rgba(0, 0, 0, 0.6f); k.ink = kText; k.sub = rgba(1, 1, 1, 0.7f); k.line = rgba(1, 1, 1, 0.2f);
+        k.track = rgba(1, 1, 1, 0.2f); k.fill = kWhite; k.chip = rgba(1, 1, 1, 0.1f); k.chip_hot = rgba(1, 1, 1, 0.2f);
+        k.chip_on = rgba(0.95f, 0.95f, 0.95f, 1); k.chip_on_ink = rgba(0.06f, 0.06f, 0.06f, 1); k.hot = rgba(1, 1, 1, 0.1f);
+        k.label = f_menu.Get(); k.tiny = f_tip.Get(); k.head = f_head.Get(); k.chip_f = f_chip.Get();
+    } else {
+        const Palette &p = pal();
+        make_bar_fonts();
+        k.bg = p.surface; k.ink = p.text; k.sub = p.sub; k.line = p.line; k.track = p.line; k.fill = p.accent;
+        k.chip = p.hover; k.chip_hot = p.press; k.chip_on = p.accent; k.chip_on_ink = rgba(1, 1, 1, 1); k.hot = p.hover;
+        k.label = f_bar_label.Get(); k.tiny = f_bar_small.Get(); k.head = f_bar_head.Get(); k.chip_f = f_bar_chip.Get();
+    }
+    return k;
+}
+static const wchar_t *kSndRowName[3] = { L"Graves", L"Reverberación", L"Tono" };
+static std::wstring band_text(int i) { int f = kEqFreq[i]; return f >= 1000 ? std::to_wstring(f / 1000) + L"k" : std::to_wstring(f); }
+static std::wstring signed_text(int v, const wchar_t *unit) { return (v > 0 ? L"+" : L"") + std::to_wstring(v) + unit; }
+static std::wstring pitch_text(int st);
+static std::wstring snd_value(int row, const SoundFx &fx) {
+    if (row == 0) return fx.bass ? signed_text(fx.bass, L" dB") : L"0 dB";
+    if (row == 1) return std::to_wstring(fx.reverb) + L" %";
+    return pitch_text(g_set.sound.pitch);
+}
+static float snd_width(const SndLook &k, float room) {
+    // over the video: as wide as the video lets it, between 340 and 560 (the chips in two rows, so it fits over a
+    // 1080p video's controls); from the bar, 400 (+ its shadow's margin)
+    if (!k.video) return S(400) + 2 * S(12);
+    return std::max(S(340), std::min(S(560), room));
+}
+static SndLayout snd_layout(const SndLook &k, float w) {
+    SndLayout L;
+    L.w = w; L.margin = k.video ? 0 : S(12);
+    float x0 = L.margin, x1 = w - L.margin, pad = S(16);
+    float y = L.margin;
+    // the head: back (over the video) or the panel's icon, its title, and the reset at the right
+    float rw = text_width(k.chip_f, T(L"Restablecer")) + S(50);
+    L.back = { x0 + S(8), y + S(12), x0 + S(40), y + S(44) };
+    L.reset = { x1 - S(12) - rw, y + S(12), x1 - S(12), y + S(44) };
+    y += S(57);
+    // the presets, as chips that wrap
+    float cx = x0 + pad, cy = y + S(12), ch = S(32);
+    for (int i = 0; i < kSoundPresetCount && i < 16; i++) {
+        float cw = text_width(k.chip_f, T(kSoundPresets[i].name)) + S(22);
+        if (cx + cw > x1 - pad && cx > x0 + pad) { cx = x0 + pad; cy += ch + S(8); }
+        L.chips[i] = { cx, cy, cx + cw, cy + ch };
+        cx += cw + S(6);
+    }
+    y = cy + ch + S(16);
+    // the curve (its frequencies under it)
+    L.graph = { x0 + pad, y, x1 - pad, y + S(104) };
+    y = L.graph.bottom + S(22);
+    // bass, reverb, pitch: an icon, the name, the slider, the value
+    float lw = 0;
+    for (auto n : kSndRowName) lw = std::max(lw, text_width(k.label, T(n)));
+    for (int r = 0; r < 3; r++) {
+        L.rows[r] = { x0 + S(8), y, x1 - S(8), y + S(42) };
+        float tl = x0 + S(52) + lw + S(16), tr = x1 - pad - S(56);
+        L.tracks[r] = { tl, y + S(21) - S(10), tr, y + S(21) + S(10) };
+        y += S(42);
+    }
+    y += S(8);
+    L.h = y + L.margin;
+    L.card = { x0, L.margin, x1, y };
+    return L;
+}
+static SoundFx snd_shown() { return sound_fx(g_set.sound); }
+static float band_y(const SndLayout &L, float g) {
+    float mid = (L.graph.top + L.graph.bottom) / 2, half = (L.graph.bottom - L.graph.top) / 2 - S(8);
+    return mid - g / 12.0f * half;
+}
+static float band_x(const SndLayout &L, int i) { return L.graph.left + (i + 0.5f) * (L.graph.right - L.graph.left) / kEqBands; }
+static void snd_draw(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, const SndLook &k, const SndLayout &L, float scroll, float view_h) {
+    SoundFx fx = snd_shown();
+    D2D1_RECT_F card = L.card;
+    if (!k.video) {
+        // a flat, lifted shadow as the bar's panels have, and the card
+        for (int i = 4; i >= 1; i--) {
+            float g = S(2.5f) * i;
+            b->SetColor(rgba(0, 0, 0, 0.035f));
+            rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(card.left - g + S(2), card.top - g + S(4), card.right + g - S(2), std::min(view_h, card.bottom - scroll) + g), S(14) + g, S(14) + g), b);
+        }
+    }
+    D2D1_RECT_F vis = { card.left, card.top, card.right, std::min(view_h - L.margin, card.bottom) };
+    b->SetColor(k.bg);
+    rt->FillRoundedRectangle(D2D1::RoundedRect(vis, S(k.video ? 12.0f : 14.0f), S(k.video ? 12.0f : 14.0f)), b);
+    if (!k.video) { b->SetColor(k.line); rt->DrawRoundedRectangle(D2D1::RoundedRect(vis, S(14), S(14)), b, S(1)); }
+    rt->PushAxisAlignedClip(vis, D2D1_ANTIALIAS_MODE_ALIASED);
+    D2D1_MATRIX_3X2_F old; rt->GetTransform(&old);
+    rt->SetTransform(D2D1::Matrix3x2F::Translation(0, -scroll) * old);
+    // head
+    float hy = L.margin + S(28);
+    if (k.video) {
+        if (g_snd_hot == SP_BACK) { b->SetColor(k.hot); rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(L.margin + S(24), hy), S(16), S(16)), b); }
+        draw_icon(rt, b, I_CHEV_L, L.margin + S(24), hy, S(24), k.ink);
+    } else draw_icon(rt, b, I_EQ, L.margin + S(26), hy, S(20), k.fill);
+    text(rt, b, k.head, T(L"Sonido"), D2D1::RectF(L.margin + S(48), hy - S(20), L.reset.left - S(8), hy + S(20)), k.ink);
+    {
+        D2D1_RECT_F r = L.reset;
+        b->SetColor(g_snd_hot == SP_RESET ? k.chip_hot : k.chip);
+        rt->FillRoundedRectangle(D2D1::RoundedRect(r, S(16), S(16)), b);
+        draw_icon(rt, b, I_REPLAY, r.left + S(12) + S(9), (r.top + r.bottom) / 2, S(18), k.ink);
+        text(rt, b, k.chip_f, T(L"Restablecer"), D2D1::RectF(r.left + S(38), r.top, r.right, r.bottom), k.ink);
+    }
+    b->SetColor(k.line);
+    rt->FillRectangle(D2D1::RectF(L.card.left, L.margin + S(56), L.card.right, L.margin + S(57)), b);
+    // the chips
+    for (int i = 0; i < kSoundPresetCount && i < 16; i++) {
+        D2D1_RECT_F r = L.chips[i];
+        bool on = g_set.sound.preset == kSoundPresets[i].id;
+        b->SetColor(on ? k.chip_on : g_snd_hot == SP_CHIP + i ? k.chip_hot : k.chip);
+        rt->FillRoundedRectangle(D2D1::RoundedRect(r, S(8), S(8)), b);
+        ComPtr<IDWriteTextLayout> tl;
+        std::wstring s = T(kSoundPresets[i].name);
+        if (SUCCEEDED(g_dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), k.chip_f, r.right - r.left, r.bottom - r.top, &tl))) {
+            tl->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            b->SetColor(on ? k.chip_on_ink : k.ink);
+            rt->DrawTextLayout(D2D1::Point2F(r.left, r.top), tl.Get(), b);
+        }
+    }
+    // the curve: lines at +12, 0 and -12 dB, the bands' points joined smoothly, the area to 0 dB shaded
+    D2D1_RECT_F g = L.graph;
+    float mid = band_y(L, 0);
+    b->SetColor(k.line);
+    for (float lv : { 12.0f, -12.0f }) rt->FillRectangle(D2D1::RectF(g.left, band_y(L, lv), g.right, band_y(L, lv) + S(1)), b);
+    b->SetColor(alpha_of(k.ink, 0.35f));
+    rt->FillRectangle(D2D1::RectF(g.left, mid, g.right, mid + S(1)), b);
+    D2D1_POINT_2F pt[kEqBands + 2];
+    pt[0] = D2D1::Point2F(g.left, band_y(L, (float)fx.eq[0]));
+    for (int i = 0; i < kEqBands; i++) pt[i + 1] = D2D1::Point2F(band_x(L, i), band_y(L, (float)fx.eq[i]));
+    pt[kEqBands + 1] = D2D1::Point2F(g.right, band_y(L, (float)fx.eq[kEqBands - 1]));
+    for (int pass = 0; pass < 2; pass++) {
+        // (0: the shaded area, closed along the 0 dB line; 1: the line itself)
+        ComPtr<ID2D1PathGeometry> path; ComPtr<ID2D1GeometrySink> sk;
+        if (FAILED(g_d2d->CreatePathGeometry(&path)) || FAILED(path->Open(&sk))) break;
+        sk->BeginFigure(pass == 0 ? D2D1::Point2F(g.left, mid) : pt[0], pass == 0 ? D2D1_FIGURE_BEGIN_FILLED : D2D1_FIGURE_BEGIN_HOLLOW);
+        if (pass == 0) sk->AddLine(pt[0]);
+        for (int i = 0; i + 1 < kEqBands + 2; i++) {
+            // Catmull-Rom through the points, as cubic Béziers
+            D2D1_POINT_2F p0 = pt[std::max(0, i - 1)], p1 = pt[i], p2 = pt[i + 1], p3 = pt[std::min(kEqBands + 1, i + 2)];
+            sk->AddBezier(D2D1::BezierSegment(D2D1::Point2F(p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6),
+                                              D2D1::Point2F(p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6), p2));
+        }
+        if (pass == 0) sk->AddLine(D2D1::Point2F(g.right, mid));
+        sk->EndFigure(pass == 0 ? D2D1_FIGURE_END_CLOSED : D2D1_FIGURE_END_OPEN);
+        sk->Close();
+        if (pass == 0) { b->SetColor(alpha_of(k.fill, 0.16f)); rt->FillGeometry(path.Get(), b); }
+        else { b->SetColor(k.fill); rt->DrawGeometry(path.Get(), b, S(2)); }
+    }
+    int hot_band = g_snd_drag >= SP_BAND ? g_snd_drag - SP_BAND : g_snd_hot >= SP_BAND ? g_snd_hot - SP_BAND : -1;
+    for (int i = 0; i < kEqBands; i++) {
+        float x = band_x(L, i), y = band_y(L, (float)fx.eq[i]), r = i == hot_band ? S(7) : S(5);
+        b->SetColor(k.fill);
+        rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x, y), r, r), b);
+        b->SetColor(k.video ? rgba(0, 0, 0, 0.5f) : k.bg);
+        rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x, y), r - S(2), r - S(2)), b);
+        ComPtr<IDWriteTextLayout> tl;
+        std::wstring s = band_text(i);
+        if (SUCCEEDED(g_dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), k.tiny, S(40), S(18), &tl))) {
+            tl->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            b->SetColor(i == hot_band ? k.ink : k.sub);
+            rt->DrawTextLayout(D2D1::Point2F(x - S(20), g.bottom + S(2)), tl.Get(), b);
+        }
+    }
+    if (hot_band >= 0) {
+        // the band's value over its point
+        std::wstring s = signed_text(fx.eq[hot_band], L" dB");
+        float tw = text_width(k.tiny, s) + S(14), x = std::max(g.left, std::min(g.right - tw, band_x(L, hot_band) - tw / 2));
+        float y = band_y(L, (float)fx.eq[hot_band]) - S(12) - S(22);
+        if (y < g.top - S(10)) y = band_y(L, (float)fx.eq[hot_band]) + S(12);
+        D2D1_RECT_F r = { x, y, x + tw, y + S(22) };
+        b->SetColor(k.video ? rgba(0, 0, 0, 0.8f) : k.ink);
+        rt->FillRoundedRectangle(D2D1::RoundedRect(r, S(6), S(6)), b);
+        ComPtr<IDWriteTextLayout> tl;
+        if (SUCCEEDED(g_dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), k.tiny, tw, S(22), &tl))) {
+            tl->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            b->SetColor(k.video ? kWhite : k.bg);
+            rt->DrawTextLayout(D2D1::Point2F(r.left, r.top), tl.Get(), b);
+        }
+    }
+    // bass, reverb, pitch
+    static const Icon icons[3] = { I_BASS, I_ROOM, I_NOTE };
+    for (int r = 0; r < 3; r++) {
+        D2D1_RECT_F row = L.rows[r], t = L.tracks[r];
+        float cy = (row.top + row.bottom) / 2;
+        bool hot = g_snd_hot == SP_BASS + r || g_snd_drag == SP_BASS + r;
+        draw_icon(rt, b, icons[r], row.left + S(8) + S(12), cy, S(22), k.video ? kWhite : k.sub);
+        text(rt, b, k.label, T(kSndRowName[r]), D2D1::RectF(row.left + S(44), row.top, t.left - S(8), row.bottom), k.ink);
+        // the track: from the middle for bass and pitch (they go both ways), from the left for the reverb
+        int lo = r == 1 ? 0 : r == 0 ? -12 : -6, hi = r == 1 ? 100 : r == 0 ? 12 : 6;
+        int val = r == 0 ? fx.bass : r == 1 ? fx.reverb : g_set.sound.pitch;
+        float kx = t.left + (t.right - t.left) * (val - lo) / (float)(hi - lo), from = r == 1 ? t.left : (t.left + t.right) / 2;
+        float th = S(4);
+        b->SetColor(k.track);
+        rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(t.left, cy - th / 2, t.right, cy + th / 2), th / 2, th / 2), b);
+        b->SetColor(k.fill);
+        rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(std::min(from, kx), cy - th / 2, std::max(from, kx), cy + th / 2), th / 2, th / 2), b);
+        if (r != 1) { b->SetColor(alpha_of(k.ink, 0.5f)); rt->FillRectangle(D2D1::RectF(from - S(0.5f), cy - S(5), from + S(0.5f), cy + S(5)), b); }
+        float kr = hot ? S(8) : S(6);
+        b->SetColor(k.fill);
+        rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(kx, cy), kr, kr), b);
+        ComPtr<IDWriteTextLayout> tl;
+        std::wstring s = snd_value(r, fx);
+        if (SUCCEEDED(g_dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), k.label, row.right - t.right - S(8), row.bottom - row.top, &tl))) {
+            tl->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+            b->SetColor(k.sub);
+            rt->DrawTextLayout(D2D1::Point2F(t.right + S(8), row.top), tl.Get(), b);
+        }
+    }
+    rt->SetTransform(old);
+    rt->PopAxisAlignedClip();
+    if (L.h > view_h + 1) {
+        // more than fits: a thin bar says where this is (the wheel moves it)
+        float track = view_h - L.margin * 2 - S(16), th = track * view_h / L.h, ty = L.margin + S(8) + track * scroll / L.h;
+        b->SetColor(alpha_of(k.ink, 0.3f));
+        rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(L.card.right - S(6), ty, L.card.right - S(3), ty + th), S(1.5f), S(1.5f)), b);
+    }
+}
+static int snd_hit(const SndLayout &L, float x, float y) {
+    auto in = [&](const D2D1_RECT_F &r) { return x >= r.left && x < r.right && y >= r.top && y < r.bottom; };
+    if (in(L.back) && L.margin == 0) return SP_BACK;
+    if (in(L.reset)) return SP_RESET;
+    for (int i = 0; i < kSoundPresetCount && i < 16; i++) if (in(L.chips[i])) return SP_CHIP + i;
+    D2D1_RECT_F g = { L.graph.left, L.graph.top - S(6), L.graph.right, L.graph.bottom + S(18) };
+    if (in(g)) return SP_BAND + std::max(0, std::min(kEqBands - 1, (int)((x - L.graph.left) / ((L.graph.right - L.graph.left) / kEqBands))));
+    for (int r = 0; r < 3; r++) {
+        D2D1_RECT_F t = { L.tracks[r].left - S(10), L.rows[r].top, L.tracks[r].right + S(10), L.rows[r].bottom };
+        if (in(t)) return SP_BASS + r;
+    }
+    return SP_NONE;
+}
+static void snd_send(bool final) {
+    // every player hears it now (at most every 90 ms while a point moves: each change rebuilds mpv's filters), and
+    // the setting is saved when the mouse lets go
+    sound_clamp(g_set.sound);
+    if (final) { if (g_snd_pending) KillTimer(g_msg, kSndTimer); g_snd_pending = false; settings_save(); video_sound_changed(); return; }
+    if (g_snd_pending) return;
+    g_snd_pending = true;
+    SetTimer(g_msg, kSndTimer, 90, [](HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_msg, id); g_snd_pending = false; video_sound_changed(); });
+}
+static void snd_own() {
+    // moving the equalizer, the bass or the reverb makes the sound the person's own, from what played until now
+    if (g_set.sound.preset == L"personalizado") return;
+    SoundFx f = snd_shown();
+    for (int i = 0; i < kEqBands; i++) g_set.sound.custom.eq[i] = f.eq[i];
+    g_set.sound.custom.bass = f.bass;
+    g_set.sound.custom.reverb = f.reverb;
+    g_set.sound.preset = L"personalizado";
+}
+static bool snd_set(const SndLayout &L, int part, float x, float y) {
+    // a press or a drag on a point or a slider: its value from where the mouse is
+    SoundSettings &s = g_set.sound;
+    if (part >= SP_BAND) {
+        int i = part - SP_BAND;
+        float mid = band_y(L, 0), half = (L.graph.bottom - L.graph.top) / 2 - S(8);
+        int v = std::max(-12, std::min(12, (int)lroundf((mid - y) / half * 12)));
+        if (v == snd_shown().eq[i]) return false;
+        snd_own(); s.custom.eq[i] = v;
+        return true;
+    }
+    int r = part - SP_BASS;
+    if (r < 0 || r > 2) return false;
+    D2D1_RECT_F t = L.tracks[r];
+    int lo = r == 1 ? 0 : r == 0 ? -12 : -6, hi = r == 1 ? 100 : r == 0 ? 12 : 6;
+    float k = std::max(0.0f, std::min(1.0f, (x - t.left) / std::max(1.0f, t.right - t.left)));
+    int v = (int)lroundf(lo + k * (hi - lo));
+    if (r == 1) v = (v + 2) / 5 * 5;   // (the reverb in steps of 5 %)
+    if (r == 2) { if (v == s.pitch) return false; s.pitch = v; return true; }
+    SoundFx f = snd_shown();
+    if ((r == 0 ? f.bass : f.reverb) == v) return false;
+    snd_own();
+    (r == 0 ? s.custom.bass : s.custom.reverb) = v;
+    return true;
+}
+// the mouse over the panel (x, y in the layer's pixels); true: draw it again. back: the head's back arrow was clicked
+static bool snd_mouse(const SndLayout &L, HWND h, UINT msg, float x, float y, bool *back) {
+    y += g_snd_scroll;
+    int part = snd_hit(L, x, y);
+    if (msg == WM_MOUSEMOVE) {
+        if (g_snd_drag != SP_NONE) {
+            int d = g_snd_drag;
+            if (snd_set(L, d, x, y)) snd_send(false);
+            return true;
+        }
+        if (part != g_snd_hot) { g_snd_hot = part; return true; }
+        return false;
+    }
+    if (msg == WM_MOUSELEAVE) { if (g_snd_drag == SP_NONE && g_snd_hot != SP_NONE) { g_snd_hot = SP_NONE; return true; } return false; }
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+        if (part >= SP_BAND || (part >= SP_BASS && part <= SP_PITCH)) {
+            // (a press already sets the value: a click is enough, as on any slider)
+            g_snd_drag = part; g_snd_hot = part;
+            SetCapture(h);
+            if (snd_set(L, part, x, y)) snd_send(false);
+            return true;
+        }
+        return false;
+    }
+    if (msg == WM_LBUTTONUP) {
+        if (g_snd_drag != SP_NONE) { g_snd_drag = SP_NONE; ReleaseCapture(); snd_send(true); g_snd_hot = part; return true; }
+        if (part == SP_BACK) { if (back) *back = true; return true; }
+        if (part == SP_RESET) {
+            SoundSettings s; g_set.sound = s;
+            log_line(L"sonido: restablecido");
+            snd_send(true);
+            return true;
+        }
+        if (part >= SP_CHIP && part < SP_CHIP + kSoundPresetCount) {
+            g_set.sound.preset = kSoundPresets[part - SP_CHIP].id;
+            log_line(L"sonido: efecto «" + g_set.sound.preset + L"»");
+            snd_send(true);
+            return true;
+        }
+    }
+    return false;
+}
+static void snd_let_go() { if (g_snd_drag != SP_NONE) { g_snd_drag = SP_NONE; ReleaseCapture(); snd_send(true); } }
+static bool snd_wheel(const SndLayout &L, int delta) {
+    float max = std::max(0.0f, L.h - g_snd_view_h);
+    float s = std::max(0.0f, std::min(max, g_snd_scroll - delta / 120.0f * S(48)));
+    if (s == g_snd_scroll) return false;
+    g_snd_scroll = s;
+    return true;
+}
+// the bar's panel: under ⋯, its right edge on the button's, kept on the screen (a test instance's stays off it)
+static SndLayout snd_bar_layout(SndLook &k) { return snd_layout(k, snd_width(k, 0)); }
+static void snd_bar_close() {
+    snd_let_go();
+    layer_hide(g_snd);
+    if (g_msg) KillTimer(g_msg, kSndWatch);
+    g_snd_hot = SP_NONE;
+}
+static void paint_snd_bar() {
+    Window *win = win_by_id(g_snd_win);
+    if (!win || !IsWindowVisible(win->hwnd) || IsIconic(win->hwnd)) { snd_bar_close(); return; }
+    WinScope ws(win);
+    SndLook k = snd_look(false);
+    SndLayout L = snd_bar_layout(k);
+    int w = (int)ceilf(L.w), h = (int)ceilf(L.h), m = (int)L.margin;
+    int x = g_snd_anchor.right - w + m, y = g_snd_anchor.bottom + (int)S(4) - m;
+    if (!g_test || g_test_visible) {
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromRect(&g_snd_anchor, MONITOR_DEFAULTTONEAREST), &mi);
+        x = std::max((int)mi.rcWork.left - m, std::min(x, (int)mi.rcWork.right - w + m));
+        h = std::max((int)S(200), std::min(h, (int)mi.rcWork.bottom + m - y));
+    }
+    g_snd_view_h = (float)h;
+    g_snd_scroll = std::max(0.0f, std::min(g_snd_scroll, L.h - h));
+    int keep = g_ctl_win;   // (the player's controls stay where they are)
+    layer_place(g_snd, x, y, w, h, false);
+    g_ctl_win = keep;
+    layer_show(g_snd, [&](ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b) { snd_draw(rt, b, k, L, g_snd_scroll, (float)h); }, 1);
+}
+static void CALLBACK snd_watch(HWND, UINT, UINT_PTR, DWORD) {
+    // it goes with a click elsewhere, Esc, or its window out of sight (clicks on a page never reach Pluma: watched)
+    Window *win = win_by_id(g_snd_win);
+    if (!g_snd.shown) { KillTimer(g_msg, kSndWatch); return; }
+    if (!win || !IsWindowVisible(win->hwnd) || IsIconic(win->hwnd)) { snd_bar_close(); return; }
+    if (g_test) return;   // (the mouse and the keys of a test instance's PC are the person's)
+    POINT c; GetCursorPos(&c);
+    RECT r; GetWindowRect(g_snd.h, &r);
+    bool over = PtInRect(&r, c) != FALSE;
+    // (down now, or pressed since the last look: a quick click lasts less than a tick)
+    bool click = ((GetAsyncKeyState(VK_LBUTTON) | GetAsyncKeyState(VK_RBUTTON)) & 0x8001) != 0;
+    if ((click && !over && g_snd_drag == SP_NONE && now_ms() - g_snd_opened > 300) ||
+        ((GetAsyncKeyState(VK_ESCAPE) & 0x8000) && GetForegroundWindow() == win->hwnd))
+        snd_bar_close();
+}
 // a row of the menu; on the main page, what it opens (go: a page; -1, the loop, which just switches)
 struct MenuRow { Icon icon; std::wstring label, value; bool on; int go = 0; };
 static std::wstring pitch_text(int st) {
@@ -1132,9 +1577,11 @@ static std::vector<MenuRow> menu_rows(Video *v) {
         rows.push_back({ I_REPLAY, T(L"Bucle"), v->loop ? T(L"Activado") : T(L"Desactivado"), false, -1 });
         if (!v->caps.empty()) rows.push_back({ I_CC_OFF, T(L"Subtítulos"), v->sub >= 0 ? v->caps[v->sub].name : T(L"Desactivados"), false, 4 });
         rows.push_back({ I_SPEED, T(L"Velocidad de reproducción"), speed_text(v->speed), false, 3 });
+        // the sound panel: what plays now (the effect, or the pitch alone)
         const SoundPreset *fx = sound_preset(g_set.sound.preset);
-        rows.push_back({ I_EQ, T(L"Efectos de sonido"), T(fx ? fx->name : L"Desactivado"), false, 5 });
-        rows.push_back({ I_NOTE, T(L"Tono"), pitch_text(g_set.sound.pitch), false, 6 });
+        std::wstring snd = T(fx ? fx->name : L"Desactivado");
+        if (g_set.sound.pitch && g_set.sound.preset == L"no") snd = std::wstring(T(L"Tono")) + L" " + pitch_text(g_set.sound.pitch);
+        rows.push_back({ I_EQ, T(L"Sonido"), snd, false, 5 });
         std::wstring q = v->vf >= 0 ? std::to_wstring(v->fmts[v->vf].h) + L"p" : L"";
         rows.push_back({ I_QUALITY, T(L"Calidad"), v->auto_quality ? T(L"Automática (") + q + L")" : quality_text(v->vf >= 0 ? v->fmts[v->vf].h : 0), false, 2 });
     } else if (g_menu_page == 2) {
@@ -1148,16 +1595,31 @@ static std::vector<MenuRow> menu_rows(Video *v) {
     } else if (g_menu_page == 4) {
         rows.push_back({ I_COUNT, T(L"Desactivados"), L"", v->sub < 0 });
         for (size_t i = 0; i < v->caps.size(); i++) rows.push_back({ I_COUNT, v->caps[i].name, L"", (int)i == v->sub });
-    } else if (g_menu_page == 5) {
-        for (int i = 0; i < kSoundPresetCount; i++) rows.push_back({ I_COUNT, T(kSoundPresets[i].name), L"", g_set.sound.preset == kSoundPresets[i].id });
-    } else if (g_menu_page == 6) {
-        for (int st = 6; st >= -6; st--) rows.push_back({ I_COUNT, pitch_text(st), L"", g_set.sound.pitch == st });
     }
     return rows;
 }
 static float menu_head() { return g_menu_page > 1 ? S(57) : 0; }
+static void paint_sound_menu(Video *v) {
+    // the sound panel in the menu's place: at the right over the controls, as wide as the video lets it; taller than
+    // the room over the controls, it goes up over the page (to just under Pluma's bar) and then the wheel moves it
+    RECT vr = player_rect(v);
+    POINT o = { vr.left, vr.top }; ClientToScreen(g_win, &o);
+    POINT co = { 0, 0 }; ClientToScreen(g_win, &co);
+    SndLook k = snd_look(true);
+    int w = (int)snd_width(k, (float)(vr.right - vr.left) - S(24));
+    SndLayout L = snd_layout(k, (float)w);
+    int bottom = o.y + (vr.bottom - vr.top) - (int)S(62);
+    int top = co.y + (int)ui_band_height() + (int)S(8);   // (never over Pluma's own bar: the tabs and the address)
+    int h = std::max((int)S(160), std::min((int)ceilf(L.h), (int)(bottom - top)));
+    g_snd_view_h = (float)h;
+    g_snd_scroll = std::max(0.0f, std::min(g_snd_scroll, L.h - h));
+    int x = std::max(co.x + (int)S(8), o.x + (vr.right - vr.left) - (int)S(12) - w);
+    layer_place(g_menu, x, bottom - h, w, h, false);
+    layer_show(g_menu, [&](ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b) { snd_draw(rt, b, k, L, g_snd_scroll, (float)h); }, 1);
+}
 static void paint_menu(Video *v) {
     if (!g_menu_page) { layer_hide(g_menu); return; }
+    if (g_menu_page == 5) { paint_sound_menu(v); return; }
     auto rows = menu_rows(v);
     RECT vr = player_rect(v);
     POINT o = { vr.left, vr.top }; ClientToScreen(g_win, &o);
@@ -1185,7 +1647,7 @@ static void paint_menu(Video *v) {
         rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0, 0, (float)w, (float)h), S(12), S(12)), b);
         float y0 = S(8);
         if (g_menu_page > 1) {
-            const wchar_t *titles[] = { L"", L"", T(L"Calidad"), T(L"Velocidad de reproducción"), T(L"Subtítulos"), T(L"Efectos de sonido"), T(L"Tono") };
+            const wchar_t *titles[] = { L"", L"", T(L"Calidad"), T(L"Velocidad de reproducción"), T(L"Subtítulos") };
             if (g_menu_hot == -2) { b->SetColor(rgba(1, 1, 1, 0.1f)); rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(S(24), S(28)), S(16), S(16)), b); }
             draw_icon(rt, b, I_CHEV_L, S(24), S(28), S(24), kWhite);
             text(rt, b, f_head.Get(), titles[g_menu_page], D2D1::RectF(S(48), S(8), w - S(16), S(48)), kText);
@@ -1588,13 +2050,7 @@ static void menu_click(Video *v, int row) {
         }
         g_menu_page = rows[row].go;
         g_menu_top = -1;   // (where the chosen one is, once painted)
-    } else if (g_menu_page == 5) {
-        // a sound effect: for this video and every next one (ajustes.ini), and the settings page shows it
-        if (row < kSoundPresetCount) { g_set.sound.preset = kSoundPresets[row].id; settings_save(); video_sound_changed(); }
-        g_menu_page = 0;
-    } else if (g_menu_page == 6) {
-        if (row < 13) { g_set.sound.pitch = 6 - row; settings_save(); video_sound_changed(); }
-        g_menu_page = 0;
+        if (g_menu_page == 5) { g_snd_scroll = 0; g_snd_hot = g_snd_drag = SP_NONE; }
     } else if (g_menu_page == 2) {
         auto rows = menu_rows(v);
         if (row < (int)rows.size()) set_quality(v, row == (int)rows.size() - 1 ? 0 : _wtoi(rows[row].label.c_str()));
@@ -1654,6 +2110,17 @@ static bool cursor_moved(HWND h, LPARAM lp) {
     g_last_cursor = pt;
     return true;
 }
+static LRESULT snd_bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    SndLook k = snd_look(false);
+    SndLayout L = snd_bar_layout(k);
+    if (msg == WM_MOUSEWHEEL) { if (snd_wheel(L, GET_WHEEL_DELTA_WPARAM(wp))) paint_snd_bar(); return 0; }
+    if (msg == WM_SETCURSOR) { SetCursor(LoadCursorW(NULL, g_snd_hot != SP_NONE ? IDC_HAND : IDC_ARROW)); return TRUE; }
+    if (msg == WM_CAPTURECHANGED) { if (g_snd_drag != SP_NONE) { g_snd_drag = SP_NONE; snd_send(true); paint_snd_bar(); } return 0; }
+    if (msg == WM_MOUSEMOVE) track_leave(h);
+    if (snd_mouse(L, h, msg, (float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp), nullptr)) paint_snd_bar();
+    if ((msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || msg == WM_MOUSELEAVE) return 0;
+    return DefWindowProcW(h, msg, wp, lp);
+}
 static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
     // Windows hides the controls with the window minimized and shows them again when it comes back, by itself
@@ -1661,8 +2128,26 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     // and stayed on the screen, over a new tab, after the video had gone (25/10). Pluma alone shows and hides them
     if (msg == WM_SHOWWINDOW && lp != 0) return 0;
     WinScope ws(win_of_hwnd(h));   // (the window they are over)
+    if (h == g_snd.h) return snd_bar_proc(h, msg, wp, lp);   // (the bar's sound panel: no player needed)
     Video *v = V(active_tab());
     if (!v || v->stage != ST_ON) return DefWindowProcW(h, msg, wp, lp);
+    if (h == g_menu.h && g_menu_page == 5) {
+        // the sound panel, in the menu's place
+        SndLook k = snd_look(true);
+        SndLayout L = snd_layout(k, (float)g_menu.w);
+        if (msg == WM_MOUSEWHEEL) { if (snd_wheel(L, GET_WHEEL_DELTA_WPARAM(wp))) paint_menu(v); return 0; }
+        if (msg == WM_SETCURSOR) { SetCursor(LoadCursorW(NULL, g_snd_hot != SP_NONE ? IDC_HAND : IDC_ARROW)); return TRUE; }
+        if (msg == WM_CAPTURECHANGED) { if (g_snd_drag != SP_NONE) { g_snd_drag = SP_NONE; snd_send(true); paint_menu(v); } return 0; }
+        if (msg == WM_MOUSEMOVE) { track_leave(h); v->last_move = now_ms(); }
+        bool back = false;
+        if (snd_mouse(L, h, msg, (float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp), &back)) {
+            if (back) { g_menu_page = 1; g_menu_hot = -1; g_menu_top = 0; g_snd_hot = SP_NONE; paint_all(v); }
+            else paint_menu(v);
+        }
+        if (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) return 0;
+        if (msg == WM_MOUSELEAVE) return 0;
+        return DefWindowProcW(h, msg, wp, lp);
+    }
     if (msg == WM_MOUSEWHEEL && h == g_menu.h) {
         // a menu page taller than the video: its rows move
         g_menu_top += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1;
@@ -2683,6 +3168,7 @@ struct Audio {
     std::wstring id, error;
     double dur = 0, volume = 100, start = 0, asked = 0, still_since = 0, last_pos = -1;
     bool paused = false, eof = false, loading = false, loaded = false, muted = false, buffering = false;
+    std::string filters = "-";   // its sound effects now (as a Video's)
 };
 static Audio g_audio;   // one for all of Pluma: a second Music tab that plays takes it over
 static std::map<int, double> g_music_asked;   // light Music tabs being asked, and when the last question went
@@ -2742,6 +3228,12 @@ static void audio_set_volume() {
     M.set_property(g_audio.mpv, "volume", MPV_FORMAT_DOUBLE, &vol);
     int m = g_audio.muted ? 1 : 0;
     M.set_property(g_audio.mpv, "mute", MPV_FORMAT_FLAG, &m);
+}
+static void audio_apply_sound() {
+    // the music hears the sound effects too (nightcore and slowed: its speed with them)
+    if (!g_audio.mpv) return;
+    double sp = apply_af(g_audio.mpv, g_audio.filters).rate;
+    M.set_property(g_audio.mpv, "speed", MPV_FORMAT_DOUBLE, &sp);
 }
 static void audio_events() {
     while (g_audio.mpv) {
@@ -2820,6 +3312,7 @@ static void audio_play(Tab *t, const Json &c) {
             if (!why.empty()) { log_line(L"música: no (" + why + L")"); g_audio.error = why; g_audio.loading = false; return; }
             if (!audio_mpv()) { g_audio.error = L"motor"; g_audio.loading = false; return; }
             audio_set_volume();
+            audio_apply_sound();
             char st[64]; sprintf_s(st, "start=%.3f,pause=no", g_audio.start);
             const char *args[] = { "loadfile", local.c_str(), "replace", "-1", st, NULL };
             M.command_async(g_audio.mpv, 0, args);
@@ -2930,7 +3423,7 @@ void video_debug_shot(const std::wstring &path) {
     PrintWindow(g_win, mdc, PW_CLIENTONLY | 2 /* PW_RENDERFULLCONTENT */);
     SelectObject(mdc, old);
     POINT o = { 0, 0 }; ClientToScreen(g_win, &o);
-    for (Layer *l : { &g_bottom, &g_top, &g_center, &g_menu }) {
+    for (Layer *l : { &g_bottom, &g_top, &g_center, &g_menu, &g_snd }) {
         if (!l->shown || !l->bits) continue;
         for (int y = 0; y < l->hh; y++)
             for (int x = 0; x < l->w; x++) {
@@ -3035,8 +3528,28 @@ void video_sound_changed() {
     // the sound effects or the pitch changed (the settings page, or a player's menu): every player, at once (the
     // settings page is a tab of its own, so the video plays in another one while its sliders move)
     for (Tab *tab : all_tabs()) { Video *v = V(tab); if (v && v->mpv) apply_sound(v); }
-    Video *v = V(active_tab());
-    if (v && v->stage == ST_ON && g_menu_page) paint_menu(v);
+    audio_apply_sound();
+    { WinScope ws(ctl_window()); Video *v = V(active_tab()); if (v && v->stage == ST_ON && g_menu_page) paint_menu(v); }
+    if (g_snd.shown) paint_snd_bar();
+}
+void video_sound_panel(RECT anchor) {
+    // ⋯ > Sonido: the panel in Pluma's colours, under that button, in the current window
+    if (!g_msg) return;
+    if (g_snd.shown) { bool here = g_snd_win == g_cw->id; snd_bar_close(); if (here) return; }   // (asked again: it goes)
+    g_snd_win = g_cw->id; g_snd_anchor = anchor; g_snd_opened = now_ms();
+    g_snd_scroll = 0; g_snd_hot = g_snd_drag = SP_NONE;
+    paint_snd_bar();
+    SetTimer(g_msg, kSndWatch, 150, snd_watch);
+    log_line(L"sonido: panel abierto desde el menú");
+}
+void video_sound_panel_close() {
+    // another popup, a click on the bar or a page: it goes (not in the moment it opens: the menu's own focus going back)
+    if (g_snd.shown && now_ms() - g_snd_opened > 400) snd_bar_close();
+}
+bool video_sound_useful() {
+    if (g_audio.mpv && g_audio.loaded) return true;
+    for (Tab *t : all_tabs()) if (video_on(t)) return true;
+    return false;
 }
 double video_position(Tab *t) { Video *v = V(t); return v ? refresh_pos(v) : 0; }
 bool video_focus() { Video *v = V(active_tab()); if (!v || v->stage != ST_ON || !v->wnd) return false; SetFocus(v->wnd); return true; }
@@ -3065,7 +3578,7 @@ void video_tab_moved(Tab *t) {
 }
 void video_leave_window(HWND gone, HWND to) {
     // a window closes: the controls and the photo (one set, for all windows) stay, out of sight, over another
-    for (Layer *l : { &g_bottom, &g_top, &g_menu, &g_center })
+    for (Layer *l : { &g_bottom, &g_top, &g_menu, &g_center, &g_snd })
         if (l->h && (HWND)GetWindowLongPtrW(l->h, GWLP_HWNDPARENT) == gone) { layer_hide(*l); SetWindowLongPtrW(l->h, GWLP_HWNDPARENT, (LONG_PTR)to); }
     if (g_photo && GetParent(g_photo) == gone) { KillTimer(g_msg, kPhotoTimer); g_photo_leaving = false; ShowWindow(g_photo, SW_HIDE); SetParent(g_photo, to); }
     Window *w = win_of_hwnd(to);
