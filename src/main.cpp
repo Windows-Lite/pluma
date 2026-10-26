@@ -170,6 +170,7 @@ void settings_load() {
     g_set.youtube_lite = ini_get(L"youtube_ligero", L"1") != L"0";
     g_set.suggest_top = ini_get(L"sugerir_visitadas", L"1") != L"0";
     g_set.bookmarks_bar = ini_get(L"barra_marcadores", L"0") == L"1";
+    g_set.reader_size = std::min(40, std::max(12, _wtoi(ini_get(L"lectura_letra", L"20").c_str())));
     g_set.schemes.clear();
     std::wstring sc = ini_get(L"protocolos", L"ytmp3");
     size_t pos = 0;
@@ -198,6 +199,7 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"video_propio", g_set.native_video ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"youtube_ligero", g_set.youtube_lite ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"sugerir_visitadas", g_set.suggest_top ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"lectura_letra", std::to_wstring(g_set.reader_size).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"barra_marcadores", g_set.bookmarks_bar ? L"1" : L"0", f.c_str());
     std::wstring sc;
     for (auto &s : g_set.schemes) sc += (sc.empty() ? L"" : L",") + s;

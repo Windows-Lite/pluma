@@ -44,6 +44,9 @@ jobs:
           Copy-Item Pluma.exe, instalar.ps1, README.md $d
           Copy-Item extensiones, fuentes "$d" -Recurse
           Copy-Item tools\motor-video.ps1 "$d\tools"
+          # third-party code inside Pluma.exe: its license goes with it
+          New-Item -ItemType Directory "$d\licencias" | Out-Null
+          Copy-Item src\readability\LICENSE.md "$d\licencias\readability-LICENSE.md"
           Compress-Archive $d "$d.zip"
           # "<sha256>  <file>": Pluma checks the download against it before updating
           "$((Get-FileHash "$d.zip" -Algorithm SHA256).Hash.ToLower())  $d.zip" | Set-Content -NoNewline -Encoding ascii "$d.zip.sha256"

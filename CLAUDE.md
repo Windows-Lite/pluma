@@ -53,6 +53,7 @@ código y commits en inglés; nada de em dashes.
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
 - `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
 - `src/youtube.cpp` + `src/youtube.html`: YouTube ligero (apartado de abajo).
+- `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
 - `Pluma.exe` no va en git (25/10, el usuario: «no debería estar en el repo»): cada push a `main` lo compila una Action
@@ -211,6 +212,31 @@ Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos me
   `cver`, `cpn` como YouTube.js: `playback` al empezar y `watchtime` cada 30 s y al salir.
 - Pruebas de los lectores: `node tools\youtube-test.js` (respuestas reales recortadas en `tools\yt-respuestas`).
   Probar el flujo con sesión no se puede en la instancia de prueba: va sin cuenta.
+
+## Modo lectura (`src/reader.cpp`, `src/reader.html`)
+Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como la vista de lectura de Firefox.
+- Readability de Mozilla 0.6.0 sin tocar (`src/readability/`, Apache-2.0; su licencia va en el zip, `licencias\`).
+  En cada página (DOMContentLoaded; otra vez al acabar de cargar y 1,5 s después de un cambio de dirección hecho por
+  la propia página) `isProbablyReaderable` en la página (1-3 ms; nunca la portada de un sitio: ruta `/`). Si es un
+  artículo, sale el libro en la barra, delante de la estrella. Clic o F9: Readability lee una copia del documento en la
+  página (15-70 ms) y Pluma vuelve a cargar esa misma dirección contestando ese documento (WebResourceRequested, un
+  filtro solo para esa dirección que se quita al servir) con `reader.html` (RCDATA 210) y el artículo dentro. Misma
+  dirección y origen: barra, estrella, historial, icono e imágenes como siempre; ningún script de la web corre.
+  Salir (libro, F9, «Salir del modo lectura»): recarga, y la web vuelve a ser la suya (se sirve una sola vez).
+- Seguridad: el HTML del artículo no es de fiar. CSP propia (solo el script de la página, con un nonce por página;
+  nada de frames, formularios ni conexiones), el JSON del artículo sin ningún `<` y `clean()` en la página: lista
+  blanca de etiquetas y atributos, solo direcciones http(s) (y `data:image` de mapa de bits), los id con `r-` delante.
+  Prueba: `node tools\reader-test.js <puerto> tools\captura.exe PlumaVentana.<nombre> click <x> <y del libro>`
+  (sirve un artículo con 23 vectores de XSS).
+- La página no habla con Pluma (como todas): pide imágenes a `https://lector.pluma.local/<token>?size=|always=|exit=`,
+  que Pluma contesta (204) solo si el token es el de la página de esa pestaña. Letra: `lectura_letra` en
+  `ajustes.ini`; «Abrir siempre en modo lectura» por sitio en `lectura.tsv` (un host por línea, sin `www.`; desde
+  incógnito no se escribe); entonces sus artículos (los que dicen serlo: `og:type` article o JSON-LD Article/Posting)
+  pasan solos al modo lectura en DOMContentLoaded, salvo la dirección de la que se acaba de salir. Configuración >
+  Modo lectura lista esos sitios para quitarlos.
+- Medido el 26/10 (artículo cargado y luego modo lectura): El País 204 -> 198 MB, The Verge 348 -> 231 MB; el modo
+  lectura pide 18-155 KB (sus fotos) frente a 0,4-3 MB de la página, pero va después de cargarla: ahorra al leer, no
+  al abrir (salvo el automático, que corta la página en DOMContentLoaded).
 
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en

@@ -19,6 +19,9 @@ Edge's engine (WebView2) behind a native interface of its own.</p>
 - **YouTube in its own player**: videos play in Pluma's player (libmpv) in their place in the page, with YouTube's
   controls, keys and qualities up to 4K, while the heavy page sleeps behind it. A click or the wheel on the page wakes
   it at the same second.
+- **Reader view**: the book in the address bar (or F9) on an article shows just its text and pictures, light or dark,
+  with the font size you choose; a site can open its articles in reader view always. Uses Mozilla's
+  [Readability](https://github.com/mozilla/readability) (Apache-2.0, `src/readability`).
 - **Built in**: incognito tabs, uBlock Origin Lite, Chrome extensions from the Web Store, user scripts (Violentmonkey style),
   saved passwords, downloads, find, zoom, print.
 - **Native**: C++17, Win32, Direct2D and DirectWrite, one ~1 MB executable. Light, dark or as Windows (the default);

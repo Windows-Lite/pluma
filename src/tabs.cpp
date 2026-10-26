@@ -310,6 +310,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     ICoreWebView2 *v = t->view.Get();
     settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
     youtube_attach(t);    // and its light YouTube
+    reader_attach(t);     // and the reader view
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {

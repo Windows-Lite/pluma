@@ -1,0 +1,230 @@
+<!doctype html>
+<!-- Pluma's reader view, inside the exe (RCDATA 210). reader.cpp answers the article's own address with it, with the
+     article (parsed in the page by Mozilla's Readability) written into #pluma-data, its own CSP (only this script, by
+     its nonce) and the texts in the person's language (t('...'), written in Spanish as the code).
+     The article's HTML is untrusted: clean() keeps only an allowlist of tags, attributes and http(s) addresses. -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="pluma-reader" content="PLUMA_TOKEN">
+<title></title>
+<style>
+:root {
+  --bg: #f7f7f9; --text: #1b1b1f; --sub: #5f6168; --line: #e2e3e8; --hover: #ededf1; --pill: #ffffff;
+  --accent: #2f6fed; --code: #ededf1; --fs: 20px;
+  color-scheme: light;
+}
+:root.dark {
+  --bg: #1c1d21; --text: #e4e4e9; --sub: #a3a5ad; --line: #36373d; --hover: #303137; --pill: #26272c;
+  --accent: #6d9cff; --code: #26272c;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; color: var(--text); font: var(--fs)/1.62 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+#bar { position: fixed; top: 12px; right: 14px; display: flex; align-items: center; gap: 4px; padding: 4px; z-index: 2;
+       background: var(--pill); border: 1px solid var(--line); border-radius: 14px; font-size: 13px; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+#bar button, #bar label { height: 30px; min-width: 30px; padding: 0 9px; border: 0; border-radius: 10px; background: none; color: var(--text);
+       font: inherit; display: flex; align-items: center; gap: 7px; cursor: default; }
+#bar button:hover, #bar label:hover { background: var(--hover); }
+#bar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+#bar .a { font-weight: 600; }
+#bar .a.small { font-size: 12px; } #bar .a.big { font-size: 16px; }
+#bar input { margin: 0; accent-color: var(--accent); }
+#bar svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.6; fill: none; stroke-linecap: round; }
+main { max-width: 34em; margin: 0 auto; padding: 72px 24px 120px; }
+#site { color: var(--sub); font-size: .72em; letter-spacing: .02em; }
+#site a { color: inherit; text-decoration: none; }
+#site a:hover { text-decoration: underline; }
+h1#title { font-size: 1.75em; line-height: 1.22; font-weight: 650; margin: .3em 0 .45em; letter-spacing: -.01em; }
+#meta { color: var(--sub); font-size: .76em; padding-bottom: 1.3em; margin-bottom: 1.5em; border-bottom: 1px solid var(--line); }
+#meta span + span::before { content: "\00b7"; margin: 0 .55em; }
+#content { overflow-wrap: break-word; }
+#content h1, #content h2, #content h3, #content h4 { line-height: 1.3; margin: 1.5em 0 .5em; }
+#content h1 { font-size: 1.4em; } #content h2 { font-size: 1.25em; } #content h3 { font-size: 1.1em; } #content h4 { font-size: 1em; }
+#content p, #content ul, #content ol, #content blockquote, #content figure, #content pre, #content table { margin: 0 0 1em; }
+#content a { color: var(--accent); text-decoration: none; }
+#content a:hover { text-decoration: underline; }
+#content img, #content picture { max-width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 6px; }
+#content figure { margin-left: 0; margin-right: 0; }
+#content figcaption { color: var(--sub); font-size: .76em; line-height: 1.45; margin-top: .5em; }
+#content blockquote { border-left: 3px solid var(--line); padding-left: 1em; margin-left: 0; color: var(--sub); }
+#content pre, #content code { font-family: "Cascadia Mono", Consolas, monospace; font-size: .82em; background: var(--code); border-radius: 6px; }
+#content code { padding: .1em .3em; }
+#content pre { padding: .9em 1em; overflow-x: auto; }
+#content pre code { padding: 0; background: none; font-size: 1em; }
+#content table { border-collapse: collapse; font-size: .85em; display: block; overflow-x: auto; }
+#content th, #content td { border: 1px solid var(--line); padding: .35em .6em; text-align: left; }
+#content hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+#content li + li { margin-top: .25em; }
+#fail { color: var(--sub); }
+@media (max-width: 640px) { main { padding-top: 64px; } #bar .lbl { display: none; } }
+@media print { #bar { display: none; } }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button class="a small" id="smaller">A</button>
+  <button class="a big" id="bigger">A</button>
+  <span class="sep"></span>
+  <label id="alwaysrow"><input type="checkbox" id="always"><span class="lbl" id="alwayslbl"></span></label>
+  <span class="sep" id="alwayssep"></span>
+  <button id="exit"><svg viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8"/></svg><span class="lbl" id="exitlbl"></span></button>
+</div>
+<main id="page">
+  <div id="site"></div>
+  <h1 id="title"></h1>
+  <div id="meta"></div>
+  <div id="content"></div>
+</main>
+<script type="application/json" id="pluma-data">/*PLUMA_DATA*/</script>
+<script nonce="PLUMA_NONCE">
+'use strict';
+const D = JSON.parse(document.getElementById('pluma-data').textContent);
+const A = D.a || {}, C = D.cfg || {};
+const t = s => (C.t && C.t[s]) || s;
+const $ = id => document.getElementById(id);
+// Pluma hears the page through requests to lector.pluma.local (no page may message Pluma); the token is this page's
+const tell = q => { if (C.token) new Image().src = 'https://lector.pluma.local/' + C.token + '?' + q; };
+
+// ------------------------------------------------------------ the cleaner: an allowlist, on the browser's own parser
+const HTML_NS = 'http://www.w3.org/1999/xhtml';
+const COMMON = ['dir', 'lang', 'id'];
+const KEEP = {
+  a: ['href', 'title'], img: ['src', 'srcset', 'sizes', 'alt', 'title', 'width', 'height'], picture: [], source: ['srcset', 'sizes', 'type', 'media'],
+  p: [], br: [], hr: [], h1: [], h2: [], h3: [], h4: [], h5: [], h6: [], ul: [], ol: ['start', 'reversed', 'type'], li: ['value'],
+  dl: [], dt: [], dd: [], blockquote: [], q: [], cite: [], pre: [], code: [], kbd: [], samp: [], var: [], em: [], strong: [],
+  b: [], i: [], u: [], s: [], del: [], ins: [], mark: [], small: [], sub: [], sup: [], abbr: ['title'], time: ['datetime'],
+  span: [], div: [], section: [], article: [], header: [], footer: [], aside: [], figure: [], figcaption: [], details: [], summary: [],
+  table: [], caption: [], thead: [], tbody: [], tfoot: [], tr: [], th: ['colspan', 'rowspan', 'scope'], td: ['colspan', 'rowspan'],
+  colgroup: ['span'], col: ['span'], wbr: [], bdi: [], bdo: [], ruby: [], rt: [], rp: [], address: []
+};
+// gone with everything inside them (the rest of the unknown tags go, their text stays)
+const DROP = new Set(['script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'form', 'input', 'button',
+  'select', 'textarea', 'option', 'optgroup', 'datalist', 'link', 'meta', 'base', 'svg', 'math', 'noscript', 'template', 'canvas',
+  'dialog', 'portal', 'audio', 'video', 'track', 'map', 'area', 'param', 'head', 'title', 'xmp', 'plaintext', 'noembed',
+  'noframes', 'slot', 'fencedframe', 'search', 'menu']);
+const IMG_DATA = /^data:image\/(png|jpe?g|gif|webp|avif);base64,[a-z0-9+/=\s]*$/i;
+function safeUrl(v, img) {
+  v = (v || '').trim();
+  if (!v) return null;
+  if (img && IMG_DATA.test(v)) return v;
+  if (!img && v[0] === '#') return '#r-' + v.slice(1);
+  let u;
+  try { u = new URL(v, C.base || location.href); } catch (e) { return null; }
+  if (u.protocol === 'https:' || u.protocol === 'http:' || (!img && u.protocol === 'mailto:')) return u.href;
+  return null;
+}
+function safeSrcset(v) {
+  const out = [];
+  for (const part of (v || '').split(/,\s+/)) {
+    const m = part.trim().match(/^(\S+)(\s+[\d.]+[wx])?$/);
+    if (!m) return null;
+    const u = safeUrl(m[1], true);
+    if (!u || u.startsWith('data:')) return null;
+    out.push(u + (m[2] || ''));
+  }
+  return out.length ? out.join(', ') : null;
+}
+function cleanNode(parent) {
+  for (const n of [...parent.childNodes]) {
+    if (n.nodeType === 3) continue;
+    if (n.nodeType !== 1) { n.remove(); continue; }
+    const tag = n.localName;
+    if (n.namespaceURI !== HTML_NS || DROP.has(tag)) { n.remove(); continue; }
+    cleanNode(n);
+    if (!Object.prototype.hasOwnProperty.call(KEEP, tag)) { n.replaceWith(...n.childNodes); continue; }
+    const allowed = KEEP[tag];
+    for (const at of [...n.attributes]) {
+      const name = at.name.toLowerCase();
+      if (!allowed.includes(name) && !COMMON.includes(name)) { n.removeAttribute(at.name); continue; }
+      let v = at.value;
+      if (name === 'href') v = safeUrl(v, false);
+      else if (name === 'src') v = safeUrl(v, true);
+      else if (name === 'srcset') v = safeSrcset(v);
+      else if (name === 'id') v = /^[\w.:-]{1,80}$/.test(v) ? 'r-' + v : null;   // (never one of the page's own ids)
+      else if (name === 'dir') v = /^(ltr|rtl|auto)$/i.test(v) ? v : null;
+      else if (v.length > 400) v = null;
+      if (v === null) n.removeAttribute(at.name); else if (v !== at.value) n.setAttribute(at.name, v);
+    }
+    if (tag === 'a') { n.setAttribute('rel', 'noopener noreferrer'); if (!n.hasAttribute('href')) n.replaceWith(...n.childNodes); }
+    if (tag === 'img') { if (!n.hasAttribute('src') && !n.hasAttribute('srcset')) { n.remove(); continue; } n.setAttribute('loading', 'lazy'); n.setAttribute('decoding', 'async'); }
+  }
+}
+// the article's HTML -> a fragment with only what is allowed. Parsed once, in an inert template (nothing loads, nothing
+// runs), cleaned there and moved as is: never serialized and parsed again
+function clean(html) {
+  const tp = document.createElement('template');
+  tp.innerHTML = String(html || '');
+  cleanNode(tp.content);
+  return tp.content;
+}
+window.__plumaClean = html => { const d = document.createElement('div'); d.append(clean(html)); return d.innerHTML; };   // (tools/reader-test.js)
+
+// ------------------------------------------------------------ the view
+const SIZES = [15, 16, 17, 18, 20, 22, 24, 26, 28, 32];
+let size = SIZES.includes(C.size) ? C.size : 20;
+function applySize() {
+  document.documentElement.style.setProperty('--fs', size + 'px');
+  $('smaller').disabled = size === SIZES[0];
+  $('bigger').disabled = size === SIZES[SIZES.length - 1];
+}
+function step(d) {
+  const i = Math.max(0, Math.min(SIZES.length - 1, SIZES.indexOf(size) + d));
+  if (SIZES[i] === size) return;
+  size = SIZES[i];
+  applySize();
+  tell('size=' + size);
+}
+// characters a minute, as Firefox's reader view counts the reading time
+const CPM = { en: 987, es: 1025, pt: 913, fr: 998, de: 920, it: 950 };
+function render() {
+  document.documentElement.classList.toggle('dark', !!C.dark);
+  document.documentElement.lang = C.hl || 'es';
+  applySize();
+  $('smaller').title = t('Letra más pequeña');
+  $('bigger').title = t('Letra más grande');
+  $('alwayslbl').textContent = t('Abrir siempre en modo lectura');
+  $('alwaysrow').title = t('Abrir siempre en modo lectura') + ' (' + (C.host || '') + ')';
+  $('exitlbl').textContent = t('Salir del modo lectura');
+  $('exit').title = t('Salir del modo lectura') + ' (F9)';
+  if (C.incognito) { $('alwaysrow').remove(); $('alwayssep').remove(); }
+  else { $('always').checked = !!C.always; $('always').onchange = e => tell('always=' + (e.target.checked ? 1 : 0)); }
+  $('smaller').onclick = () => step(-1);
+  $('bigger').onclick = () => step(1);
+  $('exit').onclick = () => tell('exit=1');
+  addEventListener('keydown', e => {
+    if (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key === '+' || e.key === '-') && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) step(e.key === '+' ? 1 : -1);
+  });
+
+  const page = $('page');
+  if (A.lang && /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(A.lang)) page.lang = A.lang;
+  if (A.dir === 'rtl') page.dir = 'rtl';
+  document.title = A.title || C.host || '';
+  const site = document.createElement('a');
+  site.href = C.base || location.href;
+  site.textContent = A.siteName || C.host || '';
+  $('site').append(site);
+  $('title').textContent = A.title || '';
+  const meta = [];
+  if (A.byline) meta.push(A.byline);
+  if (A.publishedTime) {
+    const d = new Date(A.publishedTime);
+    if (!isNaN(d)) meta.push(new Intl.DateTimeFormat(C.hl || 'es', { dateStyle: 'long' }).format(d));
+  }
+  if (A.length) {
+    const cpm = CPM[(A.lang || C.hl || 'en').slice(0, 2).toLowerCase()] || 987;
+    meta.push(Math.max(1, Math.round(A.length / cpm)) + ' ' + t('min de lectura'));
+  }
+  for (const m of meta) { const s = document.createElement('span'); s.textContent = m; $('meta').append(s); }
+  const body = clean(A.content);
+  if (!body.textContent.trim()) {
+    const p = document.createElement('p'); p.id = 'fail'; p.textContent = t('Esta página no se puede mostrar en modo lectura.');
+    $('content').append(p);
+  } else $('content').append(body);
+}
+render();
+</script>
+</body>
+</html>
