@@ -112,6 +112,7 @@ void update_on_hide();             // the window was closed: a waiting update go
 void update_on_quit();
 // ---------------------------------------------------------------- the settings page (settings.cpp)
 bool settings_page_url(const std::wstring &u);              // https://pluma.local/...: Pluma's own page
+bool settings_main_page(const std::wstring &u);   // the url is the settings page itself (not bookmarks or import)
 std::wstring settings_page_display(const std::wstring &u);  // ... shown as pluma://...
 std::wstring settings_page_from_typed(const std::wstring &typed);   // pluma://settings typed -> its url ("" if not)
 void settings_open(const std::wstring &section = L"");   // opens it (or goes to the tab that has it), at a section
@@ -247,6 +248,22 @@ ImportResult passwords_import_pick();   // a file picker, then import the chosen
 bool passwords_delete_csv();        // overwrites and deletes the CSV just imported (asked first on the page)
 int passwords_keep(const std::wstring &url, const std::wstring &user, const std::wstring &pass);   // one row for the next start (passgen.cpp)
 int passwords_apply_pending();       // at the next start, before the engine runs: writes the ready rows into Login Data
+// the saved logins of this window's profile (vault.cpp shows them in Configuración > Contraseñas and the key panel)
+struct SavedLogin { long long id = 0; std::wstring realm, origin, user; std::string blob; bool forgotten = false; };
+int passwords_read_saved(std::vector<SavedLogin> &out, const std::wstring &engine_profile_dir, const std::wstring &data_dir);
+                                     // any thread; ciphertext only. 0 the live file, 1 the start's copy, -1 failed
+int passwords_decrypt(const std::string &blob, std::string &plain);   // one row, on demand: 0 ok, 1 app-bound (v20), 2 failed
+bool passwords_forget(const SavedLogin &l, bool undo);   // its removal queued for the next start (the engine has the file)
+// ---------------------------------------------------------------- saved passwords: view and copy (vault.cpp)
+void vault_page_do(ICoreWebView2 *v, const Json &j);   // the settings page's {op:"pw"} messages
+void vault_page_navigating(ICoreWebView2 *v);   // that page goes: its permission to reveal goes with it
+bool vault_site_has(const std::wstring &url);   // the page's site has saved logins (the key in the address bar)
+struct VaultRow { int id; std::wstring user, shown; };   // shown: the revealed password, or empty
+std::vector<VaultRow> vault_site_rows(const std::wstring &url);   // for the key panel
+void vault_panel_do(int what, int id, const std::wstring &url);   // 1 reveal/hide, 2 copy password, 3 copy username
+void vault_panel_closed();                     // the person closed it: revealed values and its permission go
+bool vault_verifying();                        // Windows is asking the person to verify (the panel must not close for it)
+void vault_test(const std::wstring &what);     // tests: "sembrar" (fake logins for the next start), "cancelar" (the prompt)
 
 // ---------------------------------------------------------------- sync / backup (sync.cpp)
 // An encrypted backup of the profile (bookmarks, history, open tabs, settings, scripts, extensions and their
@@ -502,6 +519,7 @@ void ui_bubble_text(const std::wstring &title, const std::wstring &text, bool lo
 void ui_blend_panels(BYTE *bits, int w, int h, POINT origin);   // tests: the open panels into a picture (video_debug_shot)
 IStream *ui_glyph_png(wchar_t glyph);     // an icon of the bar's font as a PNG (the page's context menu); Release it
 void ui_open_menu();
+void ui_open_passwords_panel(bool quiet);   // the key's panel (the saved logins of the page's site); open: shown again
 void ui_open_sound_panel();               // the sound panel under ⋯ (its menu's «Sonido», and tests)
 void ui_close_popups();
 void ui_caption_hover(int code);          // HTMINBUTTON/HTMAXBUTTON/HTCLOSE under the mouse, or 0

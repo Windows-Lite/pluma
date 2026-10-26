@@ -811,6 +811,7 @@ static void test_command(const std::wstring &what) {
     else if (what == L"clic-derecho") translate_test_pick_menu();   // the next page menu: logged, Pluma's row chosen
     else if (starts_with(what, L"destino=")) translate_set_target(what.substr(8));
     else if (what == L"descargas") ui_open_downloads(true);
+    else if (starts_with(what, L"clave") || what == L"sembrar" || what == L"cancelar" || what == L"lista") vault_test(what);   // saved passwords (vault.cpp)
     else if (starts_with(what, L"descarga-")) {   // descarga-abrir|carpeta|cancelar=<n>: the n-th row of the downloads panel
         size_t eq = what.find(L'=');
         auto rows = downloads_rows();
@@ -1174,7 +1175,14 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     wchar_t inst_name[64] = L"";
     std::wstring suffix;
-    if (GetEnvironmentVariableW(L"PLUMA_INSTANCIA", inst_name, 64) > 0) { suffix = std::wstring(L".") + inst_name; g_test = true; }
+    if (GetEnvironmentVariableW(L"PLUMA_INSTANCIA", inst_name, 64) > 0) {
+        // a name only (1-32 letters, digits, - or _): its data folder can never be another one, the user's included
+        // (test-only shortcuts, such as the saved passwords' verification answered without asking, rely on it)
+        size_t n = wcslen(inst_name);
+        bool ok = n >= 1 && n <= 32;
+        for (size_t i = 0; i < n; i++) if (!iswalnum(inst_name[i]) && inst_name[i] != L'-' && inst_name[i] != L'_') ok = false;
+        if (ok) { suffix = std::wstring(L".") + inst_name; g_test = true; }
+    }
     std::wstring state_suffix = suffix;
     // the incognito window: another Pluma of its own (own window, mutex and session), on the same engine and settings
     if (g_incognito) { suffix += L".incognito"; g_start_hidden = false; g_profile_id.clear(); }
@@ -1232,7 +1240,6 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     }
     g_data = profile_data_dir(g_profile_id);
     SHCreateDirectoryExW(NULL, g_data.c_str(), NULL);
-    if (!g_incognito) sync_snapshot_engine();   // the engine has not opened its cookies yet: the backup reads this copy
     wchar_t port[16] = L"";
     if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) g_dev = true;
     BOOL anim = TRUE;
@@ -1287,6 +1294,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     bookmarks_load();
     scripts_load();
     passwords_apply_pending();   // imported passwords waiting from last time: in before the engine opens Login Data
+    // the engine has not opened its cookies yet: the backup (and the saved passwords' list, if the live file is locked)
+    // reads this copy; after the pending passwords, so it has them
+    if (!g_incognito) sync_snapshot_engine();
     if (!g_incognito && g_profile_id.empty()) sync_init();   // one worker, in the default profile's process: it backs up every profile   // the backup worker (hourly if changed, and on close)
     // first time: offer to bring a backup back (test instances only with PLUMA_SYNC_PRIMERA=1)
     if (first_run && !g_incognito && !g_start_hidden && (!g_test || GetEnvironmentVariableW(L"PLUMA_SYNC_PRIMERA", NULL, 0) > 0))
