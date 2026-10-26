@@ -680,7 +680,7 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
   (historial, marcadores, sesión, pestaña nueva, extensiones.tsv, `lectura.tsv`, `cache-video`, contraseñas pendientes). Ajustes,
   iconos de webs, scripts y `pluma.log` son de todos (`g_state`).
 - El de siempre es «Personal»: sus archivos y el perfil `Default` del motor siguen donde estaban (no se mueve nada).
-  `perfiles.tsv` (id, nombre, color); un id no se reutiliza nunca (el motor borra la carpeta de uno quitado al cerrarse).
+  `perfiles.tsv` (id, nombre, color, avatar); un id no se reutiliza nunca (el motor borra la carpeta de uno quitado al cerrarse).
 - Cada perfil que no es el de siempre es otro Pluma.exe (`--perfil=<id>`, ventana y mutex `.perfil.<id>`), como el
   incógnito; no se queda en memoria al cerrarlo y no se actualiza (solo el de siempre, y no mientras haya otros abiertos).
   Lo arranca el de siempre (`CreateProcess`, también si lo pide otro perfil por WM_COPYDATA) para que el Administrador
@@ -693,6 +693,24 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
   Prueba: `Pluma.exe pluma-prueba:perfil` lo abre sin coger el foco. Configuración > Perfiles (nombre, color, quitar con confirmación,
   que cierra su ventana, borra sus archivos y marca su perfil del motor para borrar con `ICoreWebView2Profile8::Delete`).
   Con más de un perfil, el título dice cuál es y el botón de la barra de tareas lleva su círculo (`SetOverlayIcon`).
+- Avatar (pedido el 26/10: «que se pueda cambiar el avatar de los perfiles personalizados también»), como Chrome y Edge:
+  Configuración > Perfiles > «Cambiar avatar» (o clic en el círculo) da una imagen propia («Elegir imagen...»), uno de
+  los 12 de serie (glifos de Segoe Fluent Icons que también tiene MDL2, en blanco sobre su color) o la inicial;
+  «Quitar imagen» vuelve a la inicial. Copiado: subir una imagen, la cuadrícula de iconos de serie y la inicial como el
+  de siempre (Chrome: https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/profiles/profile_avatar_icon_util.cc).
+  No copiado: la foto de la cuenta ni ilustraciones (nada de ficheros aparte). En `perfiles.tsv`, 4.ª columna: vacío,
+  `g<n>` o `img` (un Pluma de antes lee las 3 primeras). La imagen la lee Pluma con WIC, nunca una página
+  (`profile_picture_import`, en un hilo): primer fotograma (GIF), girada según su EXIF (2, 3, 4, 6, 8; las espejadas 5 y 7
+  no), el cuadrado del centro a 128 px, a `avatar.png` de la carpeta del perfil (la raíz para Personal: en
+  `bk::pluma_files`; la de los demás ya va con `perfiles\`). Tope 40 MB y 16384 px por lado; lo que no se lee no escribe
+  nada. Un PNG cortado WIC lo rellena sin avisar (visto): se pide su `IEND`; un JPEG cortado entra con lo que trae
+  (como lo enseña un navegador). El selector empieza en Imágenes. Cada tamaño se escala una vez con WIC y se recorta en redondo (`avatar_pixels`) y se dibuja 1:1: la
+  barra, su panel, «Otros perfiles» y la insignia de la barra de tareas. La página de configuración la recibe en el
+  mismo mensaje con origen comprobado (data URL), nunca en una dirección de `pluma.local` (ese filtro está en todas las
+  vistas: cualquier web podría cargarla). Prueba: `tools\perfiles\avatar.ps1 [-Selector]` (sesión interactiva,
+  `PLUMA_EXE`): `pluma-prueba:avatar-imagen=<id|default>|<fichero>`, `avatar-icono=<id>,<n>`, `avatar-quitar=<id>`,
+  `insignia=<nombre>` (la insignia a un PNG; nunca foto de la barra de tareas de verdad), `elegir-imagen=<id>` (el
+  selector de verdad, solo enseñado: un script no lo maneja).
 - Los enlaces de otros programas van al último perfil usado (`perfil-ultimo.txt`, al activar una ventana); abrir Pluma
   sin enlace abre el de siempre.
 - Recortar memoria: solo las páginas de la propia ventana (el motor es compartido; nunca la página que otro perfil tiene

@@ -143,7 +143,7 @@ struct Entry { std::string name, data; };
 inline const std::vector<std::string> &pluma_files() {
     static const std::vector<std::string> v = { "ajustes.ini", "sesion.tsv", "historial.tsv", "marcadores.json", "paginas.tsv",
                                                 "ocultas.tsv", "lectura.tsv", "extensiones.tsv", "perfiles.tsv", "traducir-nunca.tsv",
-                                                "passwords-pending.tsv", "perfil-ultimo.txt" };
+                                                "passwords-pending.tsv", "perfil-ultimo.txt", "avatar.png" };
     return v;
 }
 inline const std::vector<std::string> &pluma_dirs() {

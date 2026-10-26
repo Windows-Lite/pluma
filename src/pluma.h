@@ -325,7 +325,8 @@ extern ComPtr<ICoreWebView2Environment> g_env;
 // Each profile is its own WebView2 profile (cookies, cache, extensions, passwords) on the same engine, and its own
 // Pluma files (history, bookmarks, session...) in g_data; the settings stay shared. Every profile but the default one
 // runs in a Pluma.exe of its own (--perfil=<id>), started by the default one so they group in the Task Manager.
-struct Profile { std::wstring id, name; unsigned color = 0; };   // id "" = the default one
+// avatar: "" its initial on its colour, "g<n>" built-in glyph n on its colour, "img" its picture (avatar.png in its folder)
+struct Profile { std::wstring id, name; unsigned color = 0; std::wstring avatar; };   // id "" = the default one
 std::vector<Profile> profiles_list();               // perfiles.tsv, the default one always first
 Profile profile_current();
 std::wstring profile_shown_name(const Profile &p);   // "Personal" in the UI language unless renamed
@@ -346,6 +347,13 @@ void profile_touch();                               // this window was used last
 std::wstring profile_last_used();
 void profile_launch_child(const std::wstring &id, const std::vector<std::wstring> &urls);   // CreateProcess, from this process
 const std::vector<unsigned> &profile_colors();
+const std::vector<wchar_t> &profile_glyphs();       // the built-in avatars (Segoe Fluent Icons / MDL2 glyphs)
+std::wstring profile_picture_file(const std::wstring &id);   // its avatar.png (128 px, square)
+int profile_glyph_of(const Profile &p);             // its built-in avatar's index, -1 if none
+void profile_set_avatar(const std::wstring &id, const std::wstring &avatar);   // "", "g<n>" (the picture: profile_set_picture)
+void profile_set_picture(const std::wstring &id, const std::wstring &file);    // decoded with WIC off the window's thread
+bool profile_picture_import(const std::wstring &src, const std::wstring &dst, std::wstring *why);   // centred square, 128 px PNG
+void profiles_test(const std::wstring &what);       // tests: pluma-prueba:avatar-..., insignia=
 void profiles_changed();                            // the list changed: bar, title, settings pages
 std::wstring profiles_state_json();                 // for the settings page
 void profiles_page_do(const Json &j);               // ... and what it asks
@@ -536,6 +544,9 @@ void ui_post(std::function<void()> f);    // runs f on the window's thread (from
 float ui_scale();
 bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt);
 void ui_taskbar_badge();                   // the profile's avatar on the window's taskbar button (with more than one)
+void ui_avatars_changed();                 // a profile's avatar changed: its pictures drawn again
+std::string ui_avatar_glyph_png(int n);    // a built-in avatar, white on transparent (for the settings page)
+bool ui_taskbar_badge_png(const std::wstring &file);   // tests: the badge's picture
 void ui_toggle_pin();                      // the page on screen onto the new tab page, or off it (the star, Ctrl+D)
 
 // colours (Mapea's tokens)

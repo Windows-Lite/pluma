@@ -69,7 +69,14 @@ button.danger { color: var(--danger); }
 .badge { color: var(--sub); font-size: 13px; }
 h3.sub { font-size: 15px; font-weight: 600; margin: 22px 0 10px; }
 .row.col { flex-direction: column; align-items: stretch; gap: 10px; }
-.avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center; flex: none; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center; flex: none; background-size: cover; background-position: center; }
+.avatar img, .avs .av img { width: 62%; height: 62%; pointer-events: none; }
+button.avatar { padding: 0; border: 0; font-size: 16px; }
+button.avatar:hover { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--line); }
+.avs { display: flex; flex-wrap: wrap; gap: 10px; margin: 2px 0 12px; }
+.avs .av { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; color: #fff; font-weight: 600; font-size: 16px; display: flex; align-items: center; justify-content: center; background-size: cover; background-position: center; }
+.avs .av.on { outline: 2px solid var(--text); outline-offset: 2px; }
+.picker .acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .pname { font: inherit; font-weight: 500; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; margin-left: -7px; width: 100%; max-width: 320px; }
 .pname:hover { border-color: var(--line); }
 .pname:focus { outline: none; border-color: var(--accent); background: var(--field); }
@@ -477,6 +484,15 @@ function fill(sel, items, value) {
   sel.value = value;
 }
 let confirming = null;   // the profile whose removal waits for a yes (the default one has id '')
+let picking = null;      // the profile whose avatar is being chosen (its pictures come from Pluma, never a file read here)
+function paintAvatar(el, p, kind) {
+  // kind: '' its initial, 'g<n>' a built-in one, 'img' its picture; all on its colour
+  el.textContent = ''; el.style.backgroundImage = '';
+  el.style.backgroundColor = p.color;
+  if (kind === 'img' && p.picture) el.style.backgroundImage = 'url("' + p.picture + '")';
+  else if (/^g\d+$/.test(kind) && S.profiles.glyphs[+kind.slice(1)]) { const i = document.createElement('img'); i.alt = ''; i.src = S.profiles.glyphs[+kind.slice(1)]; el.append(i); }
+  else el.textContent = (p.name.trim()[0] || '?').toUpperCase();
+}
 function renderProfiles() {
   const P = S.profiles; if (!P) return;
   const box = $('proflist');
@@ -484,7 +500,8 @@ function renderProfiles() {
   box.textContent = '';
   P.list.forEach(p => {
     const row = document.createElement('div'); row.className = 'row'; row.dataset.k = 'perfil ' + p.name;
-    const av = document.createElement('div'); av.className = 'avatar'; av.style.background = p.color; av.textContent = (p.name.trim()[0] || '?').toUpperCase();
+    const av = document.createElement('button'); av.className = 'avatar'; av.title = tr('Cambiar avatar'); paintAvatar(av, p, p.avatar);
+    av.onclick = () => { picking = picking === p.id ? null : p.id; renderProfiles(); };
     const txt = document.createElement('div'); txt.className = 'txt';
     const name = document.createElement('input'); name.className = 'pname'; name.value = p.name; name.maxLength = 60;
     name.onchange = () => { if (name.value.trim()) send({ op: 'profile', what: 'rename', id: p.id, name: name.value.trim() }); };
@@ -498,7 +515,9 @@ function renderProfiles() {
     txt.append(name, cols);
     const badge = document.createElement('span'); badge.className = 'badge';
     badge.textContent = p.id === P.current ? tr('Esta ventana') : p.open ? tr('Abierto') : '';
-    row.append(av, txt, badge);
+    const cb = document.createElement('button'); cb.textContent = tr('Cambiar avatar');
+    cb.onclick = av.onclick;
+    row.append(av, txt, badge, cb);
     if (p.id !== P.current) {
       const ob = document.createElement('button'); ob.textContent = tr('Abrir'); ob.onclick = () => send({ op: 'profile', what: 'open', id: p.id });
       row.append(ob);
@@ -509,6 +528,33 @@ function renderProfiles() {
       row.append(rb);
     }
     box.append(row);
+    if (picking === p.id) {
+      // as Chrome's and Edge's: a picture of your own, one of the built-in ones, or the initial on its colour
+      const c = document.createElement('div'); c.className = 'row col picker confirm';
+      const avs = document.createElement('div'); avs.className = 'avs';
+      const opt = (kind, title) => {
+        const b = document.createElement('button'); b.className = 'av' + (p.avatar === kind ? ' on' : ''); b.title = title;
+        paintAvatar(b, p, kind);
+        b.onclick = () => send(kind === '' ? { op: 'profile', what: 'avatarClear', id: p.id } : { op: 'profile', what: 'avatarGlyph', id: p.id, n: +kind.slice(1) });
+        avs.append(b);
+        return b;
+      };
+      if (p.avatar === 'img' && p.picture) opt('img', tr('Imagen')).onclick = null;
+      opt('', tr('Inicial'));
+      S.profiles.glyphs.forEach((g, i) => opt('g' + i, ''));
+      const acts = document.createElement('div'); acts.className = 'acts';
+      const pick = document.createElement('button'); pick.className = 'primary'; pick.textContent = tr('Elegir imagen...');
+      pick.onclick = () => send({ op: 'profile', what: 'avatarFile', id: p.id });
+      acts.append(pick);
+      if (p.avatar === 'img') {
+        const rm = document.createElement('button'); rm.textContent = tr('Quitar imagen');
+        rm.onclick = () => send({ op: 'profile', what: 'avatarClear', id: p.id });
+        acts.append(rm);
+      }
+      const done = document.createElement('button'); done.textContent = tr('Listo'); done.onclick = () => { picking = null; renderProfiles(); };
+      acts.append(done);
+      c.append(avs, acts); box.append(c);
+    }
     if (p.id && confirming === p.id) {
       const c = document.createElement('div'); c.className = 'row confirm';
       const t = document.createElement('div'); t.className = 'txt';
@@ -747,6 +793,7 @@ function ask() {
   document.querySelectorAll('[data-tp]').forEach(e => all.add(e.dataset.tp));
   ['La de Windows', '1 activa', ' activas', '1 activo', ' activos', 'Pluma es tu navegador predeterminado', 'Pluma no es tu navegador predeterminado',
    'Falta el motor de vídeo de Pluma (motor-video)', 'Esta ventana', 'Abierto', 'Abrir', 'Quitar', 'Cancelar', 'Quitar el perfil', 'Normal',
+   'Cambiar avatar', 'Elegir imagen...', 'Quitar imagen', 'Listo', 'Imagen', 'Inicial',
    'Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.',
    'Sin elegir', 'Sin conectar', 'Conectar', 'Volver a conectar', 'Última copia', 'Todavía no hay ninguna copia',
    'Copia del', 'Pista', 'Ese fichero no es una copia de Pluma.', 'Restaurando...', 'Contraseña incorrecta.',

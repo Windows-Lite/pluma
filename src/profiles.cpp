@@ -4,8 +4,9 @@
 // settings (theme, font, language...) are shared. The default profile is the Pluma there was before profiles:
 // "Personal", with the same files and the engine's "Default" profile, so nothing of what was there moves.
 //
-// perfiles.tsv (in g_state, shared): id, name, colour (rrggbb) per line; "default" is the default one. Ids are never
-// reused: a removed profile's engine folder only goes once the engine closes.
+// perfiles.tsv (in g_state, shared): id, name, colour (rrggbb), avatar ("", "g<n>", "img") per line; "default" is the
+// default one. Ids are never reused: a removed profile's engine folder only goes once the engine closes. A picture is
+// avatar.png in the profile's own folder (g_state for the default one), so the backup takes it with the rest.
 #include "pluma.h"
 #include "json.h"
 #include <ctime>
@@ -13,6 +14,17 @@
 
 static const std::vector<unsigned> kColors = { 0x2f6fed, 0x0f9d58, 0xe8710a, 0xd93025, 0x9334e6, 0x00897b, 0xc2185b, 0x5f6368 };
 const std::vector<unsigned> &profile_colors() { return kColors; }
+// the built-in avatars, as Chrome's grid of icons (drawn by Pluma, white on the profile's colour; in both Segoe Fluent
+// Icons and Segoe MDL2 Assets): smile, heart, star, sun, moon, game, music, camera, home, work, school, plane
+static const std::vector<wchar_t> kGlyphs = { 0xE76E, 0xEB51, 0xE734, 0xE706, 0xE708, 0xE7FC, 0xE8D6, 0xE722, 0xE80F, 0xE821, 0xE7BE, 0xE709 };
+const std::vector<wchar_t> &profile_glyphs() { return kGlyphs; }
+static bool valid_avatar(const std::wstring &a) {
+    if (a.empty() || a == L"img") return true;
+    if (a.size() < 2 || a.size() > 3 || a[0] != L'g') return false;
+    for (size_t i = 1; i < a.size(); i++) if (a[i] < L'0' || a[i] > L'9') return false;
+    return _wtoi(a.c_str() + 1) < (int)kGlyphs.size();
+}
+int profile_glyph_of(const Profile &p) { return p.avatar.size() >= 2 && p.avatar[0] == L'g' && valid_avatar(p.avatar) ? _wtoi(p.avatar.c_str() + 1) : -1; }
 static std::wstring list_file() { return g_state + L"\\perfiles.tsv"; }
 static std::wstring last_file() { return g_state + L"\\perfil-ultimo.txt"; }
 static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_FRONT = WM_APP + 4;   // (FRONT: its window to the front; SHOW opens one more if one is open)
@@ -25,6 +37,7 @@ bool profile_valid_id(const std::wstring &id) {
     return true;
 }
 std::wstring profile_data_dir(const std::wstring &id) { return id.empty() ? g_state : g_state + L"\\perfiles\\" + id; }
+std::wstring profile_picture_file(const std::wstring &id) { return profile_data_dir(id) + L"\\avatar.png"; }
 std::wstring wv_profile_name() { return g_profile_id.empty() ? std::wstring(L"Default") : L"pluma-" + g_profile_id; }
 // (the engine keeps a named profile in "WV2Profile_<name>", the default one in "Default": seen on WebView2 155)
 std::wstring wv_profile_dir_of(const std::wstring &id) { return g_state + L"\\webview2\\EBWebView\\" + (id.empty() ? std::wstring(L"Default") : L"WV2Profile_pluma-" + id); }
@@ -51,7 +64,8 @@ static std::vector<Profile> read_list() {
         while (true) { size_t t = line.find(L'\t', a); f.push_back(line.substr(a, t == std::wstring::npos ? std::wstring::npos : t - a)); if (t == std::wstring::npos) break; a = t + 1; }
         if (f.size() < 3) continue;
         Profile p; p.id = f[0]; p.name = trim(f[1]); p.color = wcstoul(f[2].c_str(), NULL, 16) & 0xffffff;
-        if (p.id == L"default") { if (!p.name.empty()) out[0].name = p.name; out[0].color = p.color; continue; }
+        if (f.size() > 3 && valid_avatar(f[3])) p.avatar = f[3];
+        if (p.id == L"default") { if (!p.name.empty()) out[0].name = p.name; out[0].color = p.color; out[0].avatar = p.avatar; continue; }
         if (!profile_valid_id(p.id) || p.name.empty()) continue;
         bool dup = false;
         for (auto &x : out) if (x.id == p.id) dup = true;
@@ -65,7 +79,7 @@ static void save_list(const std::vector<Profile> &v) {
         std::wstring name = p.name;
         for (auto &c : name) if (c == L'\t' || c == L'\n' || c == L'\r') c = L' ';
         wchar_t col[8]; swprintf_s(col, L"%06x", p.color & 0xffffff);
-        o += (p.id.empty() ? std::wstring(L"default") : p.id) + L"\t" + name + L"\t" + col + L"\n";
+        o += (p.id.empty() ? std::wstring(L"default") : p.id) + L"\t" + name + L"\t" + col + L"\t" + p.avatar + L"\n";
     }
     write_file(list_file(), utf8(o));
     g_list = v; g_list_read = true;
@@ -124,6 +138,7 @@ void profiles_changed() {
         SetWindowTextW(g_win, (!t || t->title.empty() ? app_name() : t->title + L" - " + app_name()).c_str());
         ui_layout();
     }
+    ui_avatars_changed();
     ui_taskbar_badge();
     settings_page_refresh();
 }
@@ -242,6 +257,165 @@ void profile_set_color(const std::wstring &id, unsigned color) {
     broadcast_changed();
     profiles_changed();
 }
+
+// ---------------------------------------------------------------- the avatar (as Chrome's and Edge's: a picture, a built-in one, or the initial)
+void profile_set_avatar(const std::wstring &id, const std::wstring &avatar) {
+    if (!valid_avatar(avatar)) return;
+    auto v = read_list();
+    bool found = false;
+    for (auto &p : v) if (p.id == id) { p.avatar = avatar; found = true; }
+    if (!found) return;
+    if (avatar != L"img") DeleteFileW(profile_picture_file(id).c_str());
+    save_list(v);
+    broadcast_changed();
+    profiles_changed();
+}
+static WICBitmapTransformOptions exif_turn(IWICBitmapFrameDecode *fr) {
+    // a phone's photo says how it was held (EXIF orientation); the mirrored ones (5, 7) are left as they come
+    ComPtr<IWICMetadataQueryReader> q;
+    PROPVARIANT v; PropVariantInit(&v);
+    WICBitmapTransformOptions t = WICBitmapTransformRotate0;
+    if (SUCCEEDED(fr->GetMetadataQueryReader(&q)) && SUCCEEDED(q->GetMetadataByName(L"System.Photo.Orientation", &v)) && v.vt == VT_UI2) {
+        switch (v.uiVal) {
+            case 2: t = WICBitmapTransformFlipHorizontal; break;
+            case 3: t = WICBitmapTransformRotate180; break;
+            case 4: t = WICBitmapTransformFlipVertical; break;
+            case 6: t = WICBitmapTransformRotate90; break;
+            case 8: t = WICBitmapTransformRotate270; break;
+        }
+    }
+    PropVariantClear(&v);
+    return t;
+}
+bool profile_picture_import(const std::wstring &src, const std::wstring &dst, std::wstring *why) {
+    // the file the person chose, decoded here with WIC (never by a web page): its first frame, turned as it was
+    // taken, the centred square, 128 px, written again as PNG. Anything odd (not an image, cut short, huge) writes nothing.
+    auto fail = [&](const wchar_t *w) { if (why) *why = w; return false; };
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(src.c_str(), GetFileExInfoStandard, &fa) || (fa.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return fail(L"no existe");
+    if (fa.nFileSizeHigh || fa.nFileSizeLow > 40u * 1024 * 1024) return fail(L"más de 40 MB");
+    ComPtr<IWICImagingFactory> wic;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic)))) return fail(L"sin WIC");
+    ComPtr<IWICBitmapDecoder> dec;
+    ComPtr<IWICBitmapFrameDecode> fr;
+    if (FAILED(wic->CreateDecoderFromFilename(src.c_str(), NULL, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &dec))) return fail(L"no es una imagen");
+    GUID container = {};
+    if (SUCCEEDED(dec->GetContainerFormat(&container)) && IsEqualGUID(container, GUID_ContainerFormatPng)) {
+        // WIC fills in a PNG cut short without a word (seen): its end (IEND) must be there
+        static const unsigned char iend[12] = { 0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xAE, 0x42, 0x60, 0x82 };
+        unsigned char tail[12] = {};
+        DWORD got = 0;
+        HANDLE fh = CreateFileW(src.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+        bool whole = fh != INVALID_HANDLE_VALUE && SetFilePointer(fh, -12, NULL, FILE_END) != INVALID_SET_FILE_POINTER &&
+                     ReadFile(fh, tail, 12, &got, NULL) && got == 12 && !memcmp(tail, iend, 12);
+        if (fh != INVALID_HANDLE_VALUE) CloseHandle(fh);
+        if (!whole) return fail(L"cortada");
+    }
+    if (FAILED(dec->GetFrame(0, &fr))) return fail(L"sin fotogramas");
+    UINT w = 0, h = 0;
+    if (FAILED(fr->GetSize(&w, &h)) || !w || !h) return fail(L"sin tamaño");
+    if (w > 16384 || h > 16384 || (unsigned long long)w * h > 100000000ull) return fail(L"demasiado grande");
+    const UINT n = 128, side = std::min(w, h);
+    WICRect crop = { (INT)((w - side) / 2), (INT)((h - side) / 2), (INT)side, (INT)side };
+    ComPtr<IWICBitmapClipper> clip;
+    ComPtr<IWICBitmapScaler> sc;
+    ComPtr<IWICFormatConverter> conv;
+    if (FAILED(wic->CreateBitmapClipper(&clip)) || FAILED(clip->Initialize(fr.Get(), &crop)) ||
+        FAILED(wic->CreateBitmapScaler(&sc)) || FAILED(sc->Initialize(clip.Get(), n, n, WICBitmapInterpolationModeFant)) ||
+        FAILED(wic->CreateFormatConverter(&conv)) ||
+        FAILED(conv->Initialize(sc.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, NULL, 0, WICBitmapPaletteTypeMedianCut)))
+        return fail(L"no se pudo convertir");
+    IWICBitmapSource *last = conv.Get();
+    ComPtr<IWICBitmapFlipRotator> rot;
+    WICBitmapTransformOptions turn = exif_turn(fr.Get());
+    if (turn != WICBitmapTransformRotate0 && SUCCEEDED(wic->CreateBitmapFlipRotator(&rot)) && SUCCEEDED(rot->Initialize(conv.Get(), turn))) last = rot.Get();
+    // all of it decoded now: a file cut short fails here, before anything is written
+    ComPtr<IWICBitmap> bmp;
+    if (FAILED(wic->CreateBitmapFromSource(last, WICBitmapCacheOnLoad, &bmp))) return fail(L"dañada");
+    std::wstring tmp = dst + L".tmp";
+    ComPtr<IWICStream> st;
+    ComPtr<IWICBitmapEncoder> enc;
+    ComPtr<IWICBitmapFrameEncode> fe;
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+    bool ok = SUCCEEDED(wic->CreateStream(&st)) && SUCCEEDED(st->InitializeFromFilename(tmp.c_str(), GENERIC_WRITE)) &&
+              SUCCEEDED(wic->CreateEncoder(GUID_ContainerFormatPng, NULL, &enc)) && SUCCEEDED(enc->Initialize(st.Get(), WICBitmapEncoderNoCache)) &&
+              SUCCEEDED(enc->CreateNewFrame(&fe, NULL)) && SUCCEEDED(fe->Initialize(NULL)) && SUCCEEDED(fe->SetSize(n, n)) &&
+              SUCCEEDED(fe->SetPixelFormat(&fmt)) && IsEqualGUID(fmt, GUID_WICPixelFormat32bppBGRA) &&
+              SUCCEEDED(fe->WriteSource(bmp.Get(), NULL)) && SUCCEEDED(fe->Commit()) && SUCCEEDED(enc->Commit());
+    fe.Reset(); enc.Reset(); st.Reset();   // (the file closed before it moves)
+    for (int k = 0; ok && k < 20; k++) {   // (another window may be reading the old one for a moment)
+        if (MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING)) { DeleteFileW(tmp.c_str()); return true; }
+        Sleep(50);
+    }
+    DeleteFileW(tmp.c_str());
+    return fail(L"no se pudo guardar");
+}
+void profile_set_picture(const std::wstring &id, const std::wstring &file) {
+    // decoding a big photo takes a while: off the window's thread, then the list says "img"
+    SHCreateDirectoryExW(NULL, profile_data_dir(id).c_str(), NULL);
+    std::wstring dst = profile_picture_file(id);
+    std::thread([id, file, dst] {
+        HRESULT co = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+        std::wstring why;
+        bool ok = profile_picture_import(file, dst, &why);
+        if (SUCCEEDED(co)) CoUninitialize();
+        ui_post([id, ok, why] {
+            log_line(L"perfil " + (id.empty() ? std::wstring(L"default") : id) + (ok ? L": imagen puesta" : L": imagen no válida (" + why + L")"));
+            if (!ok) { ui_toast(T(L"No se pudo usar esa imagen")); settings_page_refresh(); return; }
+            profile_set_avatar(id, L"img");   // (every window draws it again, also when it already was "img")
+        });
+    }).detach();
+}
+static void pick_picture(const std::wstring &id) {
+    IFileOpenDialog *dlg = NULL;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return;
+    COMDLG_FILTERSPEC types[] = { { T(L"Imágenes"), L"*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp" } };
+    dlg->SetFileTypes(1, types);
+    dlg->SetTitle(T(L"Elegir imagen"));
+    IShellItem *pics = NULL;   // (starts in Pictures, unless the picker remembers another folder)
+    if (SUCCEEDED(SHGetKnownFolderItem(FOLDERID_Pictures, KF_FLAG_DEFAULT, NULL, IID_PPV_ARGS(&pics)))) { dlg->SetDefaultFolder(pics); pics->Release(); }
+    DWORD opt = 0; dlg->GetOptions(&opt); dlg->SetOptions(opt | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST);
+    std::wstring file;
+    if (SUCCEEDED(dlg->Show(g_win))) {
+        IShellItem *it = NULL;
+        if (SUCCEEDED(dlg->GetResult(&it))) {
+            PWSTR path = NULL;
+            if (SUCCEEDED(it->GetDisplayName(SIGDN_FILESYSPATH, &path))) { file = path; CoTaskMemFree(path); }
+            it->Release();
+        }
+    }
+    dlg->Release();
+    if (!file.empty()) profile_set_picture(id, file);
+}
+void profiles_test(const std::wstring &what) {
+    // tests (pluma-prueba:, test instances only): avatar-imagen=<id|default>|<file>, avatar-icono=<id|default>,<n>,
+    // avatar-quitar=<id|default>, insignia=<name> (the taskbar badge into <name>.png), elegir-imagen=<id|default> (the picker, shown)
+    auto id_of = [](std::wstring s) { return s == L"default" ? std::wstring() : s; };
+    if (starts_with(what, L"avatar-imagen=")) {
+        std::wstring r = what.substr(14);
+        size_t bar = r.find(L'|');
+        if (bar == std::wstring::npos) return;
+        std::wstring id = id_of(r.substr(0, bar));
+        if (id.empty() || profile_valid_id(id)) profile_set_picture(id, r.substr(bar + 1));
+    } else if (starts_with(what, L"avatar-icono=")) {
+        std::wstring r = what.substr(13);
+        size_t c = r.find(L',');
+        if (c == std::wstring::npos) return;
+        std::wstring id = id_of(r.substr(0, c));
+        if (id.empty() || profile_valid_id(id)) profile_set_avatar(id, L"g" + std::to_wstring(_wtoi(r.c_str() + c + 1)));
+    } else if (starts_with(what, L"avatar-quitar=")) {
+        std::wstring id = id_of(what.substr(14));
+        if (id.empty() || profile_valid_id(id)) profile_set_avatar(id, L"");
+    } else if (starts_with(what, L"elegir-imagen=")) {
+        std::wstring id = id_of(what.substr(14));
+        if (id.empty() || profile_valid_id(id)) pick_picture(id);
+    } else if (starts_with(what, L"insignia=")) {
+        std::wstring name = what.substr(9);
+        bool safe = !name.empty() && name.size() < 40;
+        for (wchar_t c : name) if (!iswalnum(c) && c != L'-') safe = false;
+        if (safe) ui_taskbar_badge_png(g_state + L"\\" + name + L".png");
+    }
+}
 static void remove_tree(const std::wstring &dir) {
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
@@ -316,18 +490,37 @@ void profile_remove(const std::wstring &id, std::function<void(bool)> done) {
 
 // ---------------------------------------------------------------- the settings page's section
 static std::wstring color_hex(unsigned c) { wchar_t b[8]; swprintf_s(b, L"#%06x", c & 0xffffff); return b; }
+static std::wstring png_data_url(const std::string &png) {
+    static const char *k = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::wstring o = L"data:image/png;base64,";
+    o.reserve(o.size() + png.size() * 4 / 3 + 4);
+    for (size_t i = 0; i < png.size(); i += 3) {
+        unsigned v = (unsigned char)png[i] << 16 | (i + 1 < png.size() ? (unsigned char)png[i + 1] << 8 : 0) | (i + 2 < png.size() ? (unsigned char)png[i + 2] : 0);
+        o += k[v >> 18 & 63]; o += k[v >> 12 & 63];
+        o += i + 1 < png.size() ? k[v >> 6 & 63] : '=';
+        o += i + 2 < png.size() ? k[v & 63] : '=';
+    }
+    return o;
+}
 std::wstring profiles_state_json() {
     std::wstring o = L"{\"current\":" + json_escape(g_profile_id) + L",\"list\":[";
     bool first = true;
     for (auto &p : profiles_list()) {
         bool open = p.id == g_profile_id || profile_window(p.id) != NULL;
         o += (first ? L"" : L",") + std::wstring(L"{\"id\":") + json_escape(p.id) + L",\"name\":" + json_escape(profile_shown_name(p)) +
-             L",\"color\":" + json_escape(color_hex(p.color)) + L",\"open\":" + (open ? L"true" : L"false") + L"}";
+             L",\"color\":" + json_escape(color_hex(p.color)) + L",\"open\":" + (open ? L"true" : L"false") +
+             L",\"avatar\":" + json_escape(p.avatar);
+        // its picture goes to the page over this same message (never at a pluma.local address: any web could load it)
+        std::string png;
+        if (p.avatar == L"img" && read_file(profile_picture_file(p.id), png) && png.size() < 512 * 1024) o += L",\"picture\":" + json_escape(png_data_url(png));
+        o += L"}";
         first = false;
     }
     o += L"],\"colors\":[";
     first = true;
     for (unsigned c : kColors) { o += (first ? L"" : L",") + json_escape(color_hex(c)); first = false; }
+    o += L"],\"glyphs\":[";
+    for (size_t i = 0; i < kGlyphs.size(); i++) o += (i ? L"," : L"") + json_escape(png_data_url(ui_avatar_glyph_png((int)i)));
     return o + L"]}";
 }
 void profiles_page_do(const Json &j) {
@@ -341,7 +534,12 @@ void profiles_page_do(const Json &j) {
     else if (what == L"color") {
         std::wstring c = j[L"color"].s;
         if (c.size() == 7 && c[0] == L'#') profile_set_color(id, wcstoul(c.c_str() + 1, NULL, 16));
-    } else if (what == L"remove") {
+    } else if (what == L"avatarFile") pick_picture(id);
+    else if (what == L"avatarGlyph") {
+        int n = (int)j[L"n"].n;
+        if (n >= 0 && n < (int)kGlyphs.size()) profile_set_avatar(id, L"g" + std::to_wstring(n));
+    } else if (what == L"avatarClear") profile_set_avatar(id, L"");
+    else if (what == L"remove") {
         profile_remove(id, [](bool ok) { if (!ok) ui_toast(T(L"No se pudo quitar el perfil")); settings_page_refresh(); });
     }
     settings_page_refresh();
