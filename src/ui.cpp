@@ -532,9 +532,14 @@ static void draw_spinner(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, float c
 static D2D1_RECT_F lerp_rect(D2D1_RECT_F a, D2D1_RECT_F b, float k) {
     return R(a.left + (b.left - a.left) * k, a.top + (b.top - a.top) * k, a.right + (b.right - a.right) * k, a.bottom + (b.bottom - a.bottom) * k);
 }
+static D2D1_COLOR_F strip_color(const Palette &p) {
+    // the tabs' row, a step darker than the bar (as Edge's): the tab you are on stands out from the rest
+    return mix(p.bg, dark_theme() ? hex(0x000000) : hex(0x1d2733), dark_theme() ? 0.32f : 0.075f);
+}
 static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
     const Palette &p = pal();
     bool busy = false;
+    fill(rt, g_br.Get(), R(0, 0, g_geo.W, S(kTabRowH)), 0, strip_color(p));
     auto slots = tab_slots(now);
     Tab *act = active_tab();
     // the sheet under the active tab, sliding from the previous one
@@ -553,6 +558,14 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         stroke(rt, g_br.Get(), r, S(9), alpha(p.text, dark_theme() ? 0.08f : 0.06f), S(1));
     }
     for (auto &g : g_ghosts) busy |= g.k.running(now);
+    for (size_t i = 0; i + 1 < slots.size(); i++) {
+        // a thin line between two tabs, unless one of them is the active one or under the mouse
+        Tab *a = slots[i].t, *b = slots[i + 1].t;
+        if (a == act || b == act || a->hover.at(now) > 0 || b->hover.at(now) > 0) continue;
+        D2D1_RECT_F r = tab_rect(slots[i]);
+        float x = r.right + S(kTabGap) / 2;
+        fill(rt, g_br.Get(), R(x - S(0.5f), r.top + S(8), x + S(0.5f), r.bottom - S(8)), 0, alpha(p.text, dark_theme() ? 0.18f : 0.16f));
+    }
     for (auto &s : slots) {
         Tab *t = s.t;
         D2D1_RECT_F r = tab_rect(s);
@@ -589,7 +602,7 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         }
         if (!compact || active) {
             float ch = t->close_hover.at(now);
-            float vis = active ? 1 : std::max(hv, ch);
+            float vis = 1;   // (on every tab, as in Edge: closing one you are not on takes one click)
             if (vis > 0) {
                 D2D1_RECT_F c = tab_close_rect(s);
                 if (ch > 0) fill(rt, g_br.Get(), c, S(10), alpha(p.press, ch));
@@ -612,7 +625,7 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
     D2D1_RECT_F pr = plus_rect(now);
     float ph = hov(H_PLUS, 0);
     if (ph > 0) fill(rt, g_br.Get(), pr, S(9), alpha(p.hover, ph * 1.4f));
-    glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_ADD, pr, p.sub);
+    glyph(rt, g_br.Get(), g_f.icon.Get(), G_ADD, pr, p.text);
     return busy;
 }
 static bool paint_caption(ID2D1RenderTarget *rt, double now) {
