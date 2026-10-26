@@ -27,7 +27,8 @@ bool profile_valid_id(const std::wstring &id) {
 std::wstring profile_data_dir(const std::wstring &id) { return id.empty() ? g_state : g_state + L"\\perfiles\\" + id; }
 std::wstring wv_profile_name() { return g_profile_id.empty() ? std::wstring(L"Default") : L"pluma-" + g_profile_id; }
 // (the engine keeps a named profile in "WV2Profile_<name>", the default one in "Default": seen on WebView2 155)
-std::wstring wv_profile_dir() { return g_state + L"\\webview2\\EBWebView\\" + (g_profile_id.empty() ? L"" : L"WV2Profile_") + wv_profile_name(); }
+std::wstring wv_profile_dir_of(const std::wstring &id) { return g_state + L"\\webview2\\EBWebView\\" + (id.empty() ? std::wstring(L"Default") : L"WV2Profile_pluma-" + id); }
+std::wstring wv_profile_dir() { return wv_profile_dir_of(g_profile_id); }
 
 // ---------------------------------------------------------------- the list (cached; read again when it changes)
 static std::vector<Profile> g_list;

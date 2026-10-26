@@ -196,6 +196,7 @@ struct ImportProfile {
     bool firefox = false;
     bool running = false;           // the browser is open (its files are copied before being read)
     int bookmarks = 0, history = 0, passwords = 0;   // counts found (estimates)
+    int extensions = 0;             // Chromium: the ones the person installed
 };
 std::vector<ImportProfile> import_scan();           // the browsers and profiles found
 struct ImportResult { int bookmarks = 0, history = 0, passwords = 0; std::wstring note; };
@@ -239,6 +240,7 @@ bool profile_valid_id(const std::wstring &id);
 std::wstring profile_data_dir(const std::wstring &id);
 std::wstring wv_profile_name();                     // the engine's profile for this window: "Default" or "pluma-<id>"
 std::wstring wv_profile_dir();                      // ... and its folder
+std::wstring wv_profile_dir_of(const std::wstring &profile_id);   // ... that of any profile
 std::wstring profile_create(const std::wstring &name);   // a new one (its id)
 void profile_rename(const std::wstring &id, const std::wstring &name);
 void profile_set_color(const std::wstring &id, unsigned color);
@@ -421,6 +423,12 @@ void ext_open_popup(size_t i, RECT anchor);
 void ext_open_options(size_t i);
 bool ext_bundled_removed();               // one of those that come with Pluma (uBlock Origin Lite) was taken off
 void ext_restore_bundled();               // ... and back on
+// extensions from another Chromium browser's profile (its Extensions folder), with their settings, into a Pluma profile
+struct ExtImported { std::wstring id, name; int state = 0; bool settings = false, off = false; };   // state: 0 in, 1 already here, 2 Manifest V2, 3 Pluma's own uBlock, 4 would not load
+int ext_import_count(const std::wstring &profile_dir);
+void ext_import(const std::wstring &profile_dir, const std::wstring &profile_id, std::function<void(std::vector<ExtImported>, bool waiting)> done);
+std::wstring ext_imported_json(const std::vector<ExtImported> &v);
+void ext_settings_apply_pending();        // imported settings the engine had open last time: in before it starts
 bool store_extension_id(const std::wstring &url, std::wstring &id, bool &edge);
 void store_install(const std::wstring &id, bool edge);
 std::wstring extensions_folder();

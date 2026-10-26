@@ -137,6 +137,7 @@ static void add_chromium(std::vector<ImportProfile> &out, const std::wstring &br
         p.bookmarks = chromium_bookmark_count(dir);
         p.history = -1;
         p.passwords = -1;
+        p.extensions = ext_import_count(dir);
         if (p.bookmarks > 0 || PathFileExistsW((dir + L"\\History").c_str())) out.push_back(p);
     };
     if (single) { one(root, browser); return; }

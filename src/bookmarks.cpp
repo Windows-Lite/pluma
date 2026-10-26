@@ -281,6 +281,7 @@ static std::wstring profiles_json() {
         o += L"{\"i\":" + std::to_wstring(i) + L",\"browser\":" + json_escape(ps[i].browser) + L",\"name\":" + json_escape(ps[i].name);
         o += L",\"account\":" + json_escape(ps[i].account);
         o += L",\"firefox\":" + std::wstring(ps[i].firefox ? L"true" : L"false") + L",\"running\":" + std::wstring(ps[i].running ? L"true" : L"false");
+        o += L",\"extensions\":" + std::to_wstring(ps[i].extensions);
         o += L",\"bookmarks\":" + std::to_wstring(ps[i].bookmarks) + L",\"history\":" + std::to_wstring(ps[i].history) + L",\"passwords\":" + std::to_wstring(ps[i].passwords) + L"}";
     }
     return o + L"]";
@@ -305,7 +306,7 @@ void bm_pages_refresh() {
 }
 // "Todos los perfiles": a Pluma profile per Edge profile (made, or the one with that name), its bookmarks and history
 // into it. One at a time, each a turn of the window's loop, so the page shows where it is.
-struct ImportAll { ComPtr<ICoreWebView2> v; std::vector<ImportProfile> list; bool bm = true, hi = true; size_t i = 0; std::wstring items; };
+struct ImportAll { ComPtr<ICoreWebView2> v; std::vector<ImportProfile> list; bool bm = true, hi = true, ext = false, waiting = false; size_t i = 0; std::wstring items; };
 static std::wstring profile_for(const std::wstring &name, bool *made) {
     *made = false;
     for (auto &p : profiles_list())
@@ -317,7 +318,7 @@ static std::wstring profile_for(const std::wstring &name, bool *made) {
 static void import_all_step(std::shared_ptr<ImportAll> job) {
     size_t n = job->list.size();
     if (job->i >= n) {
-        std::wstring m = L"{\"op\":\"allDone\",\"items\":[" + job->items + L"]}";
+        std::wstring m = L"{\"op\":\"allDone\",\"waiting\":" + std::wstring(job->waiting ? L"true" : L"false") + L",\"items\":[" + job->items + L"]}";
         job->v->PostWebMessageAsJson(m.c_str());
         return;
     }
@@ -336,11 +337,19 @@ static void import_all_step(std::shared_ptr<ImportAll> job) {
         unsigned col = 0;
         for (auto &pp : profiles_list()) if (pp.id == id) col = pp.color;
         wchar_t colhex[8]; swprintf_s(colhex, L"#%06x", col & 0xffffff);
-        if (!job->items.empty()) job->items += L",";
-        job->items += L"{\"name\":" + json_escape(p.name) + L",\"id\":" + json_escape(id) + L",\"made\":" + (made ? L"true" : L"false") + L",\"color\":" + json_escape(colhex) +
-                      L",\"bookmarks\":" + std::to_wstring(r.bookmarks) + L",\"history\":" + std::to_wstring(r.history) + L"}";
-        job->i++;
-        ui_post([job] { import_all_step(job); });
+        std::wstring item = L"{\"name\":" + json_escape(p.name) + L",\"id\":" + json_escape(id) + L",\"made\":" + (made ? L"true" : L"false") + L",\"color\":" + json_escape(colhex) +
+                            L",\"bookmarks\":" + std::to_wstring(r.bookmarks) + L",\"history\":" + std::to_wstring(r.history);
+        auto next = [job, item](const std::wstring &exts) {
+            if (!job->items.empty()) job->items += L",";
+            job->items += item + exts + L"}";
+            job->i++;
+            ui_post([job] { import_all_step(job); });
+        };
+        if (!job->ext || id == L"?") { next(L""); return; }
+        ext_import(p.path, id, [job, next](std::vector<ExtImported> x, bool waiting) {
+            if (waiting) job->waiting = true;
+            next(L",\"extensions\":" + ext_imported_json(x));
+        });
     });
 }
 void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j) {
@@ -354,11 +363,16 @@ void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j) {
             int i = (int)j[L"profile"].n;
             if (i < 0 || i >= (int)ps.size()) return;
             ImportResult r = import_do(ps[i], j[L"bookmarks"].b, j[L"history"].b, false);
-            std::wstring m = L"{\"op\":\"done\",\"bookmarks\":" + std::to_wstring(r.bookmarks) + L",\"history\":" + std::to_wstring(r.history) + L",\"note\":" + json_escape(r.note) + L"}";
-            v->PostWebMessageAsJson(m.c_str());
+            std::wstring m = L"{\"op\":\"done\",\"bookmarks\":" + std::to_wstring(r.bookmarks) + L",\"history\":" + std::to_wstring(r.history) + L",\"note\":" + json_escape(r.note);
+            if (!j[L"extensions"].b || ps[i].firefox || g_incognito) { v->PostWebMessageAsJson((m + L"}").c_str()); return; }
+            ComPtr<ICoreWebView2> keep = v;
+            ext_import(ps[i].path, g_profile_id, [keep, m](std::vector<ExtImported> x, bool waiting) {
+                std::wstring o = m + L",\"waiting\":" + (waiting ? L"true" : L"false") + L",\"extensions\":" + ext_imported_json(x) + L"}";
+                keep->PostWebMessageAsJson(o.c_str());
+            });
         } else if (op == L"importAll") {
             auto job = std::make_shared<ImportAll>();
-            job->v = v; job->bm = j[L"bookmarks"].b; job->hi = j[L"history"].b;
+            job->v = v; job->bm = j[L"bookmarks"].b; job->hi = j[L"history"].b; job->ext = j[L"extensions"].b;
             for (auto &p : import_scan()) if (p.browser == L"Edge") job->list.push_back(p);
             import_all_step(job);
         } else if (op == L"openProfile") {

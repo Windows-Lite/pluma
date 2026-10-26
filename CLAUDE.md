@@ -309,6 +309,15 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
 - La ventanita de una extensión (su popup) se crea a la vista antes de meterle su página: hecha en una ventana oculta,
   la página se quedaba «hidden» y no pintaba nada (salía vacía, 25/10). Se mide varias veces en su primer segundo
   (uBlock la rellena poco a poco y salía cortada).
+- Importar las de Edge (26/10, casilla «Extensiones (con sus ajustes)» del asistente, también en «Todos los perfiles»):
+  las que instaló la persona salen de `Secure Preferences` (`location` 1, no `was_installed_by_default`; las de Edge
+  son 5 y 10). Su carpeta `Extensions\<id>\<versión>` se copia a `extensiones\<id>` del perfil de Pluma (sin
+  `_metadata`: un nombre con «_» arriba impide cargarla) y se carga con `AddBrowserExtension`; el manifiesto trae la
+  `key` de la tienda, así que el id es el mismo (comprobado). Sus ajustes (`Local Extension Settings\<id>`, `Sync
+  Extension Settings\<id>`, su IndexedDB) se copian al perfil del motor antes de cargarla; si el motor los tiene
+  abiertos (ya estaba) esperan en `extensiones-ajustes\` al siguiente arranque. Las MV2 se intentan cargar; si no cargan, se
+  dice que es por eso; uBlock Origin (Lite o no) no se trae: Pluma ya lleva uBOL. Para otro perfil se carga con una vista oculta de
+  su perfil del motor. Las que no cargan se borran (si no, se reintentarían en cada arranque).
 - Clic derecho en el botón de una extensión: Opciones, Desactivar, Quitar de Pluma (como Chrome). Las que trae Pluma
   (uBlock) quitadas quedan marcadas en `extensiones.tsv` y ⋯ > Extensiones ofrece «Volver a poner uBlock Origin Lite».
 

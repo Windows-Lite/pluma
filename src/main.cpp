@@ -301,6 +301,7 @@ void profile_reload_state() {
     bookmarks_load();
     ui_ntp_changed();
     bm_pages_refresh();
+    ext_sync([] { ui_layout(); });   // (and extensions it was given)
     ui_layout();
 }
 static bool history_worthy(const std::wstring &url) {
@@ -939,6 +940,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     bookmarks_load();
     scripts_load();
     passwords_apply_pending();   // imported passwords waiting from last time: in before the engine opens Login Data
+    ext_settings_apply_pending();   // and imported extensions' settings
     env_create([] {
         g_env_ready = true;
         log_line(L"motor listo en " + std::to_wstring((int)now_ms()) + L" ms");
