@@ -186,24 +186,70 @@ static bool key_remembered(bk::Kdf &kdf, uint8_t key[32]) {
 }
 static bool key_is_set() { return GetFileAttributesW(clave_file().c_str()) != INVALID_FILE_ATTRIBUTES; }
 
-// ---------------------------------------------------------------- gather the profile
-static void walk(const std::wstring &dir, const std::string &prefix, std::vector<bk::Entry> &out) {
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
-    do {
-        if (fd.cFileName[0] == L'.' && (!fd.cFileName[1] || (fd.cFileName[1] == L'.' && !fd.cFileName[2]))) continue;
-        std::wstring name = fd.cFileName;
-        std::string child = prefix + "/" + utf8(name);
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { walk(dir + L"\\" + name, child, out); continue; }
-        if (!bk::allowed_target(child)) continue;   // stay inside what a restore may write
-        std::string data;
-        if (!read_file(dir + L"\\" + name, data)) continue;
-        out.push_back({ child, std::move(data) });
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
+// ---------------------------------------------------------------- long paths
+// a site's storage folder can be long, and staging adds restore-pending\files\webview2\EBWebView\ in front: the file
+// calls get the \\?\ form (no 260-character limit); the shell's helpers never see these paths
+static std::wstring lp(const std::wstring &p) {
+    if (p.size() < 240 || p.compare(0, 4, L"\\\\?\\") == 0) return p;
+    return L"\\\\?\\" + p;
 }
+static void mkdirs(const std::wstring &dir) {
+    if (dir.empty() || GetFileAttributesW(lp(dir).c_str()) != INVALID_FILE_ATTRIBUTES) return;
+    size_t cut = dir.find_last_of(L'\\');
+    if (cut != std::wstring::npos && cut > 2) mkdirs(dir.substr(0, cut));
+    CreateDirectoryW(lp(dir).c_str(), NULL);
+}
+static void make_parent(const std::wstring &full) {
+    size_t cut = full.find_last_of(L'\\');
+    if (cut != std::wstring::npos) mkdirs(full.substr(0, cut));
+}
+static bool write_long(const std::wstring &p, const std::string &data) {
+    std::wstring tmp = p + L".tmp";
+    HANDLE f = CreateFileW(lp(tmp).c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    bool ok = true;
+    for (size_t off = 0; ok && off < data.size();) {
+        DWORD n = (DWORD)(std::min)(data.size() - off, (size_t)64 << 20), w = 0;
+        ok = WriteFile(f, data.data() + off, n, &w, NULL) && w == n;
+        off += n;
+    }
+    CloseHandle(f);
+    if (!ok) { DeleteFileW(lp(tmp).c_str()); return false; }
+    return MoveFileExW(lp(tmp).c_str(), lp(p).c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+// a folder of ours (restore-pending) and everything in it; never follows a junction out of it
+static void rmtree(const std::wstring &dir) {
+    DWORD at = GetFileAttributesW(lp(dir).c_str());
+    if (at == INVALID_FILE_ATTRIBUTES) return;
+    if (!(at & FILE_ATTRIBUTE_DIRECTORY) || (at & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        if (at & FILE_ATTRIBUTE_DIRECTORY) RemoveDirectoryW(lp(dir).c_str()); else DeleteFileW(lp(dir).c_str());
+        return;
+    }
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(lp(dir + L"\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.cFileName[0] == L'.' && (!fd.cFileName[1] || (fd.cFileName[1] == L'.' && !fd.cFileName[2]))) continue;
+            std::wstring c = dir + L"\\" + fd.cFileName;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY) SetFileAttributesW(lp(c).c_str(), fd.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY);
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) rmtree(c);
+            else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) RemoveDirectoryW(lp(c).c_str());
+            else DeleteFileW(lp(c).c_str());
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(lp(dir).c_str());
+}
+
+// ---------------------------------------------------------------- gather the profile
+// What goes in, as "units": files that must be read together to be consistent. A leveldb folder (it has CURRENT) is
+// one unit; a SQLite database is one with its -wal and -journal; any other file is a unit alone. A unit is read
+// with the engine running (shared read), and taken again if any of its files changed while it was read (size or
+// time, from the open handles): never half a database. The engine's locked ones come from the start's copy.
+struct Src { std::string name; std::wstring live, snap; unsigned long long size = 0; FILETIME time{}; };
+struct Unit { std::vector<Src> files; };
 static std::wstring back_slashes(std::string s) { for (auto &c : s) if (c == '/') c = '\\'; return wide(s); }
+static std::wstring snapshot_dir() { return g_state + L"\\sync-motor"; }
 // the engine's profile folders under base: Default and one per Pluma profile
 static std::vector<std::string> engine_profiles(const std::wstring &base) {
     std::vector<std::string> out;
@@ -217,63 +263,194 @@ static std::vector<std::string> engine_profiles(const std::wstring &base) {
     FindClose(h);
     return out;
 }
-// the engine keeps its cookies locked for itself while it runs (nobody else can even read them), so each start copies
-// its profile's databases before the engine opens them; the backup takes the live file when it can, else this copy
-static std::wstring snapshot_dir() { return g_state + L"\\sync-motor"; }
-void sync_snapshot_engine() {
-    std::string prof = utf8(wv_profile_dir().substr(wv_profile_dir().find_last_of(L'\\') + 1));
-    if (!bk::engine_profile(prof)) return;
-    for (auto &db : bk::engine_dbs())
-        for (const wchar_t *suf : { L"", L"-wal" }) {
-            std::wstring rel = wide(prof) + L"\\" + back_slashes(db) + suf;
-            std::wstring to = snapshot_dir() + L"\\" + rel;
-            std::string data;
-            if (read_file(engine_base() + L"\\" + rel, data)) {
-                size_t cut = to.find_last_of(L'\\');
-                SHCreateDirectoryExW(NULL, to.substr(0, cut).c_str(), NULL);
-                write_file(to, data);
-            } else DeleteFileW(to.c_str());   // a -wal gone since the last start must not come back with the copy
-        }
-}
-static std::vector<bk::Entry> gather(std::string &signature) {
-    std::vector<bk::Entry> out;
-    for (auto &f : bk::pluma_files()) {
-        std::string data;
-        if (!read_file(g_state + L"\\" + wide(f), data)) continue;
-        out.push_back({ "pluma/" + f, std::move(data) });
+static std::string db_base(const std::string &leaf) {   // "History-journal" -> "History"
+    for (const char *suf : { "-wal", "-journal" }) {
+        size_t n = strlen(suf);
+        if (leaf.size() > n && leaf.compare(leaf.size() - n, n, suf) == 0) return leaf.substr(0, leaf.size() - n);
     }
-    for (auto &d : bk::pluma_dirs()) walk(g_state + L"\\" + wide(d), "pluma/" + d, out);
-    for (auto &prof : engine_profiles(engine_base()))
-        for (auto &p : bk::engine_paths()) {
-            std::string name = "motor/" + prof + "/" + p;
-            std::wstring full = engine_base() + L"\\" + wide(prof) + L"\\" + back_slashes(p);
-            DWORD at = GetFileAttributesW(full.c_str());
-            if (at == INVALID_FILE_ATTRIBUTES) continue;
-            if (at & FILE_ATTRIBUTE_DIRECTORY) walk(full, name, out);
-            else {
-                std::string data;
-                bool ok = read_file(full, data);
-                if (!ok) ok = read_file(snapshot_dir() + L"\\" + wide(prof) + L"\\" + back_slashes(p), data);   // locked: the start's copy
-                if (ok && bk::allowed_target(name)) out.push_back({ name, std::move(data) });
-            }
+    return leaf;
+}
+// one folder: its files as units (rel: the folder inside the engine profile, "" at the top; name: its backup name)
+static void list_dir(const std::wstring &dir, const std::string &name, const std::string &rel, const std::string &prof,
+                     bool engine, std::vector<Unit> &out) {
+    std::vector<Src> files;
+    std::vector<std::pair<std::wstring, std::string>> subs;
+    bool leveldb = false;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(lp(dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.cFileName[0] == L'.' && (!fd.cFileName[1] || (fd.cFileName[1] == L'.' && !fd.cFileName[2]))) continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;   // never follow a junction out of the profile
+        std::string leaf = utf8(fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (engine ? bk::engine_skip_dir(leaf) : bk::pluma_skip_dir(leaf)) continue;   // caches: not even looked into
+            subs.push_back({ fd.cFileName, leaf });
+            continue;
         }
-    // the signature is of the contents, not the file times: quitting rewrites the session with the same bytes
+        std::string child = name + "/" + leaf;
+        if (!bk::allowed_target(child)) continue;   // stay inside what a restore may write
+        if (leaf == "CURRENT") leveldb = true;
+        Src s;
+        s.name = child;
+        s.live = dir + L"\\" + fd.cFileName;
+        s.size = ((unsigned long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        s.time = fd.ftLastWriteTime;
+        if (engine) {
+            std::string r = rel.empty() ? db_base(leaf) : rel + "/" + db_base(leaf);
+            for (auto &db : bk::engine_locked_dbs())
+                if (r == db) s.snap = snapshot_dir() + L"\\" + wide(prof) + L"\\" + back_slashes(rel.empty() ? leaf : rel + "/" + leaf);
+        }
+        files.push_back(std::move(s));
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (leveldb || !engine) {
+        if (!engine) for (auto &f : files) out.push_back({ { std::move(f) } });
+        else if (!files.empty()) { Unit u; u.files = std::move(files); out.push_back(std::move(u)); }
+    } else {
+        std::vector<std::pair<std::string, Unit>> by;   // a database with its journals
+        for (auto &f : files) {
+            std::string leaf = f.name.substr(f.name.find_last_of('/') + 1), base = db_base(leaf);
+            bool put = false;
+            for (auto &b : by) if (b.first == base) { b.second.files.push_back(std::move(f)); put = true; break; }
+            if (!put) { by.push_back({ base, {} }); by.back().second.files.push_back(std::move(f)); }
+        }
+        for (auto &b : by) out.push_back(std::move(b.second));
+    }
+    for (auto &sd : subs)
+        list_dir(dir + L"\\" + sd.first, name + "/" + sd.second, rel.empty() ? sd.second : rel + "/" + sd.second, prof, engine, out);
+}
+static std::vector<Unit> list_units() {
+    std::vector<Unit> out;
+    for (auto &f : bk::pluma_files()) {
+        WIN32_FILE_ATTRIBUTE_DATA ad;
+        std::wstring p = g_state + L"\\" + wide(f);
+        if (!GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &ad) || (ad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        Src s; s.name = "pluma/" + f; s.live = p;
+        s.size = ((unsigned long long)ad.nFileSizeHigh << 32) | ad.nFileSizeLow; s.time = ad.ftLastWriteTime;
+        out.push_back({ { std::move(s) } });
+    }
+    for (auto &d : bk::pluma_dirs()) list_dir(g_state + L"\\" + wide(d), "pluma/" + d, "", "", false, out);
+    for (auto &prof : engine_profiles(engine_base()))
+        list_dir(engine_base() + L"\\" + wide(prof), "motor/" + prof, "", prof, true, out);
+    return out;
+}
+// what the backup would hold, in one hash: the contents of Pluma's own small files (quitting rewrites the session
+// with the same bytes), and the names, sizes and times of everything else (reading the whole profile every hour to
+// find nothing changed would cost more than it saves)
+static std::string fingerprint(const std::vector<Unit> &units) {
     BCRYPT_ALG_HANDLE alg = NULL; BCRYPT_HASH_HANDLE hh = NULL; BYTE dg[32] = {};
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) == 0) {
         if (BCryptCreateHash(alg, &hh, NULL, 0, NULL, 0, 0) == 0) {
-            for (auto &e : out) {
-                uint64_t n = e.data.size();
-                BCryptHashData(hh, (PUCHAR)e.name.data(), (ULONG)e.name.size() + 1, 0);   // with its NUL, so names can't run into data
-                BCryptHashData(hh, (PUCHAR)&n, sizeof(n), 0);
-                if (n) BCryptHashData(hh, (PUCHAR)e.data.data(), (ULONG)n, 0);
-            }
+            for (auto &u : units)
+                for (auto &f : u.files) {
+                    BCryptHashData(hh, (PUCHAR)f.name.data(), (ULONG)f.name.size() + 1, 0);   // with its NUL, so names can't run into data
+                    bool small_own = f.name.compare(0, 6, "pluma/") == 0 && f.name.find('/', 6) == std::string::npos;
+                    std::string data;
+                    if (small_own && read_file(f.live, data)) {
+                        std::string d = sha256_raw(data);
+                        bk::wipe(data);
+                        BCryptHashData(hh, (PUCHAR)d.data(), (ULONG)d.size(), 0);
+                    } else {
+                        BCryptHashData(hh, (PUCHAR)&f.size, sizeof(f.size), 0);
+                        BCryptHashData(hh, (PUCHAR)&f.time, sizeof(f.time), 0);
+                    }
+                }
             BCryptFinishHash(hh, dg, 32, 0);
             BCryptDestroyHash(hh);
         }
         BCryptCloseAlgorithmProvider(alg, 0);
     }
-    signature = bk::hex(std::string((char *)dg, 32));
-    return out;
+    return bk::hex(std::string((char *)dg, 32));
+}
+static const unsigned long long kMaxFile = 256ull << 20;   // a bigger single file is not browser data we can carry
+static bool read_handle(HANDLE f, unsigned long long size, std::string &out) {
+    out.resize((size_t)size);
+    for (size_t off = 0; off < out.size();) {
+        DWORD n = (DWORD)(std::min)(out.size() - off, (size_t)16 << 20), r = 0;
+        if (!ReadFile(f, &out[off], n, &r, NULL) || r == 0) return false;
+        off += r;
+    }
+    return true;
+}
+struct GatherStats { int units = 0, files = 0, from_snapshot = 0, unstable = 0, retries = 0, skipped = 0; unsigned long long bytes = 0; };
+// reads one unit into the archive: all its files as they were at one moment
+static void read_unit(const Unit &u, bk::Sealer &pk, GatherStats &st) {
+    std::vector<std::string> data(u.files.size());
+    std::vector<bool> have(u.files.size());
+    bool locked = false;
+    for (int attempt = 0; attempt < 4; attempt++) {
+        std::vector<HANDLE> hs(u.files.size(), INVALID_HANDLE_VALUE);
+        std::vector<BY_HANDLE_FILE_INFORMATION> before(u.files.size());
+        for (size_t i = 0; i < u.files.size(); i++) {
+            hs[i] = CreateFileW(lp(u.files[i].live).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+            if (hs[i] == INVALID_HANDLE_VALUE) {
+                DWORD e = GetLastError();
+                if (e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION || e == ERROR_ACCESS_DENIED) locked = true;
+            } else GetFileInformationByHandle(hs[i], &before[i]);
+        }
+        bool stable = !locked;
+        for (size_t i = 0; !locked && i < u.files.size(); i++) {
+            have[i] = false;
+            if (hs[i] == INVALID_HANDLE_VALUE) continue;   // gone since the listing
+            unsigned long long size = ((unsigned long long)before[i].nFileSizeHigh << 32) | before[i].nFileSizeLow;
+            if (size > kMaxFile) { if (attempt == 0) st.skipped++; continue; }
+            if (!read_handle(hs[i], size, data[i])) { bk::wipe(data[i]); stable = false; continue; }
+            have[i] = true;
+        }
+        // nothing of the unit changed while it was read (the open handles see the engine's writes at once)
+        for (size_t i = 0; stable && i < u.files.size(); i++) {
+            if (hs[i] == INVALID_HANDLE_VALUE) continue;
+            BY_HANDLE_FILE_INFORMATION again;
+            if (!GetFileInformationByHandle(hs[i], &again) || CompareFileTime(&again.ftLastWriteTime, &before[i].ftLastWriteTime) != 0 ||
+                again.nFileSizeLow != before[i].nFileSizeLow || again.nFileSizeHigh != before[i].nFileSizeHigh) stable = false;
+        }
+        for (HANDLE h : hs) if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        if (locked) break;
+        if (stable || attempt == 3) {
+            if (!stable) st.unstable++;   // still being written after four tries: the last read goes in
+            for (size_t i = 0; i < u.files.size(); i++)
+                if (have[i]) { pk.add(u.files[i].name, data[i]); st.files++; st.bytes += data[i].size(); }
+            for (auto &d : data) bk::wipe(d);
+            st.units++;
+            return;
+        }
+        for (auto &d : data) bk::wipe(d);
+        st.retries++;
+        Sleep(150);
+    }
+    for (auto &d : data) bk::wipe(d);
+    // locked by the engine: the whole unit from the start's copy (taken with the engine stopped), or nothing
+    bool any = false;
+    for (auto &f : u.files) {
+        std::string d;
+        if (f.snap.empty() || !read_file(f.snap, d)) continue;
+        pk.add(f.name, d); st.files++; st.bytes += d.size(); any = true;
+        bk::wipe(d);
+    }
+    if (any) { st.from_snapshot++; st.units++; } else st.skipped++;
+}
+// the engine keeps some databases locked for itself while it runs (nobody else can even read them), so each start
+// copies them, with their journals, before the engine opens them (only what changed since the last copy)
+void sync_snapshot_engine() {
+    double t0 = now_ms();
+    std::string prof = utf8(wv_profile_dir().substr(wv_profile_dir().find_last_of(L'\\') + 1));
+    if (!bk::engine_profile(prof)) return;
+    int copied = 0;
+    for (auto &db : bk::engine_locked_dbs())
+        for (const wchar_t *suf : { L"", L"-wal", L"-journal" }) {
+            std::wstring rel = wide(prof) + L"\\" + back_slashes(db) + suf;
+            std::wstring from = engine_base() + L"\\" + rel, to = snapshot_dir() + L"\\" + rel;
+            WIN32_FILE_ATTRIBUTE_DATA a, b;
+            if (!GetFileAttributesExW(from.c_str(), GetFileExInfoStandard, &a)) { DeleteFileW(to.c_str()); continue; }   // a journal gone since must not come back with the copy
+            if (GetFileAttributesExW(to.c_str(), GetFileExInfoStandard, &b) && a.nFileSizeLow == b.nFileSizeLow &&
+                a.nFileSizeHigh == b.nFileSizeHigh && CompareFileTime(&a.ftLastWriteTime, &b.ftLastWriteTime) == 0) continue;
+            make_parent(to);
+            if (CopyFileW(from.c_str(), to.c_str(), FALSE)) copied++;   // (keeps the time: the next start compares it)
+        }
+    if (copied) log_line(L"copia de las bases del motor al arrancar: " + std::to_wstring(copied) + L" ficheros, " +
+                         std::to_wstring((int)(now_ms() - t0)) + L" ms");
 }
 
 // ---------------------------------------------------------------- WinHTTP (one request, returns status and body)
@@ -471,6 +648,18 @@ static void keep_five_folder(const std::wstring &folder) {
     }
     std::sort(files.begin(), files.end());   // Pluma-YYYYMMDD-HHMMSS sorts oldest first
     for (size_t i = 0; i + 5 < files.size(); i++) DeleteFileW((folder + L"\\" + files[i]).c_str());
+    // a write cut short (Pluma ended in the middle) leaves its .tmp: encrypted, but no use to anyone
+    // (only old ones: a Pluma still quitting may be writing its own right now)
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    ULONGLONG now = ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    h = FindFirstFileW((folder + L"\\Pluma-*.plumabk.tmp").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            ULONGLONG t = ((ULONGLONG)fd.ftLastWriteTime.dwHighDateTime << 32) | fd.ftLastWriteTime.dwLowDateTime;
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && now > t && now - t > 30ull * 60 * 10000000) DeleteFileW((folder + L"\\" + fd.cFileName).c_str());
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
 }
 // returns "" on success, else an error line for the status
 static std::wstring do_backup(bool force) {
@@ -480,23 +669,36 @@ static std::wstring do_backup(bool force) {
     { std::lock_guard<std::mutex> lk(g_cfg_mtx); dest = g_cfg.dest; folder = g_cfg.folder; }
     if (dest.empty()) { SecureZeroMemory(key, 32); return T(L"Elige dónde guardar la copia."); }
 
-    std::string signature;
-    std::vector<bk::Entry> entries = gather(signature);
+    double t0 = now_ms();
+    std::vector<Unit> units = list_units();
+    std::string signature = fingerprint(units);
+    double t_list = now_ms() - t0;
     { std::lock_guard<std::mutex> lk(g_cfg_mtx); if (!force && wide(signature) == g_cfg.signature) { SecureZeroMemory(key, 32); return L""; } }
 
     std::wstring hint;
     { std::lock_guard<std::mutex> lk(g_cfg_mtx); hint = g_cfg.hint; }
     std::wstring header_extra = L",\"equipo\":" + json_escape(machine_name()) + L",\"cuando\":" + json_escape(now_iso());
     if (!hint.empty()) header_extra += L",\"pista\":" + json_escape(hint);
+    bk::Sealer pk(bk::header_json(kdf, utf8(header_extra), 2));
+    {   // about what it will take compressed (the profile's data compresses to about half)
+        size_t total = 0;
+        for (auto &u : units) for (auto &f : u.files) total += 12 + f.name.size() + (size_t)(std::min)(f.size, kMaxFile);
+        pk.reserve(total / 2 + (1 << 20));
+    }
+    GatherStats st;
+    for (auto &u : units) read_unit(u, pk, st);
     {   // the engine's key, without which the passwords and cookies can't be read on another Windows
         std::string k;
-        if (engine_key_get(k)) entries.push_back({ "meta/clave", std::move(k) });
+        if (engine_key_get(k)) pk.add("meta/clave", k);
+        bk::wipe(k);
     }
+    double t_read = now_ms() - t0;
     std::string file;
-    bool sealed = bk::seal(key, bk::header_json(kdf, utf8(header_extra)), entries, file);
+    bool sealed = pk.finish(key, file);
+    unsigned long long raw = pk.raw_total;
     SecureZeroMemory(key, 32);
-    for (auto &e : entries) bk::wipe(e.data);
     if (!sealed) return T(L"No se pudo cifrar la copia.");
+    double t_seal = now_ms() - t0 - t_read;
 
     std::wstring name = L"Pluma-" + stamp() + L".plumabk";
     bool ok = false;
@@ -504,7 +706,7 @@ static std::wstring do_backup(bool force) {
         if (folder.empty()) { bk::wipe(file); return T(L"Elige una carpeta para la copia."); }
         SHCreateDirectoryExW(NULL, folder.c_str(), NULL);
         std::wstring tmp = folder + L"\\" + name + L".tmp";
-        if (write_file(tmp, file)) {
+        if (write_long(tmp, file)) {
             DeleteFileW((folder + L"\\" + name).c_str());
             ok = MoveFileExW(tmp.c_str(), (folder + L"\\" + name).c_str(), MOVEFILE_REPLACE_EXISTING) != FALSE;
             if (!ok) DeleteFileW(tmp.c_str());
@@ -527,10 +729,13 @@ static std::wstring do_backup(bool force) {
     bk::wipe(file);
     if (!ok) return T(L"No se pudo guardar la copia.");
     { std::lock_guard<std::mutex> lk(g_cfg_mtx); g_cfg.signature = wide(signature); g_cfg.last_iso = now_iso(); g_cfg.last_size = size; config_save_locked(); }
-    int n_pluma = 0, n_motor = 0, n_meta = 0;   // counts only: never names, sites or contents in the log
-    for (auto &e : entries) (e.name.compare(0, 6, "pluma/") == 0 ? n_pluma : e.name.compare(0, 6, "motor/") == 0 ? n_motor : n_meta)++;
-    log_line(L"copia de seguridad hecha (" + std::to_wstring(size / 1024) + L" KB; ficheros: pluma " + std::to_wstring(n_pluma) +
-             L", motor " + std::to_wstring(n_motor) + L", meta " + std::to_wstring(n_meta) + L")");
+    // counts and sizes only: never names, sites or contents in the log
+    log_line(L"copia de seguridad hecha: " + std::to_wstring(size / 1024) + L" KB (sin comprimir " + std::to_wstring(raw / 1024) +
+             L" KB); " + std::to_wstring(st.files) + L" ficheros en " + std::to_wstring(st.units) + L" bloques, " +
+             std::to_wstring(st.from_snapshot) + L" de la copia del arranque, " + std::to_wstring(st.unstable) + L" cambiando (" +
+             std::to_wstring(st.retries) + L" repetidos), " + std::to_wstring(st.skipped) + L" sin leer; listar " +
+             std::to_wstring((int)t_list) + L" ms, leer y comprimir " + std::to_wstring((int)(t_read - t_list)) + L" ms, cifrar " +
+             std::to_wstring((int)t_seal) + L" ms, guardar " + std::to_wstring((int)(now_ms() - t0 - t_read - t_seal)) + L" ms");
     return L"";
 }
 
@@ -577,6 +782,9 @@ void sync_on_close() {
     if (g_restoring) return;   // a restart for a restore: do not back up the old data on the way out
     std::lock_guard<std::mutex> lk(g_cfg_mtx);
     if (g_cfg.dest.empty() || !g_cfg.automatic || !key_is_set()) return;
+    // the whole browser goes in: closing the window (Pluma stays in memory) backs up at most every 10 minutes;
+    // quitting always does (it may be the last chance before Windows is reinstalled)
+    if (!g_quitting && g_last_run_ms != 0 && now_ms() - g_last_run_ms < 600000.0) return;
     g_req_due = true;   // only if the content changed since the last backup (the worker checks the signature)
     if (g_wake) SetEvent(g_wake);   // the pages and history are already saved by the caller (hide_window / quit_now)
 }
@@ -809,9 +1017,19 @@ std::wstring sync_pick_restore_file() {
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_DONTADDTORECENT;
     return GetOpenFileNameW(&ofn) ? std::wstring(file) : L"";
 }
+// a backup can be bigger than read_file takes (the whole browser): up to what the format allows
+static bool read_backup_file(const std::wstring &p, std::string &out) {
+    HANDLE f = CreateFileW(lp(p).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (f == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size; GetFileSizeEx(f, &size);
+    bool ok = size.QuadPart <= (long long)bk::kMaxArchive + (1 << 20) && read_handle(f, (unsigned long long)size.QuadPart, out);
+    CloseHandle(f);
+    if (!ok) out.clear();
+    return ok;
+}
 std::wstring sync_inspect_json(const std::wstring &path) {
     std::string d;
-    if (!read_file(path, d)) return L"{\"ok\":false}";
+    if (!read_backup_file(path, d)) return L"{\"ok\":false}";
     bk::Header h;
     if (!bk::read_header(d, h)) return L"{\"ok\":false}";
     std::wstring o = L"{\"ok\":true";
@@ -828,16 +1046,6 @@ static std::wstring target_rel(const std::string &name) {
     if (name.compare(0, 6, "motor/") == 0) return L"webview2\\EBWebView\\" + back_slashes(name.substr(6));
     return L"";   // meta/clave: staged apart (below), not as a profile file
 }
-static void make_parent(const std::wstring &full) {
-    size_t cut = full.find_last_of(L'\\');
-    if (cut != std::wstring::npos) SHCreateDirectoryExW(NULL, full.substr(0, cut).c_str(), NULL);
-}
-static void rmtree(const std::wstring &dir) {
-    if (GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES) return;
-    std::vector<wchar_t> buf(dir.begin(), dir.end()); buf.push_back(0); buf.push_back(0);
-    SHFILEOPSTRUCTW op{}; op.wFunc = FO_DELETE; op.pFrom = buf.data(); op.fFlags = FOF_NO_UI;
-    SHFileOperationW(&op);
-}
 bool sync_has_pending_restore() {
     return GetFileAttributesW((g_state + L"\\restore-pending\\APLICAR").c_str()) != INVALID_FILE_ATTRIBUTES;
 }
@@ -850,7 +1058,7 @@ void sync_restore(const std::wstring &path, const std::wstring &password) {
     std::wstring p = path, pw = password;
     std::thread([p, pw]() {
         std::string d;
-        if (!read_file(p, d)) { post_restore_result(3); return; }
+        if (!read_backup_file(p, d)) { post_restore_result(3); return; }
         bk::Header h;
         if (!bk::read_header(d, h)) { post_restore_result(3); return; }
         uint8_t key[32] = {};
@@ -858,6 +1066,7 @@ void sync_restore(const std::wstring &path, const std::wstring &password) {
         std::vector<bk::Entry> entries;
         bk::OpenResult r = bk::open(d, h, key, entries);
         SecureZeroMemory(key, 32);
+        d.clear(); d.shrink_to_fit();
         if (r == bk::OPEN_WRONG_PASSWORD) { post_restore_result(1); return; }   // nothing written on a wrong password
         if (r != bk::OPEN_OK) { post_restore_result(2); return; }
         g_restoring = true;
@@ -880,11 +1089,11 @@ void sync_restore(const std::wstring &path, const std::wstring &password) {
             if (rel.empty()) continue;
             std::wstring full = files + L"\\" + rel;
             make_parent(full);
-            if (!write_file(full, e.data)) ok = false;
+            if (!write_long(full, e.data)) ok = false;
             bk::wipe(e.data);
         }
         if (!ok) { rmtree(dir); g_restoring = false; post_restore_result(4); return; }
-        write_file(dir + L"\\APLICAR", "1");
+        write_file(dir + L"\\APLICAR", std::to_string(h.format));   // the format says how to apply it (below)
         log_line(L"restauración preparada: " + std::to_wstring((int)entries.size()) + L" ficheros; reiniciando");
         post_restore_result(0);
         sync_wait_idle(8000);   // let a backup in flight finish before the restart
@@ -925,14 +1134,26 @@ bool sync_apply_restore() {
     std::wstring aside = g_state + L"\\antes-de-restaurar-" + stamp();
     SHCreateDirectoryExW(NULL, aside.c_str(), NULL);
     std::wstring files = dir + L"\\files";
+    std::string mark;
+    read_file(dir + L"\\APLICAR", mark);   // "2": each engine profile of the backup is whole; "1" (before): some folders
     int fails = 0;
     // each root is moved whole, so leveldb folders are never merged and stale items do not survive the restore
     for (auto &f : bk::pluma_files()) fails += apply_root(files, wide(f), aside);
     for (auto &d : bk::pluma_dirs()) fails += apply_root(files, wide(d), aside);
     for (auto &prof : engine_profiles(files + L"\\webview2\\EBWebView")) {
-        std::wstring rp = L"webview2\\EBWebView\\" + wide(prof) + L"\\";
+        std::wstring rp = L"webview2\\EBWebView\\" + wide(prof);
+        // a backup of the whole profile takes the place of the live one whole: its databases with their own journals,
+        // leveldb folders never merged, nothing stale left; the live one, caches and all, goes aside. (A staging
+        // area from before the mark said the format: the whole profile always has Preferences.)
+        bool whole = mark == "2" || (mark != "1" && GetFileAttributesW((files + L"\\" + rp + L"\\Preferences").c_str()) != INVALID_FILE_ATTRIBUTES);
+        if (whole) {
+            fails += apply_root(files, rp, aside);
+            continue;
+        }
+        // one from before (26/10) holds only some folders and databases: those, and the rest stays
+        rp += L"\\";
         // a database coming back takes the place of the live one with its journals: stale ones would be replayed on it
-        for (auto &db : bk::engine_dbs()) {
+        for (auto &db : bk::engine_locked_dbs()) {
             if (GetFileAttributesW((files + L"\\" + rp + back_slashes(db)).c_str()) == INVALID_FILE_ATTRIBUTES) continue;
             for (const wchar_t *suf : { L"-journal", L"-wal", L"-shm" }) {
                 std::wstring rel = rp + back_slashes(db) + suf;
@@ -944,7 +1165,7 @@ bool sync_apply_restore() {
                 if (!move_retry(live, keep)) fails++;
             }
         }
-        for (auto &p : bk::engine_paths()) fails += apply_root(files, rp + back_slashes(p), aside);
+        for (auto &p : bk::engine_paths_v1()) fails += apply_root(files, rp + back_slashes(p), aside);
     }
     // the engine's key, guarded again for this Windows account: the passwords and cookies above open with it
     std::string prot;

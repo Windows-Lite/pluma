@@ -393,28 +393,77 @@ Plan aprobado el 26/10 (las webs que más visita: YouTube Music 1.590 visitas en
 
 ## Sincronizar (`src/sync.cpp`, `src/backup.h`, `src/monocypher/`)
 Pedido el 26/10: «sincronizar todo por si el día de mañana reinstalamos Windows ... con contraseñas y todo»; destino
-elegido: «google drive mismo de la propia cuenta ... o onedrive o dropbox».
-- Una copia cifrada de todos los perfiles: ficheros de Pluma (`pluma_files`, `pluma_dirs`, `perfiles\`) y, en cada perfil
-  del motor (`Default`, `WV2Profile_pluma-<id>`), ajustes de extensiones, contraseñas (`Login Data`) y cookies
-  (`Network\Cookies`). Llave de la contraseña con Argon2id (Monocypher, 64 MB, 3 pasadas), AES-256-GCM, cabecera
-  autenticada; `bk::allowed_target` es la lista blanca de lo que una restauración puede escribir.
+elegido: «google drive mismo de la propia cuenta ... o onedrive o dropbox». Y luego: «que se guarde absolutamente toda la
+info: contraseñas, historial, cookies, etc. etc., todo del navegador», y todo cifrado, nunca en claro en ningún sitio.
+- Una copia cifrada de todos los perfiles: ficheros de Pluma (`pluma_files`, `pluma_dirs`, `perfiles\`) y **el perfil
+  entero del motor** de cada uno (`Default`, `WV2Profile_pluma-<id>`): contraseñas, cookies, Local Storage, Session
+  Storage, IndexedDB, Service Worker (registros, `ScriptCache` y `CacheStorage`), File System, WebStorage, Web Data
+  (autorrelleno, tarjetas, direcciones), History, Favicons, Top Sites, Preferences y Secure Preferences (permisos de
+  sitios, zoom), extensiones y todo su estado, Trust Tokens... Fuera, a cualquier profundidad (`bk::engine_skip_dir`,
+  `engine_skip_file`), lo que el motor rehace solo: Cache, Code Cache, GPUCache, Dawn*Cache, GrShaderCache, ShaderCache,
+  GPUPersistentCache, Media Cache, blob_storage, Crashpad, cachés de componentes y de extensiones bajadas, Safe Browsing
+  Network, Shared Dictionary, optimization_guide_*, JumpListIcons*, y los `LOCK`, `LOG`, `LOG.old` de leveldb, los `-shm`
+  y los temporales. `bk::allowed_target` (lista blanca de lo que una restauración puede escribir): el perfil del motor
+  menos eso, nunca `..`, unidades, rutas absolutas ni nada fuera de un perfil (`motor/Local State` no).
+- Cómo lo deciden otros: bleachbit (lo que se puede borrar de Chrome sin perder nada, su lista «cache»:
+  https://github.com/bleachbit/bleachbit/blob/master/cleaners/google_chrome.xml), Duplicati (sus filtros de caché:
+  https://github.com/duplicati/duplicati/blob/master/Duplicati/Library/Utility/FilterGroups.cs; no copiado su
+  `*Current*`, que rompería el `CURRENT` de cada leveldb, ni que deje fuera las cookies), Chromium (la caché es aparte
+  del perfil en Linux y Mac: https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md) y Firefox
+  (copia el perfil entero; su caché vive en otra carpeta). Hekasoft Backup & Restore no documenta qué deja fuera.
+- `CacheStorage` se queda: es dato de las webs (la Cache API, lo que una web guarda para ir sin conexión; se borra con
+  «cookies y datos de sitios», no con la caché). En el perfil del usuario (26/10) es el grueso: 62 MB de 82.
+- Medido en su perfil el 26/10 (solo tamaños): antes la copia llevaba 70 MB (34 comprimidos; casi todo `extensiones\`
+  de Pluma, 61 MB); ahora 145 MB (unos 62 comprimidos): el perfil del motor son 82 MB (31 comprimidos) de 601; lo
+  que queda fuera, 519 MB (Cache 330, Code Cache 176, GPUCache 10...). El fichero mayor, 20 MB; la ruta más larga al
+  restaurar, 239 caracteres (aun así todo lo de la copia usa `\\?\`).
+- Coherente: se lee por «bloques» que van juntos (una carpeta leveldb, la que tiene `CURRENT`, entera; una base SQLite
+  con su `-wal` y su `-journal`; lo demás, de uno en uno), con el motor en marcha (lectura compartida), y se repite si
+  algún fichero del bloque cambió mientras se leía (tamaño u hora vistos en los handles abiertos); a la cuarta, entra
+  lo último y se apunta («cambiando» en el log). Nunca media base.
+- El motor tiene bloqueadas para sí (ni leerlas se puede) solo las cookies (`Network\Cookies`, comprobado en su perfil:
+  2 ficheros sin leer, los de `Network`): cada arranque copia, antes de abrir el motor, `bk::engine_locked_dbs` (cookies
+  y contraseñas, con sus diarios) a `sync-motor\` dentro de la carpeta de Pluma, solo si cambiaron (6-7 ms); un bloque
+  bloqueado entra entero de esa copia. Las cookies de la copia son las del último arranque.
 - Contraseñas y cookies van cifradas con la llave del motor (`Local State`, os_crypt, DPAPI de esta cuenta: en un Windows
   nuevo no se abre). La copia lleva esa llave (`meta/clave`) sellada con la contraseña de la copia y la restauración la
   vuelve a proteger con DPAPI para la cuenta nueva (`engine_key_put`); mientras espera al reinicio, también con DPAPI.
-- El motor tiene las cookies bloqueadas mientras corre (ni leerlas se puede): cada arranque copia las bases del perfil
-  a `sync-motor\` antes de abrir el motor y la copia usa eso si el fichero vivo no se lee. Las cookies de la copia son
-  las del último arranque.
-- Un solo trabajador (en el proceso del perfil por defecto): cada hora si cambió el contenido y al cerrar; guarda las 5
-  últimas. Restaurar: se prepara en `restore-pending\`, Pluma se reinicia y lo aplica antes de abrir el motor; lo que
-  había va a `antes-de-restaurar-<fecha>`. Contraseña mal: no se toca nada.
+- Fichero: llave de la contraseña con Argon2id (Monocypher, 64 MB, 3 pasadas), AES-256-GCM, cabecera autenticada (solo
+  formato, sal, cuándo, equipo, pista: ningún nombre de fichero ni de sitio en claro). Formato 2 (desde que va el
+  navegador entero): el archivo se comprime en bloques de 4 MB según se llena, directo al fichero, y se cifra en el
+  sitio; así la memoria es la copia comprimida más un bloque, no el perfil dos o tres veces (con 100 MB de datos de una
+  web que no se comprimen, en la prueba: pico de Pluma 411 MB con todo en memoria, 274 así, y vuelve a 55 al acabar;
+  copia en 1,5-1,8 s). Restaurar sí lo tiene todo en memoria un momento (fichero, descifrado y entradas). El formato 1 (los de antes) se sigue abriendo; un Pluma de
+  antes no abre uno de formato 2 (dice que no es una copia: no toca nada).
+- Un solo trabajador (en el proceso del perfil por defecto): cada hora si cambió algo (huella de nombres, tamaños y
+  horas; el contenido solo de los ficheros pequeños de Pluma), al cerrar la ventana como mucho cada 10 minutos y al
+  salir del todo siempre (Pluma espera hasta 2 min a que acabe, ya sin ventana ni mutex); guarda las 5 últimas.
+  Restaurar: se prepara en `restore-pending\` (dentro de la carpeta de Pluma) y Pluma se reinicia y lo aplica antes de
+  abrir el motor: cada perfil del motor de la copia sustituye entero al que había (que va, cachés incluidas, a
+  `antes-de-restaurar-<fecha>`, igual que los ficheros de Pluma). Una copia de antes (sin `Preferences`) solo pone lo
+  que traía (`engine_paths_v1`) y deja el resto (sin probar de punta a punta; `APLICAR` lleva el formato). Contraseña mal: no se toca nada.
 - Destinos: una carpeta (funciona), Google Drive appData, OneDrive App Folder, Dropbox App folder (OAuth con PKCE y
   `state`, vuelta a `http://127.0.0.1:47615/`). Google Drive: cliente «App de escritorio» del proyecto «Pluma» de la
   cuenta del usuario (solo `drive.appdata`); su ID y secreto en los secretos del repo (`GOOGLE_CLIENT_ID`,
   `GOOGLE_CLIENT_SECRET`) y release.yml los escribe en `src/secrets.h` (fuera de git) antes de compilar; una build
   local va sin ellos salvo que se cree ese fichero o se pongan en `ajustes.ini` `[sync]`. OneDrive y Dropbox, vacíos.
-- Pruebas: `tools\sync-test.cpp` (vector de Argon2id, ida y vuelta, contraseña mal, copia alterada, nombres no
-  permitidos). Instancias de prueba: `PLUMA_SYNC_CARPETA` y `PLUMA_SYNC_FICHERO` saltan los diálogos,
-  `PLUMA_SYNC_PRIMERA=1` enseña la oferta de restaurar.
+  Google Drive sube en una sola petición multipart (unos 62 MB con su perfil; Google la documenta para hasta 5 MB y
+  pide la subida reanudable para más: si falla con copias grandes, ese es el cambio); Dropbox, si un día se activa,
+  no pasa de 150 MB por petición. Volumen: la huella cambia casi cada hora que se navega, así que son unos 62 MB por
+  hora de uso, más al cerrar la ventana (como mucho cada 10 min) y al salir.
+- Pruebas: `tools\sync-test.cpp` (vector de Argon2id, ida y vuelta en formato 1 y 2, contraseña mal, copia alterada,
+  bloques con longitudes que mienten, nombres no permitidos: cachés, `..`, fuera de un perfil). De punta a punta:
+  `tools\sync\prueba.ps1 [-GrandeMB 100]` en la sesión interactiva con `PLUMA_EXE` (un sitio local, `servidor.js`, que
+  inicia sesión con cookie persistente HttpOnly, localStorage e IndexedDB, y una extensión con `chrome.storage`; copia a
+  una carpeta, comprueba que la copia no contiene la marca, el sitio ni nombres de ficheros, en UTF-8 ni UTF-16, cuando
+  el perfil sí; y restaura en una instancia limpia, que vuelve con la sesión iniciada y la extensión con lo suyo).
+  Instancias de prueba: `PLUMA_SYNC_CARPETA` y `PLUMA_SYNC_FICHERO` saltan los diálogos, `PLUMA_SYNC_PRIMERA=1` enseña la
+  oferta de restaurar.
+- Sin probar aquí (un solo Windows): que `Secure Preferences` sobreviva en otro equipo (sus firmas llevan el id de la
+  máquina: el motor puede reponer los ajustes protegidos) y la subida a Google Drive de una copia grande.
+- `antes-de-restaurar-<fecha>` guarda ahora el perfil del motor entero de antes, caché incluida (hasta ~600 MB en el
+  suyo), y nada lo borra. Si una restauración falla a medias, `restore-pending\` se queda (descifrado, dentro de la
+  carpeta de Pluma) para mirarlo.
 
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en
@@ -609,6 +658,9 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
   aunque Pluma las haya escondido entretanto. Salían con su último dibujo y se quedaban encima de una pestaña nueva
   con el vídeo ya cerrado (25/10). `layer_proc` ignora esos dos avisos y `layer_hide` esconde lo que se ve, no lo que
   Pluma cree que se ve.
+- `tools\prueba.ps1 -Salir` tardaba siempre 10 s y un Pluma de prueba arrancado justo después a veces no salía, sin
+  dejar nada en `pluma.log` (26/10): su `Mutex.TryOpenExisting` dejaba el handle abierto y el mutex seguía vivo con
+  Pluma ya fuera; el nuevo lo veía ocupado, no encontraba ventana y se iba a los 5 s. Ahora cierra el handle.
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.
 

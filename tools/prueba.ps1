@@ -7,7 +7,9 @@ $exe = if ($env:PLUMA_EXE) { $env:PLUMA_EXE } else { Join-Path (Split-Path $PSSc
 $env:PLUMA_INSTANCIA = $Nombre
 $env:PLUMA_DEPURAR = "$Puerto"
 $mutex = "PlumaNavegadorUnico.$Nombre"
-function Running { $m = $null; return [System.Threading.Mutex]::TryOpenExisting($mutex, [ref]$m) }
+# (the handle is closed at once: an open one keeps the mutex alive after Pluma is gone, so this waited the whole 10 s
+# and a Pluma started next found it "running" and ended without a word)
+function Running { $m = $null; $r = [System.Threading.Mutex]::TryOpenExisting($mutex, [ref]$m); if ($m) { $m.Dispose() }; return $r }
 if (Running) {
     $before = @(Get-Process Pluma -ErrorAction SilentlyContinue | ForEach-Object Id)
     & $exe --salir

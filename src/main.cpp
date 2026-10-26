@@ -1091,7 +1091,10 @@ void app_open_incognito(const std::wstring &url) {
 }
 void app_restart(bool hidden) {
     // the new one waits for this one to go (the "saliendo" handover) and opens what there was: the session, or hidden
-    // (another profile's window comes back as that profile)
+    // (another profile's window comes back as that profile). Marked as leaving before it starts: a new one quicker
+    // than quit_now found the window unmarked, handed itself over to it and ended, and nothing came back (a restore
+    // was then applied only at the next start)
+    for (auto &w : g_windows) SetPropW(w->hwnd, L"saliendo", (HANDLE)1);
     spawn_pluma(g_profile_id.empty() ? std::wstring(hidden ? L"--oculto" : L"") : L"--perfil=" + g_profile_id);
     quit_now();
 }
@@ -1318,6 +1321,6 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     // everything is saved by now: leave at once. Tearing the engine down politely made quitting take seconds, and a
     // Pluma opened meanwhile could find this one still there; the engine closes itself when its host is gone
     if (mutex) CloseHandle(mutex);
-    if (!g_incognito) { sync_wait_idle(8000); sync_shutdown(); }   // let a backup in progress finish before leaving
+    if (!g_incognito) { sync_wait_idle(120000); sync_shutdown(); }   // let a backup in progress finish before leaving (the mutex is gone: a new Pluma can start meanwhile)
     ExitProcess((UINT)m.wParam);
 }
