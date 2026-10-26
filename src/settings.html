@@ -244,6 +244,10 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
           <div class="txt"><div class="name" data-t="YouTube Music ligero">YouTube Music ligero</div><div class="desc" data-t="Una página propia de Pluma para YouTube Music; la música suena en el reproductor de Pluma y sigue mientras navegas">Una página propia de Pluma para YouTube Music; la música suena en el reproductor de Pluma y sigue mientras navegas</div></div>
           <label class="toggle"><input type="checkbox" id="musiclite"><span></span></label>
         </div>
+        <div class="row" data-k="reddit ligero rapido memoria">
+          <div class="txt"><div class="name" data-t="Reddit ligero">Reddit ligero</div><div class="desc" data-t="Una página propia de Pluma para Reddit, mucho más ligera, con tu misma cuenta; sus vídeos, en el reproductor de Pluma">Una página propia de Pluma para Reddit, mucho más ligera, con tu misma cuenta; sus vídeos, en el reproductor de Pluma</div></div>
+          <label class="toggle"><input type="checkbox" id="redditlite"><span></span></label>
+        </div>
       </div>
       <h3 class="sub" data-t="Sonido">Sonido</h3>
       <div class="card">
@@ -429,6 +433,7 @@ function render() {
   $('suggest').checked = S.suggest;
   $('ytlite').checked = S.ytlite;
   $('musiclite').checked = S.musiclite;
+  $('redditlite').checked = S.redditlite;
   $('video-on').checked = S.video; $('video-on').disabled = !S.videoAvailable;
   if (!S.videoAvailable) $('videodesc').textContent = tr('Falta el motor de vídeo de Pluma (motor-video)');
   $('startup').checked = S.startup; $('resident').checked = S.resident; $('spare').checked = S.spare;
@@ -522,7 +527,7 @@ $('engine').onchange = e => set('engine', e.target.value);
 $('idioma-sel').onchange = e => { set('idioma', e.target.value); setTimeout(ask, 100); };
 $('update').onchange = e => set('update', +e.target.value);
 $('sleep').onchange = e => set('sleep', +e.target.value);
-for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['musiclite', 'musiclite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
+for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['musiclite', 'musiclite'], ['redditlite', 'redditlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
   $(id).onchange = e => set(key, e.target.checked);
 $('profnew').onclick = () => send({ op: 'profile', what: 'new' });
 document.querySelectorAll('[data-do]').forEach(b => b.addEventListener('click', () => send({ op: 'do', what: b.dataset.do })));

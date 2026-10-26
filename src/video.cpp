@@ -116,8 +116,8 @@ struct Video {
     double photo_at = 0;
     bool photo_asked = false;
     double warm_at = 0;   // when its page was last awake behind the photo (it sleeps once left alone a while)
-    // on Pluma's light YouTube page (lite.cpp): no page player to meet nor a page to put to sleep, see lite_tick
-    bool lite = false, lite_cover = false;
+    // on Pluma's light page (lite.cpp: YouTube, Reddit): no page player to meet nor a page to put to sleep, see lite_tick
+    bool lite = false, lite_cover = false, reddit = false;   // (reddit: a video of the light Reddit page)
     double lite_asked = 0;
 };
 static int g_serial;
@@ -813,8 +813,13 @@ static bool google_url(const std::string &u, bool captions = false) {
     return host.size() > dom.size() && host.compare(host.size() - dom.size(), dom.size(), dom) == 0 &&
            host.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-.") == std::string::npos;
 }
-static bool media_url(const std::string &u) { return google_url(u); }
-// an address of a list as written in it (some are relative to the list), made whole
+// ... and Reddit's video server, for the light Reddit page's videos (lite.cpp)
+static bool media_url(const std::string &u) {
+    if (google_url(u)) return true;
+    if (u.rfind("https://v.redd.it/", 0) != 0) return false;
+    return u.find_first_of(" \"\r\n\\") == std::string::npos;
+}
+// an address of a list as written in it (Reddit's are relative to the list), made whole
 static std::string resolve(const std::string &base, const std::string &u) {
     if (u.rfind("https://", 0) == 0 || u.rfind("http://", 0) == 0 || base.empty()) return u;
     size_t host_end = base.find('/', 8);
@@ -988,7 +993,7 @@ static const wchar_t *tip_text(Video *v, int c, const wchar_t **key) {
     case C_MUTE: *key = L"m"; return v->muted || v->volume <= 0 ? T(L"Activar sonido") : T(L"Silenciar");
     case C_CC: *key = L"c"; return T(L"Subtítulos");
     case C_GEAR: return T(L"Configuración");
-    case C_PAGE: return T(L"Página de YouTube");
+    case C_PAGE: return v->reddit ? T(L"Página de Reddit") : T(L"Página de YouTube");
     case C_FULL: *key = L"f"; return g_fullscreen ? T(L"Salir de pantalla completa") : T(L"Pantalla completa");
     }
     return NULL;
@@ -2312,6 +2317,15 @@ static std::wstring watch_id(const std::wstring &url) {
     std::wstring id = url.substr(v + 2);
     return id.substr(0, id.find_first_of(L"&#"));
 }
+static std::wstring lite_video_id(Tab *t) {
+    // the video of a light page: YouTube's watch page, or a Reddit post (its id: /r/x/comments/<id>/...)
+    if (t->yt_lite) return watch_id(t->url);
+    if (t->lite != LITE_REDDIT) return L"";
+    size_t c = t->url.find(L"/comments/");
+    if (c == std::wstring::npos || c > 60) return L"";
+    std::wstring id = t->url.substr(c + 10);
+    return id.substr(0, id.find_first_of(L"/?#"));
+}
 static std::map<int, double> g_watch;   // tabs on a YouTube video, waiting for it to play: until when
 static std::map<int, std::wstring> g_woken;   // tabs whose page the person woke up, and on which video
 static void watch(Tab *t);
@@ -2319,14 +2333,15 @@ static const wchar_t *kLiteExtract = L"window.__pluma ? __pluma.extract() : { er
 static void lite_fail(Tab *t, const std::wstring &why);
 static void video_try(Tab *t) {
     if (!t || !t->view || t->video || !g_set.native_video) return;
-    bool page_lite = t->yt_lite;
-    std::wstring vid = watch_id(t->url);
+    bool page_lite = t->yt_lite || t->lite == LITE_REDDIT;
+    std::wstring vid = page_lite ? lite_video_id(t) : watch_id(t->url);
     if (vid.empty() || vid == t->video_declined || !load_mpv()) return;
     auto *v = new Video();
     v->tab = t->id;
     v->id = vid;
     v->asked = now_ms();
     v->lite = page_lite;
+    v->reddit = t->lite == LITE_REDDIT;
     t->video = v;
     int id = t->id;
     eval(t, v->lite ? kLiteExtract : kExtract, [id](const Json &r) {
@@ -2338,8 +2353,9 @@ static void video_try(Tab *t) {
         if (v->lite && r[L"error"].s == L"sin página ligera") {
             // the tab has YouTube's own page after all (it came back from memory, or without passing through Pluma):
             // its player goes as on YouTube's page
-            log_line(L"YouTube ligero: la pestaña tiene la página normal; el vídeo, como en ella");
+            log_line(L"Página ligera: la pestaña tiene la página normal; el vídeo, como en ella");
             t->yt_lite = false;
+            if (t->lite == LITE_REDDIT) t->lite = LITE_NONE;   // (Reddit's own page keeps its own player)
             t->video = nullptr; delete v;
             video_try(t);
             return;
@@ -2365,12 +2381,16 @@ static void video_try(Tab *t) {
             set_box(t, v, b.arr[0].n, b.arr[1].n, b.arr[2].n, b.arr[3].n, r[L"dpr"].kind == Json::NUM ? r[L"dpr"].n : 1);
         double pt = r[L"time"].n, at = r[L"state"].n == 1 ? now_ms() : -1;   // (-1: the page was still loading: its time stood still)
         std::wstring hls = r[L"hls"].s;
-        if (!google_url(utf8(hls))) { give_up(L"la lista no es de los servidores de Google"); return; }
+        if (v->reddit ? !media_url(utf8(hls)) || google_url(utf8(hls)) : !google_url(utf8(hls))) { give_up(L"la lista no es de los servidores del sitio"); return; }
         int serial = v->serial = ++g_serial;
+        // Reddit signs its master list for the page that asked (a plain GET from here gets 403): the page reads it and
+        // gives its text; the lists and pieces it names are open, and only Reddit's (below)
+        std::string given = v->reddit ? utf8(r[L"master"].s) : "";
+        if (v->reddit && (given.rfind("#EXTM3U", 0) != 0 || given.size() > 256 * 1024)) { give_up(L"sin la lista de Reddit"); return; }
         // the HLS list, from here (the page may not read it), then the player
-        std::thread([id, serial, hls, pt, at] {
-            std::string m3u8;
-            bool ok = http_get(hls, m3u8);
+        std::thread([id, serial, hls, pt, at, given] {
+            std::string m3u8 = given;
+            bool ok = !given.empty() || http_get(hls, m3u8);
             ui_post([id, serial, ok, m3u8, pt, at, hls] {
                 Tab *t = tab_by_id(id);
                 Video *v = V(t);
@@ -2378,9 +2398,14 @@ static void video_try(Tab *t) {
                 auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); if (v->lite) lite_fail(t, why); t->video = nullptr; delete v; };
                 if (!ok) { give_up(L"no se pudo leer la lista HLS"); return; }
                 v->fmts = parse_master(m3u8, utf8(hls));
+                if (v->reddit)
+                    v->fmts.erase(std::remove_if(v->fmts.begin(), v->fmts.end(), [](const Fmt &f) { return f.url.rfind("https://v.redd.it/", 0) != 0; }), v->fmts.end());
                 v->vf = pick_video(v, target_height(v));
                 v->af = pick_audio(v);
-                if (v->vf < 0 || v->af < 0) { give_up(L"no hay formatos que valgan"); return; }
+                // (a Reddit video may have its sound inside, or none: then no audio list)
+                bool any_audio = false;
+                for (auto &f : v->fmts) if (f.audio) any_audio = true;
+                if (v->vf < 0 || (v->af < 0 && (any_audio || !v->reddit))) { give_up(L"no hay formatos que valgan"); return; }
                 audio_gain(v);
                 fetch_playlists(v, { v->vf, v->af }, [pt, at](Video *v) {
                     if (v->stage != ST_WAITING || v->mpv) return;
@@ -2446,8 +2471,8 @@ void video_page_changed(Tab *t) {
     if (!t || !g_msg) return;
     if (t->lite == LITE_MUSIC) return;   // (its music: audio_page_loaded; the page moves without loading)
     Video *v = V(t);
-    if (t->yt_lite) {
-        std::wstring id = watch_id(t->url);
+    if (t->yt_lite || t->lite == LITE_REDDIT) {
+        std::wstring id = lite_video_id(t);
         // Pluma's light page: no page player to wait for; Pluma's goes in as soon as the page has loaded
         if (v && v->id != id) video_destroy(t);
         if (!id.empty() && !t->video && !t->loading && t->view && g_set.native_video && id != t->video_declined) video_try(t);
@@ -2564,7 +2589,7 @@ void video_layout() {
     else hide_controls_now();
     check_page(act);
 }
-// ---------------------------------------------------------------- Pluma's light YouTube page (lite.cpp)
+// ---------------------------------------------------------------- Pluma's light pages (lite.cpp): YouTube's watch page, a Reddit video
 // Its watch page has no player of its own: Pluma's goes in at once, in the page's player box, and the page (light)
 // stays awake and on screen around it. Four times a second the page gets the player's time and says where its box
 // is, which second a timestamp asked for, and whether something of the page (the search suggestions) needs the box.
