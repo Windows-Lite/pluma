@@ -2925,6 +2925,7 @@ void video_debug_shot(const std::wstring &path) {
                 for (int k = 0; k < 3; k++) d[k] = (BYTE)std::min(255.0f, s[k] * l->alpha + d[k] * (1 - a));
             }
     }
+    ui_blend_panels((BYTE *)bits, w, h, o);   // (the menu, the translation bubble...)
     for (int i = 0; i < w * h; i++) {
         BYTE *d = (BYTE *)bits + i * 4;
         d[3] = 255;

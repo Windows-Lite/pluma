@@ -11,6 +11,7 @@
 210 RCDATA "reader.html"
 211 RCDATA "readability/Readability.js"
 212 RCDATA "readability/Readability-readerable.js"
+221 RCDATA "translate.js"
 220 RCDATA "passgen.js"
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION 1,0,0,0

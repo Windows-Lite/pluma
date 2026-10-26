@@ -96,6 +96,9 @@ struct Settings {
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
     int reader_size = 20;              // the reader view's font size, px (reader.cpp)
+    bool tr_offer = true;              // offer to translate pages in another language (translate.cpp)
+    std::wstring tr_target;            // ... into this one (Google's code; empty = Pluma's language)
+    std::vector<std::wstring> tr_always, tr_never;   // languages translated always, or never offered
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
 extern Settings g_set;
@@ -137,6 +140,28 @@ void reader_attach(Tab *t);               // every view: is it an article? and P
 void reader_toggle(Tab *t);               // the book in the address bar or F9: into the reader view or out of it
 std::vector<std::wstring> reader_sites(); // the sites opened straight in the reader view (lectura.tsv)
 void reader_site_set(const std::wstring &site, bool on);
+
+// ---------------------------------------------------------------- page translation (translate.cpp)
+void translate_attach(Tab *t);            // every view: the page's language, and the translator when asked
+void translate_page(Tab *t);              // translate it (again, into the target chosen now)
+void translate_original(Tab *t);          // "show original"
+int translate_progress(Tab *t);           // 0..100 while translating
+void translate_selection(Tab *t, const std::wstring &text, bool has_point, POINT view_point);   // a bubble with it translated
+void translate_context_menu(Tab *t, ICoreWebView2ContextMenuRequestedEventArgs *a);           // its rows in the page's menu
+void translate_test_pick_menu();          // tests: the next page menu is logged and its translate row chosen, never shown
+std::wstring translate_lang_name(const std::wstring &code, bool capital);   // "francés", in Pluma's language
+std::vector<std::wstring> translate_targets();
+std::wstring translate_target();          // the language pages are translated into
+void translate_set_target(const std::wstring &code);
+bool translate_always(const std::wstring &lang);
+bool translate_never(const std::wstring &lang);
+void translate_set_always(const std::wstring &lang, bool on);
+void translate_set_never(const std::wstring &lang, bool on);
+bool translate_never_site(const std::wstring &site);
+void translate_set_never_site(const std::wstring &site, bool on);
+std::wstring translate_site(Tab *t);
+std::wstring translate_state_json();      // for the settings page
+bool translate_apply(const std::wstring &key, const Json &val);
 
 // ---------------------------------------------------------------- languages (lang.cpp)
 const wchar_t *T(const wchar_t *es);   // a text of the interface, written in Spanish, in the person's language
@@ -334,6 +359,10 @@ struct Tab {
     bool readerable = false;           // its page is an article: the address bar offers the reader view (reader.cpp)
     bool reader = false;               // ... and it is on screen
     std::wstring reader_declined;      // the address the person left the reader view at (no automatic reader view there)
+    std::wstring page_lang;            // its page's language, as found (translate.cpp; "" = not known)
+    bool tr_offer = false;             // ... is not the target: the address bar offers to translate it
+    int tr_state = 0;                  // 0 as it is, 1 being translated, 2 translated
+    std::wstring tr_sticky;            // the language translated in this tab: its next pages in it are translated too
     // the bar's geometry, animated
     Anim x, w, hover, close_hover;
     bool placed = false;
@@ -393,6 +422,14 @@ void ui_dpi_changed();
 void ui_notice(const std::wstring &text, const std::wstring &button, std::function<void()> action, int seconds = 0, int owner_tab = 0);
 void ui_notice_drop(int tab_id);          // the tab a note was about went elsewhere: the note goes
 void ui_toast(const std::wstring &text);
+void ui_translate_changed();              // a page's translation started, moved on or ended: the icon and its popup
+bool ui_translate_offer(Tab *t);          // the popup that offers to translate, quietly (never takes the focus); false: not now
+void ui_open_translate_menu();            // ... and opened by the person (the address bar's icon)
+void ui_open_menu_quietly(bool translate); // tests: the main menu or the translate popup, without the focus
+void ui_bubble(RECT anchor, const std::wstring &title, const std::wstring &text, bool loading);   // under anchor (screen)
+void ui_bubble_text(const std::wstring &title, const std::wstring &text, bool loading);          // its words change
+void ui_blend_panels(BYTE *bits, int w, int h, POINT origin);   // tests: the open panels into a picture (video_debug_shot)
+IStream *ui_glyph_png(wchar_t glyph);     // an icon of the bar's font as a PNG (the page's context menu); Release it
 void ui_open_menu();
 void ui_close_popups();
 void ui_caption_hover(int code);          // HTMINBUTTON/HTMAXBUTTON/HTCLOSE under the mouse, or 0

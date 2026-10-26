@@ -280,6 +280,29 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
           <select id="idioma-sel"></select>
         </div>
       </div>
+      <h3 class="sub" data-t="Traducción">Traducción</h3>
+      <div class="card" id="tr-card">
+        <div class="row" data-k="traducir traduccion translate ofrecer idioma paginas">
+          <div class="txt"><div class="name" data-t="Ofrecer traducir las páginas que no están en tu idioma">Ofrecer traducir las páginas que no están en tu idioma</div><div class="desc" data-t="El icono de traducir se enciende en la barra de direcciones y una ventanita lo ofrece, como en Edge">El icono de traducir se enciende en la barra de direcciones y una ventanita lo ofrece, como en Edge</div></div>
+          <label class="toggle"><input type="checkbox" id="tr-offer"><span></span></label>
+        </div>
+        <div class="row" data-k="traducir traduccion translate destino idioma">
+          <div class="txt"><div class="name" data-t="Traducir a">Traducir a</div><div class="desc" data-t="Las páginas y el texto que selecciones (clic derecho > Traducir). Lo hace Google Translate; nada sale de Pluma hasta que pides traducir">Las páginas y el texto que selecciones (clic derecho > Traducir). Lo hace Google Translate; nada sale de Pluma hasta que pides traducir</div></div>
+          <select id="tr-target"></select>
+        </div>
+        <div class="row" id="tr-always-head" data-k="traducir siempre idiomas">
+          <div class="txt"><div class="name" data-t="Idiomas que se traducen siempre">Idiomas que se traducen siempre</div><div class="desc" data-t="Se eligen desde el icono de traducir de la barra de direcciones">Se eligen desde el icono de traducir de la barra de direcciones</div></div>
+          <span class="badge" id="tr-always-none" data-t="Ninguno todavía">Ninguno todavía</span>
+        </div>
+        <div class="row" id="tr-never-head" data-k="no traducir nunca idiomas">
+          <div class="txt"><div class="name" data-t="Idiomas que no se traducen nunca">Idiomas que no se traducen nunca</div></div>
+          <span class="badge" id="tr-never-none" data-t="Ninguno todavía">Ninguno todavía</span>
+        </div>
+        <div class="row" id="tr-sites-head" data-k="no traducir nunca sitios webs">
+          <div class="txt"><div class="name" data-t="Sitios que no se traducen nunca">Sitios que no se traducen nunca</div></div>
+          <span class="badge" id="tr-sites-none" data-t="Ninguno todavía">Ninguno todavía</span>
+        </div>
+      </div>
     </section>
 
     <section id="descargas">
@@ -526,8 +549,29 @@ function render() {
     const b = document.createElement('button'); b.textContent = tr('Quitar'); b.onclick = () => set('readerSiteOff', h);
     r.append(n, b); $('lectura-card').append(r);
   }
+  renderTranslate();
   renderSound();
   renderSync();
+}
+// ---- translation: the target, and the lists, each entry with its "Quitar" under its heading
+function renderTranslate() {
+  $('tr-offer').checked = S.trOffer;
+  fill($('tr-target'), S.trTargets, S.trTarget);
+  document.querySelectorAll('#tr-card .site').forEach(r => r.remove());
+  const list = (head, none, items, key) => {
+    $(none).style.display = items.length ? 'none' : '';
+    let after = $(head);
+    for (const it of items) {
+      const [v, name] = Array.isArray(it) ? it : [it, it];
+      const r = document.createElement('div'); r.className = 'row site'; r.dataset.k = 'traducir ' + name;
+      const n = document.createElement('div'); n.className = 'txt'; n.textContent = name;
+      const b = document.createElement('button'); b.textContent = tr('Quitar'); b.onclick = () => set(key, v);
+      r.append(n, b); after.after(r); after = r;
+    }
+  };
+  list('tr-always-head', 'tr-always-none', S.trAlways, 'trAlwaysOff');
+  list('tr-never-head', 'tr-never-none', S.trNever, 'trNeverOff');
+  list('tr-sites-head', 'tr-sites-none', S.trSites, 'trSiteOff');
 }
 // ---- sync / backup
 let restorePath = '';
@@ -630,6 +674,8 @@ $('font').onchange = e => set('font', e.target.value);
 $('engine').onchange = e => set('engine', e.target.value);
 $('idioma-sel').onchange = e => { set('idioma', e.target.value); setTimeout(ask, 100); };
 $('update').onchange = e => set('update', +e.target.value);
+$('tr-offer').onchange = e => set('trOffer', e.target.checked);
+$('tr-target').onchange = e => set('trTarget', e.target.value);
 $('sleep').onchange = e => set('sleep', +e.target.value);
 for (const [id, key] of [['suggest', 'suggest'], ['passgen', 'passgen'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['musiclite', 'musiclite'], ['redditlite', 'redditlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
   $(id).onchange = e => set(key, e.target.checked);

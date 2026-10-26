@@ -183,6 +183,22 @@ void settings_load() {
     g_set.suggest_passwords = ini_get(L"sugerir_contrasenas", L"1") != L"0";
     g_set.bookmarks_bar = ini_get(L"barra_marcadores", L"0") == L"1";
     g_set.reader_size = std::min(40, std::max(12, _wtoi(ini_get(L"lectura_letra", L"20").c_str())));
+    g_set.tr_offer = ini_get(L"traducir_ofrecer", L"1") != L"0";
+    g_set.tr_target = trim(ini_get(L"traducir_a", L""));
+    auto list = [](const std::wstring &v) {
+        std::vector<std::wstring> out;
+        size_t pos = 0;
+        while (pos <= v.size()) {
+            size_t c = v.find(L',', pos);
+            std::wstring one = lower(trim(v.substr(pos, c == std::wstring::npos ? std::wstring::npos : c - pos)));
+            if (!one.empty() && std::find(out.begin(), out.end(), one) == out.end()) out.push_back(one);
+            if (c == std::wstring::npos) break;
+            pos = c + 1;
+        }
+        return out;
+    };
+    g_set.tr_always = list(ini_get(L"traducir_siempre", L""));
+    g_set.tr_never = list(ini_get(L"traducir_nunca", L""));
     g_set.schemes.clear();
     std::wstring sc = ini_get(L"protocolos", L"ytmp3");
     size_t pos = 0;
@@ -215,6 +231,11 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"sugerir_visitadas", g_set.suggest_top ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"sugerir_contrasenas", g_set.suggest_passwords ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"lectura_letra", std::to_wstring(g_set.reader_size).c_str(), f.c_str());
+    auto joined = [](const std::vector<std::wstring> &v) { std::wstring o; for (auto &x : v) o += (o.empty() ? L"" : L",") + x; return o; };
+    WritePrivateProfileStringW(L"pluma", L"traducir_ofrecer", g_set.tr_offer ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"traducir_a", g_set.tr_target.c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"traducir_siempre", joined(g_set.tr_always).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"traducir_nunca", joined(g_set.tr_never).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"efecto", g_set.sound.preset.c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"eq", sound_eq_text(g_set.sound.custom.eq).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"graves", std::to_wstring(g_set.sound.custom.bass).c_str(), f.c_str());
@@ -744,6 +765,26 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             std::wstring id = urls[0] == L"default" ? L"" : urls[0];
             urls.erase(urls.begin());
             if (profile_valid_id(id) || id.empty()) profile_open(id, urls);
+            return TRUE;
+        }
+        // test instances: "Pluma.exe pluma-prueba:<what>" drives the translator without a mouse (tools\traducir-prueba.ps1)
+        if (g_test && !urls.empty() && starts_with(urls[0], L"pluma-prueba:")) {
+            std::wstring what = urls[0].substr(13);
+            Tab *t = active_tab();
+            if (what == L"traducir") translate_page(t);
+            else if (what == L"original") translate_original(t);
+            else if (what == L"seleccion") translate_selection(t, L"", false, POINT{});
+            else if (what == L"menu") ui_open_menu_quietly(true);
+            else if (what == L"menu-principal") ui_open_menu_quietly(false);
+            else if (what == L"oferta") ui_translate_offer(t);
+            else if (what == L"clic-derecho") translate_test_pick_menu();   // the next page menu: logged, Pluma's row chosen
+            else if (starts_with(what, L"destino=")) translate_set_target(what.substr(8));
+            else if (starts_with(what, L"foto=")) {   // a picture with Pluma's panels as the screen shows them
+                std::wstring name = what.substr(5);
+                bool safe = !name.empty() && name.size() < 40;
+                for (wchar_t c : name) if (!iswalnum(c) && c != L'-') safe = false;
+                if (safe) video_debug_shot(g_state + L"\\" + name + L".png");
+            }
             return TRUE;
         }
         // links from other apps go to the profile used last (as in Edge)
