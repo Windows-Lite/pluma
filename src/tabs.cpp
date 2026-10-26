@@ -332,7 +332,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     EventRegistrationToken tok;
     ICoreWebView2 *v = t->view.Get();
     settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
-    youtube_attach(t);    // and its light YouTube
+    lite_attach(t);       // and the light pages (YouTube, YouTube Music)
     reader_attach(t);     // and the reader view
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
@@ -517,7 +517,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             [id](ICoreWebView2 *v, IUnknown *) -> HRESULT {
                 Tab *t = tab_by_id(id);
                 ComPtr<ICoreWebView2_8> v8;
-                if (!t || t->video_mode || FAILED(v->QueryInterface(IID_PPV_ARGS(&v8)))) return S_OK;   // (then the player says)
+                if (!t || t->video_mode || audio_on(t) || FAILED(v->QueryInterface(IID_PPV_ARGS(&v8)))) return S_OK;   // (then the player says)
                 BOOL a = FALSE; v8->get_IsDocumentPlayingAudio(&a);
                 t->audible = a != FALSE;
                 ui_invalidate();
@@ -882,6 +882,7 @@ void tab_reload(bool hard) {
 void tab_stop() { Tab *t = active_tab(); if (t && t->view) t->view->Stop(); }
 void tab_mute(Tab *t) {
     if (video_on(t)) { video_toggle_mute(t); t->muted = !t->muted; ui_invalidate(); return; }
+    if (audio_on(t)) { audio_toggle_mute(t); t->muted = !t->muted; ui_invalidate(); return; }
     ComPtr<ICoreWebView2_8> v8;
     if (!t || !t->view || FAILED(t->view.As(&v8))) return;
     BOOL m = FALSE; v8->get_IsMuted(&m);

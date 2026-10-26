@@ -52,7 +52,7 @@ código y commits en inglés; nada de em dashes.
   `%LOCALAPPDATA%\Pluma\extensiones`), instalar desde la Chrome Web Store o Edge Add-ons con «Añadir a Pluma»,
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
 - `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
-- `src/youtube.cpp` + `src/youtube.html`: YouTube ligero (apartado de abajo).
+- `src/lite.cpp` + `src/youtube.html`, `src/music.html`, `src/lite.html`: webs ligeras, YouTube y YouTube Music (apartados de abajo).
 - `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
@@ -199,7 +199,14 @@ ya tenga esa funcionalidad»).
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
   en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
 
-## YouTube ligero (`src/youtube.cpp`, `src/youtube.html`)
+## Webs ligeras (`src/lite.cpp`)
+- Una tabla de webs (`kSites`): origen que se contesta, RCDATA de su página, ajuste, qué direcciones hace y el aviso de
+  «la versión normal en esta pestaña». La marca `pluma_normal=1|2`, la caída a la página normal y el aviso son los mismos
+  para todas. Lo que comparten las páginas (colores de los dos temas, la barra con el botón de la versión normal, `t()`,
+  `fallback`) va en `lite.html` (RCDATA 206) y Pluma lo pone en el sitio de `<!--PLUMA_COMUN-->` al servirlas; la de
+  YouTube lleva lo suyo. Configuración > Webs ligeras: un interruptor por web (`youtube_ligero`, `music_ligero`).
+
+## YouTube ligero (`src/lite.cpp`, `src/youtube.html`)
 Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos memoria, sin perder la cuenta.
 - Cuando la pestaña va a www.youtube.com (`/`, `/results`, `/feed/subscriptions`, `/feed/history`, `/playlist`,
   `/watch` y la portada o los vídeos de un canal), Pluma contesta ese documento (WebResourceRequested, solo
@@ -209,7 +216,7 @@ Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos me
   SAPISIDHASH + SAPISID1PHASH/3PHASH si hay sesión, como YouTube.js y la propia web) y pinta. Sugerencias de
   `suggestqueries-clients6.youtube.com` (`xhr=t&oe=utf-8`, CORS abierto a youtube.com).
 - Ninguna página habla con Pluma: tema, idioma y textos (`t('...')` en la página, traducidos con `T()`) se escriben en
-  el HTML al servirlo (`/*PLUMA_CFG*/`). Ajuste `youtube_ligero` (Configuración > YouTube y vídeo), encendido.
+  el HTML al servirlo (`/*PLUMA_CFG*/`). Ajuste `youtube_ligero` (Configuración > Webs ligeras), encendido.
 - Lo que no hace (directos, Shorts, Studio, compras, music.youtube.com, otras pestañas del canal) es el YouTube de
   siempre. Si una llamada o la lectura falla, la página va a la misma dirección con `pluma_normal=1` (esa dirección,
   en esa pestaña); el botón «YouTube normal», con `pluma_normal=2` (todo YouTube en esa pestaña hasta salir de
@@ -257,6 +264,25 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   son los de la página (1,7-3 MB) más los del modo lectura (18-155 KB, sus fotos): mejora la lectura, no ahorra.
   Automático: la página se corta en DOMContentLoaded y el modo lectura sale a los 1,0-1,8 s; datos The Verge 1,9-2,0
   MB frente a 3,0, El País 1,4-1,5 frente a 1,75.
+
+## YouTube Music ligero (`src/music.html`, RCDATA 204)
+Plan aprobado el 26/10 (las webs que más visita: YouTube Music 1.590 visitas en 120 días).
+- music.youtube.com (`/`, `/search?q=`, `/browse/<id>`, `/channel/UC...`, `/playlist?list=`, `/library`, `/watch?v=`): la
+  página llama a su API como su web y ytmusicapi (cliente WEB_REMIX, versión = la fecha de ayer, firmada con SAPISIDHASH
+  si hay sesión). Inicio, búsqueda, artista, álbum, lista, biblioteca y «Canciones que me gustan» (con sesión).
+- No recarga nunca: los enlaces cambian la vista con `history.pushState`, así que la música sigue. Lo que no hace
+  (explorar, podcasts...) es un enlace normal y carga el YouTube Music de siempre.
+- La música suena en el reproductor de Pluma, solo sonido (`video.cpp`, «sound only»: un mpv sin ventana, `vid=no`, el
+  mejor audio de la lista HLS de visionOS, bajada a `cache-video\`). La cola, siguiente, aleatorio y repetir son de la
+  página; Pluma le pregunta 4 veces por segundo (1 si la pestaña no se ve) `__pluma.music(estado)` y hace lo que
+  devuelve (`play`, `pause`, `seek`, `volume`, `stop`). Mientras suena, la pestaña cuenta como audible y no se congela.
+  Silenciar la pestaña silencia ese mpv. Al ir a otro documento en esa pestaña (o cerrarla) la música para.
+- Trampa (26/10): sin sesión, visionOS da LOGIN_REQUIRED a casi todas las canciones (las «Art Track»); los vídeos
+  musicales sí van. IOS da enlaces directos que dan 403 pasado el primer MB (piden PO token); WEB/WEB_REMIX piden la
+  firma del reproductor. Una canción que no va pasa a la siguiente; tres seguidas, la abre el YouTube Music normal con
+  la cola. Con sesión no se pudo probar (la instancia de prueba va sin cuenta).
+- Sin teclas multimedia (el reproductor de Pluma no las tiene). Pruebas: `node tools\music-test.js`
+  (respuestas en `tools\ytm-respuestas`); medidas con `node tools\lite-medir.js <puerto> <url> [cold]`.
 
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en

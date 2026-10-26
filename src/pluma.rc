@@ -5,6 +5,8 @@
 201 RCDATA "bookmarks.html"
 202 RCDATA "import.html"
 203 RCDATA "youtube.html"
+204 RCDATA "music.html"
+206 RCDATA "lite.html"
 210 RCDATA "reader.html"
 211 RCDATA "readability/Readability.js"
 212 RCDATA "readability/Readability-readerable.js"

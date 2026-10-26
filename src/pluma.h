@@ -85,7 +85,8 @@ struct Settings {
     bool spare = false;                // a view made ahead of time (the next page starts 35 ms sooner; costs ~10 MB)
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
     bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
-    bool youtube_lite = true;          // YouTube answered with Pluma's own light page (youtube.cpp)
+    bool youtube_lite = true;          // YouTube answered with Pluma's own light page (lite.cpp)
+    bool music_lite = true;            // ... YouTube Music
     SoundSettings sound;               // the player's sound effects (sound.cpp): efecto, eq, graves, reverb, tono
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
@@ -114,10 +115,11 @@ void ui_ntp_changed();               // the new tab page's rows are read again
 void ui_open_menu_page(const std::wstring &which);   // the menu, open at "ext" or "scripts"
 std::wstring lang_name(const wchar_t *code);         // a language by its own name ("" = Windows's)             // Pluma closes for good: a waiting update goes in for the next start
 
-// ---------------------------------------------------------------- YouTube ligero (youtube.cpp)
+// ---------------------------------------------------------------- light pages: YouTube, YouTube Music (lite.cpp)
 struct Tab;
-void youtube_attach(Tab *t);              // every view: YouTube's pages answered with Pluma's light one
-void youtube_settings_changed();          // the setting went off: the light pages go back to YouTube's
+enum { LITE_NONE, LITE_YOUTUBE, LITE_MUSIC };
+void lite_attach(Tab *t);                 // every view: those sites' pages answered with Pluma's light ones
+void lite_settings_changed();             // a site's setting went off: its light pages go back to the site's own
 
 // ---------------------------------------------------------------- the reader view (reader.cpp)
 void reader_attach(Tab *t);               // every view: is it an article? and Pluma's reader page for it
@@ -286,7 +288,8 @@ struct Tab {
     bool video_mode = false;           // ... on screen instead of the page, which sleeps behind it
     std::wstring video_declined;       // the video the person went back to the page for: it stays on the page
     bool incognito = false;            // InPrivate: nothing of it is kept (history, cookies, session); gone with the window
-    bool yt_lite = false;              // its page is Pluma's light YouTube (youtube.cpp): Pluma's player goes straight in
+    bool yt_lite = false;              // its page is Pluma's light YouTube (lite.cpp): Pluma's player goes straight in
+    int lite = LITE_NONE;              // which of Pluma's light pages it shows (lite.cpp), if any
     bool readerable = false;           // its page is an article: the address bar offers the reader view (reader.cpp)
     bool reader = false;               // ... and it is on screen
     std::wstring reader_declined;      // the address the person left the reader view at (no automatic reader view there)
@@ -381,6 +384,10 @@ bool video_settled();                     // the player on screen already draws 
 double video_position(Tab *t);
 bool video_focus();                       // the keys to the player, if one is on screen
 void video_toggle_mute(Tab *t);
+void audio_page_loaded(Tab *t);           // a light YouTube Music page loaded: Pluma asks it what to play (audio only)
+void audio_stop(Tab *t);                  // its tab leaves it or goes: the music stops
+bool audio_on(Tab *t);                    // that tab's music plays in Pluma's player
+void audio_toggle_mute(Tab *t);
 void video_settings_changed();
 void video_sound_changed();               // the sound effects changed: every player plays them now
 bool video_playing(Tab *t);               // Pluma's player is on in this tab and not paused
