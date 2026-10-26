@@ -14,7 +14,7 @@ código y commits en inglés; nada de em dashes.
   `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
   actualizar (auto | avisar | no),
   dormir_s, descargar_s, recientes, descargar_min, reserva, residente, protocolos, `motor` = argumentos extra para el
-  motor), sesión en `sesion.tsv`,
+  motor, efecto, eq, graves, reverb, tono = efectos de sonido del reproductor), sesión en `sesion.tsv`,
   historial en `historial.tsv`, iconos de webs en `iconos\`, registro con tiempos en `pluma.log`.
 - `src/main.cpp`: ventana con marco propio (las pestañas son la barra de título; los botones de Windows 11 con su menú
   de acoplar vía HTMAXBUTTON), ajustes, historial y autocompletado, arranque.
@@ -182,6 +182,20 @@ ya tenga esa funcionalidad»).
   las calidades se bajan nada más empezar, para que el cambio no espere al servidor de listas (1-3 s cada una). El
   búfer es de ~10 s del vídeo elegido, como poco 4 MB: 4K a 60 fps (28 Mb/s, aquí bajan 24-30 Mb/s por conexión) se
   paraba a cargar con 4 MB; con 33 MB no se para. 4K: 196 MB en total, la gráfica Intel al 57 %, la CPU al 3 %.
+- Bucle (pedido el 26/10: «tengo el modo loop activado, estoy en otra tab y se queda pausado el video»): fila «Bucle»
+  del menú del reproductor (`loop-file=inf`), y el bucle de la página de YouTube pasa al reproductor y vuelve. En bucle
+  el final nunca devuelve el vídeo a la página. Una pestaña de fondo con el reproductor sonando no se congela ni se
+  suelta aunque esté en silencio (`video_playing`): soltarla cerraba el reproductor.
+- Efectos de sonido (pedido el 26/10: «equalizer para poner bass boost etc, configurable», «ajustar pitch, modo
+  nightcore, filtros»): `src/sound.cpp` arma el `af` de mpv. Presets (Desactivado, Más graves, Graves fuertes, Voces
+  claras, Más agudos, Nightcore, Slowed + reverb, 8D, Sala, Personalizado) en el menú del reproductor y en
+  Configuración > YouTube y vídeo > Sonido (ecualizador de 10 bandas, graves, reverberación); el tono (-6..+6
+  semitonos) va aparte y vale con cualquiera. El tono, con el `rubberband` de mpv (que entonces hace también la
+  velocidad); Nightcore y Slowed suben o bajan velocidad y tono juntos (velocidad de mpv = la elegida × la del
+  efecto: el menú enseña la elegida). El resto, un grafo de lavfi: `equalizer` por banda, `bass`, `apulsator` (8D),
+  `aecho` y `alimiter` al final (sin su nivel automático) tras quitar la mitad del mayor realce. Desactivado y tono 0:
+  ningún filtro. Se aplica al momento a todos los reproductores. Prueba de las cadenas: `tools\sonido-test.cpp`
+  (`c++ -std=c++17`; `--grafos` las saca para probarlas con `ffmpeg -af`).
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
   en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
 

@@ -169,6 +169,12 @@ void settings_load() {
     g_set.native_video = ini_get(L"video_propio", L"1") != L"0";
     g_set.youtube_lite = ini_get(L"youtube_ligero", L"1") != L"0";
     g_set.suggest_top = ini_get(L"sugerir_visitadas", L"1") != L"0";
+    g_set.sound.preset = ini_get(L"efecto", L"no");
+    sound_eq_parse(ini_get(L"eq", L""), g_set.sound.custom.eq);
+    g_set.sound.custom.bass = _wtoi(ini_get(L"graves", L"0").c_str());
+    g_set.sound.custom.reverb = _wtoi(ini_get(L"reverb", L"0").c_str());
+    g_set.sound.pitch = _wtoi(ini_get(L"tono", L"0").c_str());
+    sound_clamp(g_set.sound);
     g_set.bookmarks_bar = ini_get(L"barra_marcadores", L"0") == L"1";
     g_set.reader_size = std::min(40, std::max(12, _wtoi(ini_get(L"lectura_letra", L"20").c_str())));
     g_set.schemes.clear();
@@ -200,6 +206,11 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"youtube_ligero", g_set.youtube_lite ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"sugerir_visitadas", g_set.suggest_top ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"lectura_letra", std::to_wstring(g_set.reader_size).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"efecto", g_set.sound.preset.c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"eq", sound_eq_text(g_set.sound.custom.eq).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"graves", std::to_wstring(g_set.sound.custom.bass).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"reverb", std::to_wstring(g_set.sound.custom.reverb).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"tono", std::to_wstring(g_set.sound.pitch).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"barra_marcadores", g_set.bookmarks_bar ? L"1" : L"0", f.c_str());
     std::wstring sc;
     for (auto &s : g_set.schemes) sc += (sc.empty() ? L"" : L",") + s;

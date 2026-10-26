@@ -66,6 +66,16 @@ button.danger { color: var(--danger); }
 .swatch i { flex: 1; }
 .empty { color: var(--sub); padding: 30px 0; display: none; }
 .badge { color: var(--sub); font-size: 13px; }
+h3.sub { font-size: 15px; font-weight: 600; margin: 22px 0 10px; }
+.row.col { flex-direction: column; align-items: stretch; gap: 10px; }
+input[type=range] { accent-color: var(--accent); margin: 0; }
+.range { display: flex; align-items: center; gap: 10px; flex: none; }
+.range input { width: 220px; }
+.val { min-width: 58px; text-align: right; color: var(--sub); font-size: 13px; font-variant-numeric: tabular-nums; }
+.eq { display: flex; justify-content: space-between; gap: 4px; padding: 2px 4px 2px; }
+.eq .band { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.eq .band span { color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
+.eq input { writing-mode: vertical-lr; direction: rtl; height: 120px; width: 22px; }
 @media (max-width: 760px) { nav { display: none; } main { padding: 20px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -203,6 +213,33 @@ button.danger { color: var(--danger); }
           <label class="toggle"><input type="checkbox" id="ytlite"><span></span></label>
         </div>
       </div>
+      <h3 class="sub" data-t="Sonido">Sonido</h3>
+      <div class="card">
+        <div class="row" data-k="sonido efectos audio bass boost nightcore slowed 8d sala">
+          <div class="txt"><div class="name" data-t="Efectos de sonido">Efectos de sonido</div><div class="desc" data-t="En el reproductor de Pluma, también desde su menú; se oye al momento">En el reproductor de Pluma, también desde su menú; se oye al momento</div></div>
+          <select id="fx"></select>
+        </div>
+        <div class="row" data-k="sonido tono pitch semitonos agudo grave">
+          <div class="txt"><div class="name" data-t="Tono">Tono</div><div class="desc" data-t="Más agudo o más grave sin cambiar la velocidad">Más agudo o más grave sin cambiar la velocidad</div></div>
+          <div class="range"><input type="range" id="pitch" min="-6" max="6" step="1"><span class="val" id="pitch-v"></span></div>
+        </div>
+        <div class="row col" data-k="sonido ecualizador equalizer bandas frecuencias">
+          <div class="txt"><div class="name" data-t="Ecualizador">Ecualizador</div><div class="desc" data-t="Al moverlo, el efecto pasa a Personalizado">Al moverlo, el efecto pasa a Personalizado</div></div>
+          <div class="eq" id="eq"></div>
+        </div>
+        <div class="row" data-k="sonido graves bass boost">
+          <div class="txt"><div class="name" data-t="Graves">Graves</div></div>
+          <div class="range"><input type="range" id="bass" min="-12" max="12" step="1"><span class="val" id="bass-v"></span></div>
+        </div>
+        <div class="row" data-k="sonido reverberacion reverb eco sala">
+          <div class="txt"><div class="name" data-t="Reverberación">Reverberación</div><div class="desc" data-t="Como si sonara en una sala">Como si sonara en una sala</div></div>
+          <div class="range"><input type="range" id="reverb" min="0" max="100" step="5"><span class="val" id="reverb-v"></span></div>
+        </div>
+        <div class="row" data-k="sonido restablecer efectos">
+          <div class="txt"><div class="name" data-t="Sin efectos">Sin efectos</div><div class="desc" data-t="Vuelve todo a cero: el sonido tal cual">Vuelve todo a cero: el sonido tal cual</div></div>
+          <button id="fx-reset" data-t="Restablecer">Restablecer</button>
+        </div>
+      </div>
     </section>
 
     <section id="lectura">
@@ -335,7 +372,53 @@ function render() {
     const b = document.createElement('button'); b.textContent = tr('Quitar'); b.onclick = () => set('readerSiteOff', h);
     r.append(n, b); $('lectura-card').append(r);
   }
+  renderSound();
 }
+// ---- the sound block: a preset fills the sliders with what it does; moving one makes it the person's own
+const FREQ = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
+let dragged = null, sendTimer = 0, sentAt = 0;
+const db = n => (n > 0 ? '+' : '') + n + ' dB';
+function fxOf(id) {
+  if (id === 'personalizado') return S.sound.custom;
+  const p = S.sound.presets.find(x => x[0] === id);
+  return p ? p[2] : S.sound.presets[0][2];
+}
+function renderSound() {
+  const snd = S.sound;
+  if (!$('eq').children.length) {
+    $('eq').innerHTML = FREQ.map((f, i) => `<label class="band"><span id="eq${i}-v"></span><input type="range" id="eq${i}" min="-12" max="12" step="1"><span>${f}</span></label>`).join('');
+    for (let i = 0; i < 10; i++) $('eq' + i).addEventListener('input', e => own(c => { c.eq[i] = +e.target.value; }));
+  }
+  fill($('fx'), snd.presets.map(p => [p[0], p[1]]), snd.preset);
+  const fx = fxOf(snd.preset);
+  const put = (id, v, text) => { if (dragged !== $(id)) { $(id).value = v; $(id + '-v').textContent = text; } };
+  put('pitch', snd.pitch, snd.pitch ? (snd.pitch > 0 ? '+' : '') + snd.pitch : tr('Normal'));
+  for (let i = 0; i < 10; i++) put('eq' + i, fx.eq[i], (fx.eq[i] > 0 ? '+' : '') + fx.eq[i]);
+  put('bass', fx.bass, db(fx.bass));
+  put('reverb', fx.reverb, fx.reverb + ' %');
+}
+function sendSound() {
+  // at most every 150 ms while a slider moves (each change rebuilds mpv's filters), and the last one always
+  clearTimeout(sendTimer);
+  const go = () => { sentAt = Date.now(); set('sound', { preset: S.sound.preset, pitch: S.sound.pitch, custom: S.sound.custom }); };
+  const wait = 150 - (Date.now() - sentAt);
+  if (wait <= 0) go(); else sendTimer = setTimeout(go, wait);
+}
+function own(change) {
+  const c = JSON.parse(JSON.stringify(fxOf(S.sound.preset)));
+  change(c);
+  S.sound.custom = { eq: c.eq, bass: c.bass, reverb: c.reverb };
+  S.sound.preset = 'personalizado';
+  renderSound();
+  sendSound();
+}
+document.addEventListener('pointerdown', e => { if (e.target.type === 'range') dragged = e.target; });
+addEventListener('pointerup', () => { dragged = null; if (S) renderSound(); });
+$('fx').onchange = e => { S.sound.preset = e.target.value; renderSound(); sendSound(); };
+$('pitch').addEventListener('input', e => { S.sound.pitch = +e.target.value; $('pitch-v').textContent = S.sound.pitch ? (S.sound.pitch > 0 ? '+' : '') + S.sound.pitch : tr('Normal'); sendSound(); });
+$('bass').addEventListener('input', e => { $('bass-v').textContent = db(+e.target.value); own(c => { c.bass = +e.target.value; }); });
+$('reverb').addEventListener('input', e => { $('reverb-v').textContent = e.target.value + ' %'; own(c => { c.reverb = +e.target.value; }); });
+$('fx-reset').onclick = () => { S.sound.preset = 'no'; S.sound.pitch = 0; S.sound.custom = { eq: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], bass: 0, reverb: 0 }; renderSound(); sendSound(); };
 // the search: rows by their words (shown, in the language, and their keywords); sections with none left go
 function filter() {
   const q = $('q').value.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -381,7 +464,7 @@ function ask() {
   document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
   document.querySelectorAll('[data-tp]').forEach(e => all.add(e.dataset.tp));
   ['La de Windows', '1 activa', ' activas', '1 activo', ' activos', 'Pluma es tu navegador predeterminado', 'Pluma no es tu navegador predeterminado',
-   'Falta el motor de vídeo de Pluma (motor-video)', 'Quitar'].forEach(s => all.add(s));
+   'Falta el motor de vídeo de Pluma (motor-video)', 'Quitar', 'Normal'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {
