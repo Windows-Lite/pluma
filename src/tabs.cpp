@@ -407,6 +407,9 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
             BOOL ok = FALSE; a->get_IsSuccess(&ok);
+            COREWEBVIEW2_WEB_ERROR_STATUS es = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+            if (!ok) a->get_WebErrorStatus(&es);
+            t->cert_error = !ok && es >= COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT && es <= COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID;
             t->loading = false;
             t->progress = 1;
             t->load_done = now_ms();

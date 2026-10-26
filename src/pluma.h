@@ -343,6 +343,7 @@ struct Tab {
     void *icon_bmp = nullptr;          // ID2D1Bitmap owned by the bar
     bool loading = false, audible = false, muted = false, suspended = false, creating = false;
     bool can_back = false, can_fwd = false, crashed = false;
+    bool cert_error = false;           // its page failed on the server's certificate: "Not secure" in the bar
     double hidden_since = 0;           // 0 while it is the one on screen
     std::wstring pending;              // a url to load as soon as the view exists
     std::vector<std::wstring> scripts_ids;   // the injected userscripts, to swap them

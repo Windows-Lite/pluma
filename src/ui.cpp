@@ -28,7 +28,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
                  G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
-                 G_COPY = 0xE8C8 };
+                 G_COPY = 0xE8C8, G_WARN = 0xE7BA };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -74,7 +74,7 @@ static D2D1_RENDER_TARGET_TYPE render_type() {
     return !wcscmp(v, L"cpu") ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT;
 }
 static ComPtr<ID2D1SolidColorBrush> g_br;
-struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, title; };
+struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, chip, chip_b, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, title; };
 static Formats g_f;
 static HFONT g_edit_font;
 static std::unordered_map<std::wstring, float> g_widths;   // text widths, measured once
@@ -105,6 +105,9 @@ static void make_formats() {
     g_f.icon = make_format(true, S(16), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.icon_sm = make_format(true, S(10), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.icon_lg = make_format(true, S(20), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
+    // the "Not secure" chip before the address, as in Chrome and Edge
+    g_f.chip = make_format(false, S(13), DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.chip_b = make_format(false, S(13), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.menu = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.hint = make_format(false, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_f.word = make_format(false, S(30), DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -698,6 +701,13 @@ static void paint_button(ID2D1RenderTarget *rt, D2D1_RECT_F r, Hit h, int id, wc
     if (hv > 0 || down) fill(rt, g_br.Get(), r, S(8), down ? p.press : alpha(p.hover, hv * 1.3f));
     glyph(rt, g_br.Get(), g_f.icon.Get(), g, r, enabled ? p.text : alpha(p.sub, 0.45f));
 }
+// this computer's own servers are not "not secure" (Chrome treats them as secure contexts)
+static bool local_host(const std::wstring &u) {
+    std::wstring h = url_host(u);
+    if (starts_with(h, L"[")) return starts_with(h, L"[::1]");
+    h = h.substr(0, h.find(L':'));
+    return h == L"localhost" || (h.size() > 10 && h.compare(h.size() - 10, 10, L".localhost") == 0) || starts_with(h, L"127.");
+}
 static std::wstring strip_scheme(const std::wstring &u) {
     std::wstring s = starts_with(u, L"https://") ? u.substr(8) : u;
     size_t slash = s.find(L'/');
@@ -798,14 +808,29 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     std::wstring u = t ? settings_page_display(t->url) : L"";
     wchar_t ig = G_SEARCH;
     D2D1_COLOR_F ic = p.sub;
+    // the site info, the size of the toolbar's glyphs; a page that is not safe says so in red, as in Chrome and Edge:
+    // plain http (not this computer's own) on a soft red pill, a certificate error on a stronger one
+    int unsafe = 0;   // 1 http, 2 certificate error
     if (!focused && !u.empty()) {
-        if (starts_with(u, L"https://")) ig = G_LOCK;
-        else if (starts_with(u, L"http://")) { ig = G_INFO; ic = p.error; }
+        if (starts_with(u, L"https://")) { ig = G_LOCK; if (t->cert_error) unsafe = 2; }
+        else if (starts_with(u, L"http://")) { ig = G_INFO; if (!local_host(u)) unsafe = 1; }
         else if (starts_with(u, L"file:")) ig = G_FILE;
         else if (starts_with(u, L"chrome-extension:")) ig = G_PUZZLE;
         else ig = G_INFO;
     }
-    glyph(rt, g_br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), ic);
+    float text_l = a.left + S(36);
+    if (unsafe) {
+        ig = G_WARN; ic = p.error;
+        auto cf = unsafe == 2 ? g_f.chip_b : g_f.chip;
+        std::wstring label = T(L"No seguro");
+        D2D1_RECT_F chip = R(a.left + S(5), a.top + S(5), ix + S(13) + text_w(cf.Get(), label) + S(9), a.bottom - S(5));
+        float k = (unsafe == 2 ? 0.20f : 0.10f) * (dark_theme() ? 1.6f : 1);
+        fill(rt, g_br.Get(), chip, S(7), alpha(p.error, k));
+        if (unsafe == 2) stroke(rt, g_br.Get(), chip, S(7), alpha(p.error, 0.55f), S(1));
+        text(rt, g_br.Get(), cf.Get(), label, R(ix + S(13), a.top, chip.right, a.bottom), p.error);
+        text_l = chip.right + S(8);
+    }
+    glyph(rt, g_br.Get(), g_f.icon.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), ic);
     float right = a.right - S(12);
     if (star_shown()) {
         // the star: filled in the accent when the page is one of the person's own on the new tab page
@@ -850,7 +875,7 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         right = z.left - S(6);
     }
     if (!focused) {
-        D2D1_RECT_F tr = R(a.left + S(36), a.top, right, a.bottom);
+        D2D1_RECT_F tr = R(text_l, a.top, right, a.bottom);
         if (u.empty()) text(rt, g_br.Get(), g_f.addr.Get(), T(L"Busca o escribe una dirección"), tr, p.sub);
         else {
             // the site in ink, the rest of the address in grey
