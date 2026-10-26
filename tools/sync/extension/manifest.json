@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Pluma sync test",
+  "version": "1.0",
+  "description": "Test of Pluma's backup (tools\\sync\\prueba.ps1): its storage must survive a restore. The key fixes its id (jecpbebebpkhogpohgkojjbolacghlod).",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwbwHT6CwFEl7JPURANa6F7gzCQRvabEZtJOqWVkyYDcQcnzOkhp5R8yy38v5OpTWbiJ0E6NaES6p8Nl1HeO9R8hgqJy3SnzK0E/gz9VMyDuYQYTbh+qUicfh4tjz0Dbn+Y7oHmCFMzvq7VmaISuEksosBkkPLmSY0Dd/PYTOUe5CKmVr9955Qr51vA6Cva9f941xhrAsbmFpTev/7vMw4G7is87GrJgu/Uk2xAg+ZJwhhjUq8xuWF7pctlA8t6AiQQFSj6mIC5fSXHAlRJiXwRkFSYMLZaYemxfiUZsYGBG9nHD6AjslD1367WcUdnMLG/eI5x7Kk/QVFTOFsfUMRwIDAQAB",
+  "permissions": ["storage"]
+}

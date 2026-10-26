@@ -9,9 +9,13 @@
 //   ciphertext + tag               AES-256-GCM (BCrypt) of the compressed archive; the tag (16 bytes) last
 // The magic, the length and the header are the GCM's additional data: changing any of them fails like a wrong password.
 // Key: Argon2id (Monocypher) of the password with the header's salt; memory, passes and lanes are in the header too.
-// Archive (before compression, Windows's XPRESS+Huffman): "PLAR", uint32 count, then per entry uint32 name length,
-// name (UTF-8, '/' separated), uint64 size, the bytes. Names are checked before anything is written: only Pluma's own
-// files and the engine's allowed folders, never "..", drive letters or absolute paths (allowed_target).
+// Archive: "PLAR", uint32 count, then per entry uint32 name length, name (UTF-8, '/' separated), uint64 size, the
+// bytes. Names are checked before anything is written: only Pluma's own files and the engine's profiles (not their
+// caches), never "..", drive letters or absolute paths (allowed_target).
+// Compression (Windows's XPRESS+Huffman): formato 1, the whole archive in one piece; formato 2 (since the whole
+// browser goes in), blocks of up to 4 MB of the archive as it is filled, each "uint32 raw length, uint32 compressed
+// length, bytes", and a raw length of 0 at the end; its count is 0xFFFFFFFF (entries up to the end). So a backup
+// holds in memory the compressed copy and one block, not the profile two or three times over.
 #pragma once
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00   // Windows 10: the compression API and the BCrypt calls below
@@ -135,21 +139,58 @@ inline bool decompress(const std::string &in, std::string &out) {
 // ---------------------------------------------------------------- the archive
 struct Entry { std::string name, data; };
 
-// what a restore may write: Pluma's own files and folders, and the engine's allowed ones (all relative to the data folder)
+// what a restore may write: Pluma's own files and folders, and the engine's profiles (all relative to the data folder)
 inline const std::vector<std::string> &pluma_files() {
     static const std::vector<std::string> v = { "ajustes.ini", "sesion.tsv", "historial.tsv", "marcadores.json", "paginas.tsv",
-                                                "ocultas.tsv", "lectura.tsv", "extensiones.tsv", "perfiles.tsv" };
+                                                "ocultas.tsv", "lectura.tsv", "extensiones.tsv", "perfiles.tsv", "traducir-nunca.tsv",
+                                                "passwords-pending.tsv", "perfil-ultimo.txt" };
     return v;
 }
 inline const std::vector<std::string> &pluma_dirs() {
-    static const std::vector<std::string> v = { "scripts", "extensiones", "iconos", "perfiles" };
+    static const std::vector<std::string> v = { "scripts", "extensiones", "iconos", "perfiles", "extensiones-ajustes" };
     return v;
 }
-// the engine (webview2\EBWebView\<profile>\...), inside each of its profiles: the extensions' own settings (leveldb
-// folders), the saved passwords and the cookies (sessions); never Local State, other site storage or caches. Passwords
-// and cookies are encrypted with the engine's key, which the backup carries apart (meta/clave) and a restore puts back
-// for this Windows account.
-inline const std::vector<std::string> &engine_paths() {
+// inside Pluma's folders: what is made again by itself (a profile's video cache, an import's scratch folder)
+inline bool pluma_skip_dir(const std::string &seg) { return seg == "cache-video" || seg == "imp_tmp"; }
+
+// The engine (webview2\EBWebView\<profile>\...): the whole profile, as Firefox keeps its whole profile folder and
+// leaves its caches apart: passwords, cookies, every site's storage (Local Storage, Session Storage, IndexedDB,
+// Service Worker with its scripts and Cache Storage, File System, WebStorage), Web Data (autofill, cards, addresses),
+// History, Favicons, Top Sites, Preferences and Secure Preferences (site permissions, zoom), the extensions and all
+// their state. Left out, at any depth, what the engine makes again by itself (bleachbit's "cache" list for Chrome,
+// Chromium's own cache folders): HTTP and code caches, GPU shader caches, crash dumps, leveldb's lock and text logs,
+// SQLite's shared-memory index (rebuilt from the -wal), temp files. Passwords and cookies are encrypted with the
+// engine's key, which the backup carries apart (meta/clave) and a restore guards again for this Windows account.
+inline bool engine_skip_dir(const std::string &seg) {
+    static const char *const v[] = { "Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache",
+                                     "GraphiteDawnCache", "GrShaderCache", "ShaderCache", "GPUPersistentCache", "Media Cache",
+                                     "Application Cache", "blob_storage", "Crashpad", "component_crx_cache",
+                                     "extensions_crx_cache", "Safe Browsing Network", "BrowserMetrics", "Shared Dictionary",
+                                     "optimization_guide_hint_cache_store", "optimization_guide_model_store" };
+    for (auto *d : v) if (seg == d) return true;
+    return seg.compare(0, 12, "JumpListIcon") == 0;
+}
+inline bool engine_skip_file(const std::string &leaf) {
+    if (leaf == "LOCK" || leaf == "LOG" || leaf == "LOG.old") return true;   // leveldb's lock (held by the engine) and text logs
+    auto ends = [&](const char *x) { size_t n = strlen(x); if (leaf.size() < n) return false;
+                                     for (size_t i = 0; i < n; i++) if (tolower((unsigned char)leaf[leaf.size() - n + i]) != x[i]) return false;
+                                     return true; };
+    return ends("-shm") || ends(".tmp") || ends(".dbtmp");
+}
+// a path inside an engine profile ('/' separated) that a backup keeps (every folder on the way and the file itself)
+inline bool engine_kept(const std::string &rel) {
+    if (rel.empty()) return false;
+    size_t a = 0;
+    for (;;) {
+        size_t b = rel.find('/', a);
+        if (b == std::string::npos) return !engine_skip_file(rel.substr(a));
+        if (engine_skip_dir(rel.substr(a, b - a))) return false;
+        a = b + 1;
+    }
+}
+// what a backup made before the whole profile went in (26/10) holds of each engine profile: a restore of one of those
+// puts back just these, leaving the rest of the profile as it is
+inline const std::vector<std::string> &engine_paths_v1() {
     static const std::vector<std::string> v = {
         "Local Extension Settings", "Sync Extension Settings", "Managed Extension Settings",
         "Extension State", "Extension Rules", "Extension Scripts",
@@ -157,9 +198,10 @@ inline const std::vector<std::string> &engine_paths() {
         "Network/Cookies", "Network/Cookies-wal" };
     return v;
 }
-// the engine databases among those: a restore sets their live journals aside with them
-inline const std::vector<std::string> &engine_dbs() {
-    static const std::vector<std::string> v = { "Login Data", "Login Data For Account", "Network/Cookies" };
+// the engine databases it keeps locked for itself while it runs (nobody else can even read them): each start copies
+// them (with their journals) before the engine opens them, and the backup takes that copy
+inline const std::vector<std::string> &engine_locked_dbs() {
+    static const std::vector<std::string> v = { "Network/Cookies", "Login Data", "Login Data For Account" };
     return v;
 }
 // an engine profile folder: "Default", or "WV2Profile_pluma-<id>" (a Pluma profile: lowercase letters and digits)
@@ -192,23 +234,25 @@ inline bool safe_name(const std::string &n) {
 inline bool under(const std::string &n, const std::string &root) {   // n is root itself or inside it
     return n == root || (n.size() > root.size() && n.compare(0, root.size(), root) == 0 && n[root.size()] == '/');
 }
-// "pluma/<file or dir/...>", "motor/<engine path>", or one of the "meta/..." entries (never written as files).
-// meta/clave is the engine's key (it opens the passwords and cookies): sync.cpp stores it and puts it back.
+// "pluma/<file or dir/...>", "motor/<engine profile>/<path kept>", or one of the "meta/..." entries (never written as
+// files). meta/clave is the engine's key (it opens the passwords and cookies): sync.cpp stores it and puts it back.
 inline bool allowed_target(const std::string &n) {
     if (!safe_name(n)) return false;
     if (n == "meta/info.json" || n == "meta/clave" || n == "meta/cuenta.json") return true;
     if (n.compare(0, 6, "pluma/") == 0) {
         std::string r = n.substr(6);
         for (auto &f : pluma_files()) if (r == f) return true;
-        for (auto &d : pluma_dirs()) if (r.size() > d.size() && under(r, d)) return true;
+        for (auto &d : pluma_dirs()) if (r.size() > d.size() && under(r, d)) {
+            for (size_t a = 0, b; (b = r.find('/', a)) != std::string::npos; a = b + 1)
+                if (pluma_skip_dir(r.substr(a, b - a))) return false;
+            return true;
+        }
         return false;
     }
     if (n.compare(0, 6, "motor/") == 0) {
         size_t cut = n.find('/', 6);
         if (cut == std::string::npos || !engine_profile(n.substr(6, cut - 6))) return false;
-        std::string r = n.substr(cut + 1);
-        for (auto &p : engine_paths()) if (under(r, p)) return true;
-        return false;
+        return engine_kept(n.substr(cut + 1));
     }
     return false;
 }
@@ -220,15 +264,24 @@ inline uint64_t get(const std::string &s, size_t at, int bytes) {
     for (int i = bytes - 1; i >= 0; i--) v = (v << 8) | (unsigned char)s[at + i];
     return v;
 }
+// builds the archive one entry at a time (the whole profile does not have to sit in memory twice)
+struct Packer {
+    std::string out;
+    uint32_t count = 0;
+    Packer() { out.append("PLAR", 4); put32(out, 0); }
+    void add(const std::string &name, const char *data, size_t n) {
+        put32(out, (uint32_t)name.size()); out += name; put64(out, n); out.append(data, n); count++;
+    }
+    void add(const std::string &name, const std::string &data) { add(name, data.data(), data.size()); }
+    std::string &finish() { for (int i = 0; i < 4; i++) out[4 + i] = (char)((count >> (8 * i)) & 255); return out; }
+};
 inline std::string pack(const std::vector<Entry> &es) {
+    Packer p;
     size_t total = 8;
     for (auto &e : es) total += 12 + e.name.size() + e.data.size();
-    std::string o;
-    o.reserve(total);
-    o.append("PLAR", 4);
-    put32(o, (uint32_t)es.size());
-    for (auto &e : es) { put32(o, (uint32_t)e.name.size()); o += e.name; put64(o, e.data.size()); o += e.data; }
-    return o;
+    p.out.reserve(total);
+    for (auto &e : es) p.add(e.name, e.data);
+    return std::move(p.finish());
 }
 // every bound is checked and every name must be allowed: one bad entry and the whole archive is refused
 inline bool unpack_raw(const std::string &a, std::vector<Entry> &out) {
@@ -236,8 +289,10 @@ inline bool unpack_raw(const std::string &a, std::vector<Entry> &out) {
     if (a.size() < 8 || a.compare(0, 4, "PLAR") != 0) return false;
     uint64_t n = get(a, 4, 4);
     size_t at = 8;
-    if (n > 1000000) return false;
-    for (uint64_t i = 0; i < n; i++) {
+    bool to_end = n == 0xFFFFFFFFu;   // formato 2: entries up to the end
+    if (to_end) n = 1000000;
+    else if (n > 1000000) return false;
+    for (uint64_t i = 0; i < n && !(to_end && at == a.size()); i++) {
         if (a.size() - at < 4) return false;
         uint64_t nl = get(a, at, 4); at += 4;
         if (nl == 0 || nl > 400 || a.size() - at < nl + 8) return false;
@@ -259,14 +314,16 @@ inline bool unpack(const std::string &a, std::vector<Entry> &out) {
 }
 
 // ---------------------------------------------------------------- the file
-inline std::string header_json(const Kdf &k, const std::string &extra_fields /* ,"a":... already JSON, UTF-8 */) {
-    return "{\"formato\":1,\"kdf\":\"argon2id\",\"m\":" + std::to_string(k.m_kib) + ",\"t\":" + std::to_string(k.t) +
+inline std::string header_json(const Kdf &k, const std::string &extra_fields /* ,"a":... already JSON, UTF-8 */, int format = 1) {
+    return "{\"formato\":" + std::to_string(format) + ",\"kdf\":\"argon2id\",\"m\":" + std::to_string(k.m_kib) + ",\"t\":" + std::to_string(k.t) +
            ",\"p\":" + std::to_string(k.p) + ",\"sal\":\"" + hex(k.salt) + "\"" + extra_fields + "}";
 }
-inline bool seal(const uint8_t key[32], const std::string &header, const std::vector<Entry> &entries, std::string &file) {
-    std::string packed = pack(entries), z;
-    bool ok = compress(packed, z);
+// packed is wiped as soon as it is compressed
+inline bool seal_packed(const uint8_t key[32], const std::string &header, std::string &packed, std::string &file) {
+    std::string z;
+    bool ok = packed.size() <= kMaxArchive && compress(packed, z);
     wipe(packed);
+    packed.shrink_to_fit();
     if (!ok) return false;
     file.assign(kMagic, 8);
     put32(file, (uint32_t)header.size());
@@ -283,8 +340,102 @@ inline bool seal(const uint8_t key[32], const std::string &header, const std::ve
     file.append((const char *)tag, 16);
     return true;
 }
+inline bool seal(const uint8_t key[32], const std::string &header, const std::vector<Entry> &entries, std::string &file) {
+    std::string packed = pack(entries);
+    return seal_packed(key, header, packed, file);
+}
+// formato 2: the archive compressed block by block as it is filled, straight into the file, then encrypted in place
+static const size_t kBlock = (size_t)4 << 20;
+struct Sealer {
+    std::string file, raw, z;
+    size_t body = 0;
+    uint64_t raw_total = 0;
+    bool ok = true;
+    COMPRESSOR_HANDLE c = NULL;
+    uint8_t nonce[12];
+    Sealer(const std::string &header) {
+        file.assign(kMagic, 8);
+        put32(file, (uint32_t)header.size());
+        file += header;
+        ok = random_bytes(nonce, 12) && CreateCompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, NULL, &c);
+        file.append((const char *)nonce, 12);
+        body = file.size();
+        raw.reserve(kBlock + (1 << 16));
+        raw.append("PLAR", 4); put32(raw, 0xFFFFFFFFu);
+    }
+    ~Sealer() { if (c) CloseCompressor(c); wipe(raw); wipe(z); }
+    void reserve(size_t expected) { file.reserve(body + expected + 16); }   // growing it would hold two copies a moment
+    void block(const char *p, size_t n) {
+        if (!ok) return;
+        SIZE_T need = 0;
+        Compress(c, (PVOID)p, n, NULL, 0, &need);
+        if (!need) { ok = false; return; }
+        if (z.size() < need) z.resize(need);
+        SIZE_T got = 0;
+        if (!Compress(c, (PVOID)p, n, &z[0], z.size(), &got)) { ok = false; return; }
+        put32(file, (uint32_t)n); put32(file, (uint32_t)got);
+        file.append(z.data(), got);
+        raw_total += n;
+        if (raw_total > kMaxArchive) ok = false;
+    }
+    void flush(bool all) {
+        size_t off = 0;
+        while (ok && (raw.size() - off >= kBlock || (all && off < raw.size()))) {
+            size_t n = (std::min)(kBlock, raw.size() - off);
+            block(raw.data() + off, n);
+            off += n;
+        }
+        if (off) { SecureZeroMemory(&raw[0], off); raw.erase(0, off); }
+    }
+    void add(const std::string &name, const char *data, size_t n) {
+        put32(raw, (uint32_t)name.size()); raw += name; put64(raw, n);
+        while (n) {   // a big file goes in by pieces: never a second whole copy of it
+            size_t k = (std::min)(n, kBlock);
+            raw.append(data, k); data += k; n -= k;
+            flush(false);
+        }
+        flush(false);
+    }
+    void add(const std::string &name, const std::string &data) { add(name, data.data(), data.size()); }
+    // the finished file in out (this one is left empty); false if anything failed
+    bool finish(const uint8_t key[32], std::string &out) {
+        flush(true);
+        put32(file, 0);
+        if (!ok) { wipe(file); return false; }
+        uint8_t tag[16];
+        std::string aad = file.substr(0, body - 12);
+        if (!gcm(true, key, nonce, aad, (const uint8_t *)file.data() + body, file.size() - body, (uint8_t *)&file[body], tag)) { wipe(file); return false; }
+        file.append((const char *)tag, 16);
+        out.swap(file);
+        return true;
+    }
+};
+// formato 2's blocks back into the archive: every length is checked, the end mark is required and nothing follows it
+inline bool unblock(const std::string &in, std::string &out) {
+    out.clear();
+    DECOMPRESSOR_HANDLE d = NULL;
+    if (!CreateDecompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, NULL, &d)) return false;
+    bool ok = false;
+    size_t at = 0;
+    for (;;) {
+        if (in.size() - at < 4) break;
+        uint64_t rl = get(in, at, 4); at += 4;
+        if (rl == 0) { ok = at == in.size(); break; }
+        if (rl > kBlock || in.size() - at < 4) break;
+        uint64_t zl = get(in, at, 4); at += 4;
+        if (zl == 0 || zl > in.size() - at || out.size() + rl > kMaxArchive) break;
+        size_t was = out.size();
+        out.resize(was + (size_t)rl);
+        SIZE_T got = 0;
+        if (!Decompress(d, (PVOID)(in.data() + at), (SIZE_T)zl, &out[was], (SIZE_T)rl, &got) || got != rl) break;
+        at += (size_t)zl;
+    }
+    CloseDecompressor(d);
+    if (!ok) wipe(out);
+    return ok;
+}
 // the header alone (no password needed): what it is, its key derivation, its hint
-struct Header { std::string text; Json j; Kdf kdf; size_t body = 0; };
+struct Header { std::string text; Json j; Kdf kdf; size_t body = 0; int format = 1; };
 inline bool read_header(const std::string &file, Header &h) {
     if (file.size() < 12 || memcmp(file.data(), kMagic, 8) != 0) return false;
     uint64_t hl = get(file, 8, 4);
@@ -296,7 +447,8 @@ inline bool read_header(const std::string &file, Header &h) {
     std::wstring w(n, 0);
     MultiByteToWideChar(CP_UTF8, 0, h.text.data(), (int)h.text.size(), &w[0], n);
     h.j = json_parse(w);
-    if (h.j.kind != Json::OBJ || h.j[L"formato"].n != 1 || h.j[L"kdf"].s != L"argon2id") return false;
+    if (h.j.kind != Json::OBJ || (h.j[L"formato"].n != 1 && h.j[L"formato"].n != 2) || h.j[L"kdf"].s != L"argon2id") return false;
+    h.format = (int)h.j[L"formato"].n;
     auto num = [&](const wchar_t *k) { const Json &v = h.j[k]; return v.kind == Json::NUM && v.n >= 0 && v.n < 4294967296.0 ? (uint32_t)v.n : 0u; };
     h.kdf.m_kib = num(L"m"); h.kdf.t = num(L"t"); h.kdf.p = num(L"p");
     std::string salt_hex;
@@ -316,7 +468,7 @@ inline OpenResult open(const std::string &file, const Header &h, const uint8_t k
     std::string z(n, 0);
     if (!gcm(false, key, nonce, aad, (const uint8_t *)file.data() + h.body + 12, n, (uint8_t *)&z[0], tag)) { wipe(z); return OPEN_WRONG_PASSWORD; }
     std::string packed;
-    bool ok = decompress(z, packed);
+    bool ok = h.format == 2 ? unblock(z, packed) : decompress(z, packed);
     wipe(z);
     if (!ok) return OPEN_DAMAGED;
     ok = unpack(packed, out);
