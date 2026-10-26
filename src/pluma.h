@@ -89,6 +89,7 @@ struct Settings {
     bool music_lite = true;            // ... YouTube Music
     bool reddit_lite = true;           // ... Reddit
     SoundSettings sound;               // the player's sound effects (sound.cpp): efecto, eq, graves, reverb, tono
+    bool suggest_passwords = true;     // a strong password offered on sign-up forms (passgen.cpp)
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
     int reader_size = 20;              // the reader view's font size, px (reader.cpp)
@@ -121,6 +122,10 @@ struct Tab;
 enum { LITE_NONE, LITE_YOUTUBE, LITE_MUSIC, LITE_REDDIT };
 void lite_attach(Tab *t);                 // every view: those sites' pages answered with Pluma's light ones
 void lite_settings_changed();             // a site's setting went off: its light pages go back to the site's own
+
+// ---------------------------------------------------------------- strong passwords on sign-up forms (passgen.cpp)
+void passgen_attach(Tab *t);              // every view: "Usar contraseña segura" on sign-up forms
+void passgen_settings_changed();          // the setting or the language changed: the views get it at once
 
 // ---------------------------------------------------------------- the reader view (reader.cpp)
 void reader_attach(Tab *t);               // every view: is it an article? and Pluma's reader page for it
@@ -281,6 +286,7 @@ struct Tab {
     double hidden_since = 0;           // 0 while it is the one on screen
     std::wstring pending;              // a url to load as soon as the view exists
     std::vector<std::wstring> scripts_ids;   // the injected userscripts, to swap them
+    std::wstring passgen_id;           // the injected password suggestion (passgen.cpp), to swap it
     double saved_x = 0, saved_y = 0, saved_media = 0;   // where the page was when it was last hidden
     bool restoring = false;            // unloaded and loaded again: put it back where it was
     float progress = 0;                // loading line, 0..1 (estimated: WebView2 does not give one)

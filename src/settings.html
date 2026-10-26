@@ -190,6 +190,10 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
           <div class="txt"><div class="name" data-t="Todo menos las contraseñas">Todo menos las contraseñas</div><div class="desc" data-t="Las cookies cierran tus sesiones en las webs.">Las cookies cierran tus sesiones en las webs.</div></div>
           <button class="danger" data-do="clearAll" data-t="Borrar">Borrar</button>
         </div>
+        <div class="row" data-k="contraseñas seguras sugerir generar password">
+          <div class="txt"><div class="name" data-t="Sugerir contraseñas seguras">Sugerir contraseñas seguras</div><div class="desc" data-t="Al crear una cuenta, Pluma propone una y la guarda para ese sitio">Al crear una cuenta, Pluma propone una y la guarda para ese sitio</div></div>
+          <label class="toggle"><input type="checkbox" id="passgen"><span></span></label>
+        </div>
       </div>
     </section>
 
@@ -431,6 +435,7 @@ function render() {
   fill($('engine'), S.engines, S.engine);
   fill($('idioma-sel'), S.langs, S.idioma);
   $('suggest').checked = S.suggest;
+  $('passgen').checked = S.passgen;
   $('ytlite').checked = S.ytlite;
   $('musiclite').checked = S.musiclite;
   $('redditlite').checked = S.redditlite;
@@ -527,7 +532,7 @@ $('engine').onchange = e => set('engine', e.target.value);
 $('idioma-sel').onchange = e => { set('idioma', e.target.value); setTimeout(ask, 100); };
 $('update').onchange = e => set('update', +e.target.value);
 $('sleep').onchange = e => set('sleep', +e.target.value);
-for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['musiclite', 'musiclite'], ['redditlite', 'redditlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
+for (const [id, key] of [['suggest', 'suggest'], ['passgen', 'passgen'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['musiclite', 'musiclite'], ['redditlite', 'redditlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
   $(id).onchange = e => set(key, e.target.checked);
 $('profnew').onclick = () => send({ op: 'profile', what: 'new' });
 document.querySelectorAll('[data-do]').forEach(b => b.addEventListener('click', () => send({ op: 'do', what: b.dataset.do })));

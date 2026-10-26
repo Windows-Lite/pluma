@@ -334,6 +334,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
     lite_attach(t);       // and the light pages (YouTube, YouTube Music, Reddit)
     reader_attach(t);     // and the reader view
+    passgen_attach(t);    // and the strong password on sign-up forms
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {

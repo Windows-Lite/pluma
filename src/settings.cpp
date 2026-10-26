@@ -88,6 +88,7 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"update\":" + std::to_wstring(g_set.update);
     o += L",\"version\":" + json_escape(update_version());
     o += L",\"suggest\":" + std::wstring(b(g_set.suggest_top));
+    o += L",\"passgen\":" + std::wstring(b(g_set.suggest_passwords));
     o += L",\"video\":" + std::wstring(b(g_set.native_video));
     o += L",\"ytlite\":" + std::wstring(b(g_set.youtube_lite));
     o += L",\"musiclite\":" + std::wstring(b(g_set.music_lite));
@@ -160,8 +161,9 @@ static void apply(const std::wstring &key, const Json &val) {
     if (key == L"theme") { g_set.theme = (int)val.n; settings_save(); ui_theme_changed(); tabs_apply_theme(); }
     else if (key == L"font") { g_set.font = val.s; settings_save(); ui_font_changed(); }
     else if (key == L"engine") { g_set.engine = val.s; settings_save(); }
-    else if (key == L"idioma") { g_set.lang = val.s; settings_save(); ui_invalidate(); }
+    else if (key == L"idioma") { g_set.lang = val.s; settings_save(); ui_invalidate(); passgen_settings_changed(); }
     else if (key == L"update") { g_set.update = (int)val.n; settings_save(); }
+    else if (key == L"passgen") { g_set.suggest_passwords = val.b; settings_save(); passgen_settings_changed(); }
     else if (key == L"suggest") { g_set.suggest_top = val.b; settings_save(); ui_ntp_changed(); }
     else if (key == L"video") { g_set.native_video = val.b; settings_save(); video_settings_changed(); }
     else if (key == L"ytlite") { g_set.youtube_lite = val.b; settings_save(); lite_settings_changed(); }
