@@ -359,10 +359,27 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             if (!t) return S_OK;
             WinScope ws(win_of_tab(t));
             t->loading = true;
+            t->in_call = false;   // (a new document: its call, if any, asks again)
             t->progress = 0;
             t->load_started = now_ms();
             t->load_done = 0;
             set_progress(t, 0.08f);
+            return S_OK;
+        }).Get(), &tok);
+    // a page (or one of its frames) asking for the microphone or the camera: a call. It is neither frozen (the engine
+    // does freeze a page with its camera and microphone live: measured, tools\pestanas) nor let go until it goes to
+    // another document (tabs_tick; WebView2 does not say when the capture ends). Seen from here, not by
+    // wrapping RTCPeerConnection in the page. The engine still asks the person as always; only tools\pestanas says yes
+    // on its own (PLUMA_PRUEBA_MEDIOS, in test instances).
+    v->add_PermissionRequested(Callback<ICoreWebView2PermissionRequestedEventHandler>(
+        [id](ICoreWebView2 *, ICoreWebView2PermissionRequestedEventArgs *a) -> HRESULT {
+            Tab *t = tab_by_id(id);
+            COREWEBVIEW2_PERMISSION_KIND k = COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION;
+            a->get_PermissionKind(&k);
+            if (k != COREWEBVIEW2_PERMISSION_KIND_MICROPHONE && k != COREWEBVIEW2_PERMISSION_KIND_CAMERA) return S_OK;
+            if (t) t->in_call = true;
+            static bool allow = [] { wchar_t v[4] = L""; return g_test && GetEnvironmentVariableW(L"PLUMA_PRUEBA_MEDIOS", v, 4) && v[0] == L'1'; }();
+            if (allow) a->put_State(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
             return S_OK;
         }).Get(), &tok);
     v->add_ContentLoading(Callback<ICoreWebView2ContentLoadingEventHandler>(
@@ -689,7 +706,7 @@ static void CALLBACK trim_after_load_tick(HWND h, UINT, UINT_PTR id, DWORD) {
     tabs_trim(TRIM_IDLE);
 }
 static void trim_after_load() {
-    // after a page has loaded or a tab was let go; not while the person is using it (the engine and the graphics,
+    // after a page has loaded or a tab was frozen or let go; not while the person is using it (the engine and the graphics,
     // emptied in the middle of a scroll, made it stutter for seconds: a YouTube video just opened, 25/10)
     static double last = -1e9;
     if (now_ms() - last < 20000) return;
@@ -760,6 +777,7 @@ static void release_view(Tab *t) {
     t->ctrl.Reset(); t->view.Reset();
     t->scripts_ids.clear();
     t->suspended = false; t->loading = false; t->audible = false; t->creating = false;
+    t->typed = false; t->notifies = false; t->in_call = false; t->busy = false; t->kept_why.clear();
 }
 void tab_close(int i, bool from_mouse) {
     if (i < 0 || i >= (int)g_tabs.size()) return;
@@ -793,22 +811,34 @@ void tab_reopen_closed() {
     t->icon_png = c.icon;
     ui_tab_icon_changed(t);
 }
+// What the page would lose if it were let go, read once as its tab is hidden (nobody can type into a hidden tab, so
+// it holds until it is shown again; a frozen page is never asked: asking could wake it). With `where`, also where it
+// was (to come back there: saved_x/y, and a video's second). `then` runs once it is known.
+static void read_state(Tab *t, bool where, std::function<void()> then) {
+    if (!t->view) { if (then) then(); return; }
+    int id = t->id;
+    t->view->ExecuteScript(L"[scrollX, scrollY, ((document.querySelector('video') || {}).currentTime) || 0,"
+                           L" window.__plumaTyped ? 1 : 0, (window.Notification && Notification.permission === 'granted') ? 1 : 0]",
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>([id, where, then](HRESULT hr, LPCWSTR r) -> HRESULT {
+            Tab *t = tab_by_id(id);
+            double x = 0, y = 0, m = 0;
+            int typed = 0, notifies = 0;
+            if (t && SUCCEEDED(hr) && r && swscanf_s(r, L"[%lf,%lf,%lf,%d,%d]", &x, &y, &m, &typed, &notifies) == 5) {
+                if (where) { t->saved_x = x; t->saved_y = y; t->saved_media = m; }
+                t->typed = typed != 0;
+                t->notifies = notifies != 0;
+            }
+            if (t && then) then();
+            return S_OK;
+        }).Get());
+}
 static void hide_view(Tab *t) {
     if (!t) return;
     t->hidden_since = now_ms();
     if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
     // where it was: if it is let go later, it comes back to the same place (and a video to the same second)
     if (t->video_mode || video_on(t)) t->saved_media = video_position(t);   // (its page sleeps, or has no video of its own: Pluma's player knows)
-    else if (t->view && !t->loading) {
-        int id = t->id;
-        t->view->ExecuteScript(L"[scrollX, scrollY, ((document.querySelector('video') || {}).currentTime) || 0]",
-            Callback<ICoreWebView2ExecuteScriptCompletedHandler>([id](HRESULT hr, LPCWSTR r) -> HRESULT {
-                Tab *t = tab_by_id(id);
-                double x = 0, y = 0, m = 0;
-                if (t && SUCCEEDED(hr) && r && swscanf_s(r, L"[%lf,%lf,%lf]", &x, &y, &m) == 3) { t->saved_x = x; t->saved_y = y; t->saved_media = m; }
-                return S_OK;
-            }).Get());
-    }
+    else read_state(t, !t->loading, nullptr);   // (still loading: where it is says nothing, what was typed does)
 }
 void tab_activate(int i) {
     if (i < 0 || i >= (int)g_tabs.size()) return;
@@ -1010,18 +1040,34 @@ void tabs_tick() {
         last_idle_trim = now;
         tabs_trim(TRIM_IDLE);
     }
+    // Hidden tabs freeze (TrySuspend: the page stays in memory exactly as it was, and is back at once) and the ones
+    // with nothing to lose are later let go (unloaded: shown again, they load where they were, saved_x/y). As
+    // Chromium's discard rules (discard_eligibility_policy.cc): never a tab the person typed into, one that may
+    // notify, one that asked for the microphone or the camera (not frozen either: Chromium's kCapturingAudio/Video),
+    // one the engine will not freeze, one playing sound, an incognito one; not even with the PC short of memory. The
+    // others: never by default (discard_s 0: "no me gusta que pasado un tiempo las pestañas pierdan memoria", 26/10),
+    // only the oldest with the PC at 85 % of its memory. With "Descargar las pestañas que no ves" on: after discard_s,
+    // the keep_recent last seen after recent_discard_min, and with the PC at 75 %, after a minute.
     MEMORYSTATUSEX ms = { sizeof(ms) };
     GlobalMemoryStatusEx(&ms);
-    bool pressure = ms.dwMemoryLoad >= 85;   // the PC is short of memory: let go of the oldest hidden tab now
+    static int test_load = [] { wchar_t v[8] = L""; return GetEnvironmentVariableW(L"PLUMA_MEMORIA_PC", v, 8) ? _wtoi(v) : -1; }();
+    if (test_load >= 0) ms.dwMemoryLoad = test_load;   // tests: as if the PC had that much memory in use
+    bool tight = ms.dwMemoryLoad >= 75, pressure = ms.dwMemoryLoad >= 85;
     Tab *oldest = nullptr;
     std::vector<Tab *> tabs = all_tabs();
+    // (the Scroller open counts too, even paused: its feed runs in the page, and frozen or let go it would stop)
+    auto playing = [](Tab *t) { return t->audible || video_playing(t) || scroller_is_open(t); };
+    auto why_kept = [](Tab *t) -> const wchar_t * {
+        return t->incognito ? L"incógnito" : t->typed ? L"tiene algo escrito" : t->in_call ? L"en una llamada"
+             : t->notifies ? L"puede avisar" : t->busy ? L"el motor no la congela" : nullptr;
+    };
     for (Tab *t : tabs) {
         WinScope ws(win_of_tab(t));
         // (nor one whose video plays in Pluma's player: the light page's tab is not "audible" itself, and muted no tab
         // is; frozen or let go, its player would stop with it)
-        if (!t->view || t->hidden_since == 0 || t->audible || video_playing(t) || t->creating) continue;
+        if (!t->view || t->hidden_since == 0 || playing(t) || t->creating) continue;
         double hidden = now - t->hidden_since;
-        if (!t->suspended && hidden > g_set.sleep_s * 1000.0) {
+        if (!t->suspended && !t->in_call && hidden > g_set.sleep_s * 1000.0) {
             ComPtr<ICoreWebView2_19> v19;
             if (SUCCEEDED(t->view.As(&v19))) v19->put_MemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
             ComPtr<ICoreWebView2_3> v3;
@@ -1030,23 +1076,42 @@ void tabs_tick() {
             if (SUCCEEDED(t->view.As(&v3)))
                 v3->TrySuspend(Callback<ICoreWebView2TrySuspendCompletedHandler>([id](HRESULT hr, BOOL ok) -> HRESULT {
                     Tab *t = tab_by_id(id);
-                    if (t && (FAILED(hr) || !ok)) t->suspended = false;
-                    else if (t) tabs_trim(TRIM_FROZEN);   // frozen: its process can give its memory back now
+                    if (!t) return S_OK;
+                    // refused (the engine's own reasons, those of Edge's sleeping tabs; a WebRTC data channel or a Web
+                    // Lock are not among them, measured): it is doing something that must not stop, so it is not let
+                    // go either; it is asked again on the next ticks
+                    t->busy = FAILED(hr) || !ok;
+                    if (t->busy) { t->suspended = false; return S_OK; }
+                    tabs_trim(TRIM_FROZEN);   // frozen: its process can give its memory back now,
+                    trim_after_load();        // and the engine and the graphics what it had them hold (as when one goes)
                     return S_OK;
                 }).Get());
         }
-        // the most recently looked-at hidden tabs stay frozen (they come back at once); the rest are let go after
-        // discard_s, and come back where they were (saved_x/y)
-        // (incognito tabs are never let go: their page, logins and all, would be gone for good)
-        if (t->incognito) continue;
+        if (const wchar_t *why = why_kept(t)) {
+            if (t->kept_why != why) {
+                t->kept_why = why;
+                log_line(L"pestaña " + std::to_wstring(t->id) + L" guardada: " + why + (t->incognito ? L"" : L" (" + url_host(t->url) + L")"));
+            }
+            continue;
+        }
+        t->kept_why.clear();
+        // the recent ones: among those that could go
         int newer = 0;
-        for (Tab *o : tabs) if (o != t && o->view && o->hidden_since > t->hidden_since && !o->audible) newer++;
-        double limit = newer < g_set.keep_recent ? g_set.recent_discard_min * 60.0 : g_set.discard_s;
-        if (limit > 0 && hidden > limit * 1000.0) { release_view(t); trim_after_load(); continue; }   // and what it left behind goes too
+        for (Tab *o : tabs)
+            if (o != t && o->view && o->hidden_since > t->hidden_since && !playing(o) && !why_kept(o)) newer++;
+        bool recent = newer < g_set.keep_recent;
+        double limit = recent ? g_set.recent_discard_min * 60.0 : g_set.discard_s;
+        if (tight && !recent && limit > 60) limit = 60;
+        if (limit > 0 && hidden > limit * 1000.0) {
+            log_line(L"pestaña " + std::to_wstring(t->id) + L" soltada tras " + std::to_wstring((int)(hidden / 1000)) + L" s escondida (" + url_host(t->url) + L")");
+            release_view(t);
+            trim_after_load();   // and what it left behind goes too
+            continue;
+        }
         if (!oldest || t->hidden_since < oldest->hidden_since) oldest = t;
     }
     if (pressure && oldest && now - oldest->hidden_since > 10000) {
-        log_line(L"poca memoria en el PC (" + std::to_wstring(ms.dwMemoryLoad) + L" %): se descarga una pestaña escondida");
+        log_line(L"poca memoria en el PC (" + std::to_wstring(ms.dwMemoryLoad) + L" %): se descarga la pestaña " + std::to_wstring(oldest->id));
         WinScope ws(win_of_tab(oldest));
         release_view(oldest);
     }
@@ -1171,19 +1236,28 @@ void tabs_on_hide() {
         if (!t->view) continue;
         // (a video in Pluma's player too: it would keep its memory; it comes back at its second)
         if (t->audible || t->video) { release_view(t); continue; }
+        bool was_on_screen = t->hidden_since == 0;
         t->hidden_since = now_ms();
         t->ctrl->put_IsVisible(FALSE);
         ComPtr<ICoreWebView2_19> v19;
         if (SUCCEEDED(t->view.As(&v19))) v19->put_MemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
-        ComPtr<ICoreWebView2_3> v3;
         int id = t->id;
         t->suspended = true;
-        if (SUCCEEDED(t->view.As(&v3)))
-            v3->TrySuspend(Callback<ICoreWebView2TrySuspendCompletedHandler>([id](HRESULT hr, BOOL ok) -> HRESULT {
-                Tab *t = tab_by_id(id);
-                if (t && (FAILED(hr) || !ok)) t->suspended = false;
-                return S_OK;
-            }).Get());
+        auto freeze = [id] {
+            Tab *t = tab_by_id(id);
+            ComPtr<ICoreWebView2_3> v3;
+            if (!t || !t->view || !t->suspended) return;
+            if (t->in_call) { t->suspended = false; return; }   // (the call goes on)
+            if (SUCCEEDED(t->view.As(&v3)))
+                v3->TrySuspend(Callback<ICoreWebView2TrySuspendCompletedHandler>([id](HRESULT hr, BOOL ok) -> HRESULT {
+                    Tab *t = tab_by_id(id);
+                    if (t && (FAILED(hr) || !ok)) { t->suspended = false; t->busy = true; }
+                    return S_OK;
+                }).Get());
+        };
+        // the tab that was on screen: what it would lose is read first (the others were read when they were hidden)
+        if (was_on_screen) read_state(t, !t->loading, freeze);
+        else freeze();
     }
     SetTimer(g_app, 0x51A4, 2500, [](HWND h, UINT, UINT_PTR id, DWORD) {
         KillTimer(h, id);

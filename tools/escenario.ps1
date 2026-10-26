@@ -1,7 +1,8 @@
 ﻿# The 7-tab scenario used to measure Pluma's RAM (as the user's Firefox had 7 tabs: 3,100 MB):
 # a clean test profile with the given settings, seven real sites opened one after another (YouTube paused), the
 # last one on screen, and the RAM measured once the others had time to fall asleep.
-#   tools\escenario.ps1 -Nombre x [-Ajustes 'descargar_s=60','reserva=0'] [-Espera 90] [-Puerto 9430]
+#   tools\escenario.ps1 -Nombre x [-Ajustes 'ajustes_v=3','descargar_s=60','reserva=0'] [-Espera 90] [-Puerto 9430]
+#   (without ajustes_v=3, descargar_s=60, recientes=2 and descargar_min=20 read as the old defaults: the new ones)
 param([string]$Nombre = 'esc', [string[]]$Ajustes = @(), [int]$Espera = 90, [int]$Puerto = 9430, [switch]$Abierto)
 $T = $PSScriptRoot
 # PLUMA_EXE: a build elsewhere (never test with the exe the user's own Pluma is running from)

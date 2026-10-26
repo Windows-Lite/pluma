@@ -173,6 +173,7 @@ std::vector<std::wstring> scripts_sources() {
 //    that Pluma recognises (it cannot see the mouse inside the page otherwise).
 // 2) Prefetch on hover: with the mouse resting on a link of the same site for a moment, the next page is fetched
 //    before the click (Chromium's speculation rules; logouts and the like are left alone).
+// 3) Whether the person typed something into the page (window.__plumaTyped, read by tabs.cpp).
 const std::wstring &base_script() {
     static const std::wstring s = LR"JS((() => {
   if (window.__plumaBase) return;
@@ -189,6 +190,25 @@ const std::wstring &base_script() {
   };
   window.addEventListener('click', bg);
   window.addEventListener('auxclick', bg);
+  // 3) What letting the page go would lose: something typed into a form or an editor since it loaded (as Chromium's
+  //    HadFormInteraction/HadUserEdits; search boxes and sliders aside: a search comes back with the address, a volume
+  //    is not the person's work). Pluma reads it when the tab is hidden; frames of the same origin answer through the
+  //    top one. (Nothing of the page's own objects is touched: anti-bot scripts look for wrapped built-ins.)
+  let typed = false;
+  const search = (el) => /^(search|range|color|button|submit|reset|image)$/.test(el.type || '') ||
+    /^(searchbox|combobox)$/i.test(el.getAttribute('role') || '') ||
+    /^(q|query|search|search_query|s)$/i.test(el.getAttribute('name') || '') || !!el.closest('[role="search"]');
+  window.addEventListener('input', (e) => {
+    if (typed || !e.isTrusted) return;
+    const el = e.composedPath ? e.composedPath()[0] : e.target;
+    if (!el || !el.tagName || !el.getAttribute) return;
+    if ((el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) && !search(el)) typed = true;
+  }, true);
+  Object.defineProperty(window, '__plumaTyped', { get: () => {
+    if (typed) return true;
+    for (let i = 0; i < frames.length; i++) try { if (frames[i].__plumaTyped) return true; } catch (e) {}
+    return false;
+  } });
   if (window !== window.top) return;
   const rules = () => {
     try {
