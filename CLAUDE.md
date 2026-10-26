@@ -532,6 +532,15 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
 - La ventanita de una extensión (su popup) se crea a la vista antes de meterle su página: hecha en una ventana oculta,
   la página se quedaba «hidden» y no pintaba nada (salía vacía, 25/10). Se mide varias veces en su primer segundo
   (uBlock la rellena poco a poco y salía cortada).
+- Sus avisos (26/10, «se queda como congelado» tras copiar un código de Authenticator): `chrome.permissions.request`
+  (Authenticator pide `clipboardWrite` al copiar), `alert`... salen en una ventana del motor propiedad de la ventanita,
+  que desactiva la ventanita y la ventana de Pluma hasta que se contesta. Cogía el foco, Pluma cerraba la ventanita
+  (clic fuera), el aviso se iba con ella y la ventana de Pluma se quedaba desactivada: la página no recibía clics.
+  Ahora la ventanita sigue mientras su aviso está arriba (si al contestarlo no vuelve a ella, se cierra) y, si se
+  cierra con el aviso arriba, Pluma reactiva su ventana. En las pruebas la ventanita se queda fuera de la pantalla y
+  no coge el foco. Prueba: `tools\popup\prueba.ps1 [-Authenticator <su carpeta>]` en la sesión interactiva con
+  `PLUMA_EXE` (una extensión de prueba que copia como Authenticator y se cierra sola; mira el estado de las ventanas,
+  no un clic por DevTools, que llega a la página aunque la ventana esté desactivada).
 - Importar las de Edge (26/10, casilla «Extensiones (con sus ajustes)» del asistente, también en «Todos los perfiles»):
   las que instaló la persona salen de `Secure Preferences` (`location` 1, no `was_installed_by_default`; las de Edge
   son 5 y 10). Su carpeta `Extensions\<id>\<versión>` se copia a `extensiones\<id>` del perfil de Pluma (sin
