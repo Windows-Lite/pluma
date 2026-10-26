@@ -9,6 +9,7 @@
 // The "page" button goes back to the page at the same second.
 #include "pluma.h"
 #include "json.h"
+#include "scroller_core.h"
 #include <cstdint>
 #include <map>
 #include <thread>
@@ -17,7 +18,7 @@
 
 // ---------------------------------------------------------------- libmpv, loaded at run time
 typedef struct mpv_handle mpv_handle;
-enum { MPV_FORMAT_NONE = 0, MPV_FORMAT_STRING = 1, MPV_FORMAT_FLAG = 3, MPV_FORMAT_INT64 = 4, MPV_FORMAT_DOUBLE = 5 };
+enum { MPV_FORMAT_NONE = 0, MPV_FORMAT_STRING = 1, MPV_FORMAT_FLAG = 3, MPV_FORMAT_INT64 = 4, MPV_FORMAT_DOUBLE = 5, MPV_FORMAT_NODE = 6, MPV_FORMAT_NODE_ARRAY = 7 };
 enum { MPV_EVENT_NONE = 0, MPV_EVENT_SHUTDOWN = 1, MPV_EVENT_LOG_MESSAGE = 2, MPV_EVENT_END_FILE = 7, MPV_EVENT_FILE_LOADED = 8, MPV_EVENT_PLAYBACK_RESTART = 21,
        MPV_EVENT_PROPERTY_CHANGE = 22 };
 enum { MPV_END_FILE_REASON_ERROR = 4 };
@@ -119,13 +120,20 @@ struct Video {
     // on Pluma's light page (lite.cpp: YouTube, Reddit): no page player to meet nor a page to put to sleep, see lite_tick
     bool lite = false, lite_cover = false, reddit = false;   // (reddit: a video of the light Reddit page)
     double lite_asked = 0;
+    // the Scroller's player (scroller.cpp): one mpv for the whole feed, each video loaded in it in turn ("loadfile
+    // replace"); its place is the Scroller's slot, the page stays awake under it. lite_cover hides it meanwhile (a video
+    // still loading: the slot shows its poster)
+    bool scroller = false;
+    std::string s_url, s_audio, s_referer, s_cookie, s_ua;   // what mpv opens (and its sound), and with what (headers set apart)
+    int s_loops = 0;           // a gif plays a few times before the next one
+    int s_count = 0;           // videos loaded in this player (cache files are named after it)
 };
 static int g_serial;
 static Video *V(Tab *t) { return t ? (Video *)t->video : nullptr; }
 static HWND g_msg;   // a window of its own for mpv's events (they come from mpv's threads) and the timers
 static const UINT WM_VIDEO_EVENTS = WM_APP + 60, WM_VIDEO_FAILED = WM_APP + 61, WM_VIDEO_GONE = WM_APP + 62;
 static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWarmTimer = 13, kEndTimer = 14, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000,
-                      kStartTimer = 0x400000, kLiteTimer = 0x500000;
+                      kStartTimer = 0x400000, kLiteTimer = 0x500000, kScrollTimer = 0x600000;
 
 // ---------------------------------------------------------------- drawing: YouTube's look
 static ComPtr<ID2D1Factory> g_d2d;
@@ -593,8 +601,35 @@ static void apply_sound(Video *v) {
     apply_speed(v);
 }
 static std::string escaped(const std::string &s) { return "%" + std::to_string(s.size()) + "%" + s; }   // mpv's quoting for option values
+static void set_string(Video *v, const char *name, const std::string &val) {
+    if (!v || !v->mpv) return;
+    const char *p = val.c_str();
+    M.set_property(v->mpv, name, MPV_FORMAT_STRING, &p);
+}
+static void scroll_headers(Video *v) {
+    // the page's Referer, agent and (its own host only) cookies, as properties: a value with a comma or "=" can never
+    // turn into another of mpv's options (scroller_core.h). Set before every file, so none carries over to the next
+    set_string(v, "referrer", scroll::header_ok(v->s_referer) ? v->s_referer : "");
+    if (!v->s_ua.empty() && scroll::header_ok(v->s_ua)) set_string(v, "user-agent", v->s_ua);
+    std::string cookie = "Cookie: " + v->s_cookie;
+    mpv_node item; item.format = MPV_FORMAT_STRING; item.u.string = (char *)cookie.c_str();
+    mpv_node_list list = { v->s_cookie.empty() || !scroll::header_ok(v->s_cookie) ? 0 : 1, &item, nullptr };
+    mpv_node n; n.format = MPV_FORMAT_NODE_ARRAY; n.u.list = &list;
+    M.set_property(v->mpv, "http-header-fields", MPV_FORMAT_NODE, &n);
+}
 static void load_streams(Video *v, double start, bool paused) {
     // the playlists Pluma already read (saved next to its data): mpv goes straight to the pieces
+    if (v->mpv && v->scroller) {
+        // the Scroller's: one address (a file or a list), checked; its options are Pluma's only
+        scroll_headers(v);
+        std::string opts = scroll::loadfile_options(paused, v->loop ? -1 : v->s_loops);
+        if (!v->s_audio.empty()) opts += ",audio-file=" + escaped(v->s_audio);   // (a path Pluma wrote, in its own cache)
+        v->restarted = v->loaded = false;
+        v->seek_t0 = now_ms();
+        v->cache_end = -1; v->behind_since = 0;
+        mpv_cmd(v, { "loadfile", v->s_url.c_str(), "replace", "-1", opts.c_str() });
+        return;
+    }
     if (!v->mpv || v->vf < 0) return;
     char st[64]; sprintf_s(st, "%.3f", start);
     std::string opts = std::string("start=") + st + ",pause=" + (paused ? "yes" : "no");
@@ -610,7 +645,7 @@ static void load_streams(Video *v, double start, bool paused) {
     mpv_cmd(v, { "loadfile", (vf.local.empty() ? vf.url : vf.local).c_str(), "replace", "-1", opts.c_str() });
     mpv_cmd(v, { "set", "loop-file", v->loop ? "inf" : "no" });
 }
-static bool http_get(const std::wstring &url, std::string &out);
+static bool http_get(const std::wstring &url, std::string &out, const std::wstring &headers = L"", const std::wstring &ua = L"");
 static bool safe_playlist(const std::string &text);
 static std::string absolute_list(const std::string &text, const std::string &base);
 // tests: PLUMA_PRUEBA_ROMPER_VIDEO=K breaks the pieces of a video list from piece K on (counted from 0), the first
@@ -913,7 +948,8 @@ static std::string attr(const std::string &line, const char *name) {
     size_t e = line.find(',', p);
     return line.substr(p, e == std::string::npos ? std::string::npos : e - p);
 }
-static std::vector<Fmt> parse_master(const std::string &raw, const std::string &base = "") {
+static std::vector<Fmt> parse_master(const std::string &raw, const std::string &base = "", bool any_host = false) {
+    // (any_host: the Scroller's, already checked whole by scroll::safe_list)
     std::string m3u8 = absolute_list(raw, base);
     std::vector<Fmt> out;
     size_t pos = 0;
@@ -929,7 +965,7 @@ static std::vector<Fmt> parse_master(const std::string &raw, const std::string &
             f.main_audio = def.empty() || def == "YES" || name.find("original") != std::string::npos;
             std::string loud = attr(line, "YT-EXT-ABSOLUTE-LOUDNESS");
             if (!loud.empty()) f.loud = atof(loud.c_str());
-            if (media_url(f.url)) out.push_back(f);
+            if (any_host || media_url(f.url)) out.push_back(f);
         } else if (line.rfind("#EXT-X-STREAM-INF:", 0) == 0) pending = line;
         else if (!pending.empty() && !line.empty() && line[0] != '#') {
             Fmt f; f.url = line; f.group = attr(pending, "AUDIO");
@@ -943,28 +979,30 @@ static std::vector<Fmt> parse_master(const std::string &raw, const std::string &
             std::string tag = first.substr(0, first.find('.'));
             if (tag == "vp09" && first.rfind("vp09.00", 0) != 0) tag = "vp09hdr";   // profile 2: 10-bit HDR
             f.codec = wide(tag);
-            if (f.h > 0 && media_url(f.url)) out.push_back(f);
+            if (f.h > 0 && (any_host || media_url(f.url))) out.push_back(f);
             pending.clear();
         }
     }
     return out;
 }
-static bool http_get(const std::wstring &url, std::string &out) {
-    // a plain GET (Pluma's own, from a worker thread): for YouTube's HLS list, which the page cannot read itself
+static bool http_get(const std::wstring &url, std::string &out, const std::wstring &headers, const std::wstring &ua) {
+    // a plain GET (Pluma's own, from a worker thread): for YouTube's HLS list, which the page cannot read itself (and
+    // the Scroller's lists, with the page's Referer and agent: headers, "Name: value\r\n" lines)
     URL_COMPONENTS uc = { sizeof(uc) };
     wchar_t host[256] = L"";
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
     uc.dwUrlPathLength = (DWORD)-1; uc.dwExtraInfoLength = (DWORD)-1;
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) return false;
     std::wstring path = std::wstring(uc.lpszUrlPath, uc.dwUrlPathLength) + (uc.lpszExtraInfo ? std::wstring(uc.lpszExtraInfo, uc.dwExtraInfoLength) : L"");
-    HINTERNET s = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET s = WinHttpOpen(ua.empty() ? L"Mozilla/5.0" : ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) return false;
     WinHttpSetTimeouts(s, 4000, 4000, 8000, 10000);   // (not a minute waiting for a server that does not answer)
     bool ok = false;
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                          uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) : NULL;
-    if (r && WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(r, NULL)) {
+    if (r && WinHttpSendRequest(r, headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(), headers.empty() ? 0 : (DWORD)-1L,
+                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(r, NULL)) {
         DWORD code = 0, len = sizeof(code);
         WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &len, WINHTTP_NO_HEADER_INDEX);
         // all of it or nothing: a read that fails, a body shorter than the server said or past 4 MB is a failure
@@ -1025,7 +1063,7 @@ static const wchar_t *tip_text(Video *v, int c, const wchar_t **key) {
     case C_MUTE: *key = L"m"; return v->muted || v->volume <= 0 ? T(L"Activar sonido") : T(L"Silenciar");
     case C_CC: *key = L"c"; return T(L"Subtítulos");
     case C_GEAR: return T(L"Configuración");
-    case C_PAGE: return v->reddit ? T(L"Página de Reddit") : T(L"Página de YouTube");
+    case C_PAGE: return v->scroller ? T(L"Salir del Scroller") : v->reddit ? T(L"Página de Reddit") : T(L"Página de YouTube");
     case C_FULL: *key = L"f"; return g_fullscreen ? T(L"Salir de pantalla completa") : T(L"Pantalla completa");
     }
     return NULL;
@@ -1104,11 +1142,16 @@ static void paint_bottom(Video *v, float alpha) {
             rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(hx, cy), S(6), S(6)), b);
             rt->PopAxisAlignedClip();
         }
+        // the time, whole if it fits before the right pill (a narrow player, as the Scroller's: only the second, or none)
         std::wstring tm = clock_text(v->pos) + L" / " + clock_text(v->dur);
+        float room = right_pill(l, v).left - S(8) - (vp.right + S(8)) - S(32);
         float tw = text_width(f_time.Get(), tm);
-        D2D1_RECT_F tp = { vp.right + S(8), pr.top, vp.right + S(8) + tw + S(32), pr.bottom };
-        pill(rt, b, tp, kPill);
-        text(rt, b, f_time.Get(), tm, D2D1::RectF(tp.left + S(16), tp.top, tp.right, tp.bottom), kText);
+        if (tw > room) { tm = clock_text(v->pos); tw = text_width(f_time.Get(), tm); }
+        if (tw <= room) {
+            D2D1_RECT_F tp = { vp.right + S(8), pr.top, vp.right + S(8) + tw + S(32), pr.bottom };
+            pill(rt, b, tp, kPill);
+            text(rt, b, f_time.Get(), tm, D2D1::RectF(tp.left + S(16), tp.top, tp.right, tp.bottom), kText);
+        }
         // the right: captions, settings, page, fullscreen, in one pill
         pill(rt, b, right_pill(l, v), kPill);
         int hot_btn = g_menu_page ? C_GEAR : g_hot;
@@ -1583,7 +1626,7 @@ static std::vector<MenuRow> menu_rows(Video *v) {
         if (g_set.sound.pitch && g_set.sound.preset == L"no") snd = std::wstring(T(L"Tono")) + L" " + pitch_text(g_set.sound.pitch);
         rows.push_back({ I_EQ, T(L"Sonido"), snd, false, 5 });
         std::wstring q = v->vf >= 0 ? std::to_wstring(v->fmts[v->vf].h) + L"p" : L"";
-        rows.push_back({ I_QUALITY, T(L"Calidad"), v->auto_quality ? T(L"Automática (") + q + L")" : quality_text(v->vf >= 0 ? v->fmts[v->vf].h : 0), false, 2 });
+        if (!v->scroller) rows.push_back({ I_QUALITY, T(L"Calidad"), v->auto_quality ? T(L"Automática (") + q + L")" : quality_text(v->vf >= 0 ? v->fmts[v->vf].h : 0), false, 2 });
     } else if (g_menu_page == 2) {
         std::vector<int> hs;
         for (auto &f : v->fmts) if (!f.audio && f.h > 0 && std::find(hs.begin(), hs.end(), f.h) == hs.end()) hs.push_back(f.h);
@@ -1849,6 +1892,11 @@ static void set_quality(Video *v, int h) {
 static void toggle_mute(Video *v) { bezel(v, v->muted ? I_SPEAKER : I_MUTED); set_flag(v, "mute", !v->muted); v->muted = !v->muted; paint_all(v); }
 static bool video_key(Video *v, UINT vk, bool ctrl, bool shift, bool alt) {
     if (ctrl || alt) return false;
+    // the Scroller's own keys first: up and down (and j, k) go to the next or the previous video, Esc leaves it
+    if (v->scroller && !g_menu_page && (vk == VK_UP || vk == VK_DOWN || vk == 'J' || vk == 'K' || vk == VK_PRIOR || vk == VK_NEXT)) {
+        scroller_step(tab_by_id(v->tab), vk == VK_DOWN || vk == 'J' || vk == VK_NEXT ? 1 : -1);
+        return true;
+    }
     switch (vk) {
     case VK_SPACE: case 'K': toggle_pause(v); return true;
     case 'J': seek_rel(v, -10); return true;
@@ -1865,6 +1913,7 @@ static bool video_key(Video *v, UINT vk, bool ctrl, bool shift, bool alt) {
     case VK_ESCAPE:
         if (g_menu_page) { g_menu_page = 0; paint_all(v); return true; }
         if (g_fullscreen) { set_fullscreen(false); return true; }
+        if (v->scroller) { scroller_close(tab_by_id(v->tab)); return true; }
         return false;
     }
     if (!shift && ((vk >= '0' && vk <= '9') || (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9))) {
@@ -1888,6 +1937,7 @@ static void key_char(Video *v, wchar_t c) {
 }
 
 // ---------------------------------------------------------------- mpv's events
+static void scroll_started(Tab *t, Video *v);
 static void on_property(Video *v, uint64_t code, mpv_event_property *p) {
     if (!p->data) return;
     double d = p->format == MPV_FORMAT_DOUBLE ? *(double *)p->data : 0;
@@ -1990,7 +2040,9 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (e->event_id == MPV_EVENT_PROPERTY_CHANGE) on_property(v, e->reply_userdata, (mpv_event_property *)e->data);
             else if (e->event_id == MPV_EVENT_LOG_MESSAGE) mpv_log(v, t, (mpv_event_log_message *)e->data);
             else if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) {
+                bool first = !v->restarted;
                 v->restarted = true; v->seek_ms = now_ms() - v->seek_t0; tame(v);
+                if (v->scroller && first) scroll_started(t, v);
                 if (v->stage == ST_WAITING) sync_tick(t, v);
                 else if (v->loop && g_dev) { wchar_t b[96]; swprintf_s(b, L"vídeo propio: sigue en %.1f s (bucle)", refresh_pos(v)); log_line(b); }
             }
@@ -2001,7 +2053,9 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                     // the streams did not play (YouTube refused them): the page goes on as if nothing had happened
                     log_line(L"vídeo propio: mpv no pudo con las direcciones (error " + std::to_wstring(ef->error) + L")");
                     PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
-                    break;
+                    // (the Scroller's player goes on with the next video: its queue is read to the end, or mpv, which
+                    // only calls back when the queue was empty, would never tell of the next one)
+                    if (!v->scroller) break;
                 }
             }
         }
@@ -2246,9 +2300,16 @@ static LRESULT CALLBACK video_wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_LBUTTONDOWN:
         if (on) { SetFocus(h); if (g_menu_page) { g_menu_page = 0; paint_all(v); SetPropW(h, L"menu", (HANDLE)1); } }
+        if (on && v->scroller) { SetPropW(h, L"arrastre", (HANDLE)(INT_PTR)(GET_Y_LPARAM(lp) + 100000)); SetCapture(h); }
         return 0;
     case WM_LBUTTONUP:
         // a click pauses or plays; a double click is fullscreen, and the video goes on as it was (as YouTube)
+        if (on && v->scroller && GetPropW(h, L"arrastre")) {
+            // the Scroller: a drag up or down is the next or the previous video (as a finger on a phone)
+            int dy = GET_Y_LPARAM(lp) - ((int)(INT_PTR)RemovePropW(h, L"arrastre") - 100000);
+            if (GetCapture() == h) ReleaseCapture();
+            if (abs(dy) > 60 * GetDpiForWindow(h) / 96) { RemovePropW(h, L"menu"); scroller_step(t, dy < 0 ? 1 : -1); return 0; }
+        }
         if (skip_up()) return 0;
         if (on) { if (GetPropW(h, L"menu")) RemovePropW(h, L"menu"); else click_later(); }
         return 0;
@@ -2264,6 +2325,7 @@ static LRESULT CALLBACK video_wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CHAR: if (on) key_char(v, (wchar_t)wp); return 0;
     case WM_MOUSEWHEEL:
         // the wheel over the video moves the page, as on YouTube's (in the window)
+        if (on && v->scroller) { scroller_wheel(t, GET_WHEEL_DELTA_WPARAM(wp)); return 0; }   // (in the Scroller: the next video)
         if (on && !g_fullscreen) { POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }; ScreenToClient(g_win, &p); wake_page(t, msg, p, GET_WHEEL_DELTA_WPARAM(wp)); }
         return 0;
     }
@@ -2337,7 +2399,7 @@ static void CALLBACK ctl_tick(HWND, UINT, UINT_PTR id, DWORD) {
             PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
             return;
         }
-        check_picture(v);
+        if (!v->scroller) check_picture(v);
     }
     if (g_ctl.to <= 0 || v->paused || v->eof || g_menu_page || g_drag_seek || g_drag_vol) return;
     POINT pt;
@@ -2517,7 +2579,7 @@ static void check_page(Tab *t) {
     // in the window, the player needs its page around it as it is now: else the page wakes (a window resized, a
     // video taken in fullscreen...), and Pluma's player comes back with a new photo once it is left alone
     Video *v = V(t);
-    if (!t || !v || v->lite || v->stage != ST_ON || t != active_tab() || g_fullscreen || zoom_busy() || !IsWindowVisible(g_win) || IsIconic(g_win)) return;
+    if (!t || !v || v->lite || v->scroller || v->stage != ST_ON || t != active_tab() || g_fullscreen || zoom_busy() || !IsWindowVisible(g_win) || IsIconic(g_win)) return;
     if (!photo_fits(v)) PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_WOKEN, (LPARAM)t->id);
 }
 static bool set_box(Tab *t, Video *v, double x, double y, double w, double h, double dpr) {
@@ -2665,7 +2727,7 @@ static void show_player(Tab *t, Video *v) {
     bool vis = IsWindowVisible(g_win) != FALSE;
     place_window(v, vis);
     place_photo(v, vis);
-    if (t->ctrl && !v->lite) t->ctrl->put_IsVisible(FALSE);
+    if (t->ctrl && !v->lite && !v->scroller) t->ctrl->put_IsVisible(FALSE);
     tame(v);
     focus_video(v);
     g_ctl.snap(0);
@@ -2699,10 +2761,11 @@ static void CALLBACK end_tick(HWND, UINT, UINT_PTR id, DWORD) {
 static void switch_now(Tab *t, Video *v, bool playing) {
     // at the very instant: the page pauses, mpv plays, in the same place (the change is not seen: only the controls
     // are Pluma's from then on)
-    eval(t, L"(() => { const p = document.getElementById('movie_player'); if (p && p.pauseVideo) p.pauseVideo();"
-            L" if (document.fullscreenElement) document.exitFullscreen(); return 1; })()", [](const Json &) {});
+    if (!v->scroller)   // (the Scroller's page is any page: nothing of Pluma runs in its world)
+        eval(t, L"(() => { const p = document.getElementById('movie_player'); if (p && p.pauseVideo) p.pauseVideo();"
+                L" if (document.fullscreenElement) document.exitFullscreen(); return 1; })()", [](const Json &) {});
     v->stage = ST_ON;
-    t->video_mode = !v->lite;   // (the light page stays awake and on screen around the player)
+    t->video_mode = !v->lite && !v->scroller;   // (the light page stays awake and on screen around the player; the Scroller's too)
     if (playing) set_flag(v, "pause", false);
     v->paused = !playing;
     t->audible = playing && !v->muted;
@@ -2710,13 +2773,13 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     SetTimer(g_msg, kCtlTimer, 250, ctl_tick);
     SetTimer(g_msg, kEndTimer, 1000, end_tick);
     wchar_t gain[24]; swprintf_s(gain, L"%+.1f", v->gain_db);
-    log_line(L"vídeo propio: " + (t->incognito ? std::wstring(L"(incógnito)") : v->title) + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
+    if (!v->scroller) log_line(L"vídeo propio: " + (t->incognito ? std::wstring(L"(incógnito)") : v->title) + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
              L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió, sonido " + gain + L" dB");
     v->warm_at = now_ms();
     if (v->lite) SetTimer(g_msg, kLiteTimer + t->id, 250, lite_tick);
-    else SetTimer(g_msg, kFreezeTimer + t->id, 2500, freeze_check);
+    else if (!v->scroller) SetTimer(g_msg, kFreezeTimer + t->id, 2500, freeze_check);
     // the other qualities' lists, ahead (YouTube's list server takes 1-3 s for each)
-    fetch_playlists(v, each_quality(v), [](Video *) {});
+    if (!v->scroller) fetch_playlists(v, each_quality(v), [](Video *) {});
     // and mpv's first frame taken once, ahead, on a thread: the first takes ~230 ms (the next ones ~25), and the
     // fullscreen zoom waited for it
     if (t == active_tab())
@@ -2737,7 +2800,7 @@ static void lite_start(Tab *t, Video *v);
 static void sync_tick(Tab *t, Video *v) {
     // mpv waits, paused, a second ahead of the page; when the page gets there, the two swap
     if (!t || v->stage != ST_WAITING || !v->restarted) return;
-    if (v->lite) { lite_start(t, v); return; }
+    if (v->lite || v->scroller) { lite_start(t, v); return; }
     if (now_ms() - v->asked > 45000) { video_destroy(t); video_page_changed(t); return; }   // the page did not play it: later, then
     int id = t->id;
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (!p || !p.getCurrentTime) return null;"
@@ -2972,6 +3035,7 @@ void video_page_changed(Tab *t) {
     if (!t || !g_msg) return;
     if (t->lite == LITE_MUSIC) return;   // (its music: audio_page_loaded; the page moves without loading)
     Video *v = V(t);
+    if (v && v->scroller) return;   // (the Scroller's player stays: X and Reddit change the address without loading)
     if (t->yt_lite || t->lite == LITE_REDDIT) {
         std::wstring id = lite_video_id(t);
         // Pluma's light page: no page player to wait for; Pluma's goes in as soon as the page has loaded
@@ -2988,6 +3052,16 @@ static void lite_back(Tab *t, int how, double pos);
 void video_back_to_page(Tab *t, int how) {
     Video *v = V(t);
     if (!t || !v) return;
+    if (v->scroller) {
+        // the Scroller's player never goes back to a page: its end is the next video, a failure skips it, the
+        // "page" button leaves the Scroller, and another page ends it all (scroller.cpp)
+        KillTimer(g_msg, kScrollTimer + t->id);
+        if (how == VIDEO_LEAVE) { video_destroy(t); scroller_player_event(t, VIDEO_LEAVE); return; }
+        if (how == VIDEO_WOKEN) return;
+        if (how == VIDEO_FAILED) { v->lite_cover = true; if (t == active_tab()) video_layout(); }
+        scroller_player_event(t, how);
+        return;
+    }
     double pos = refresh_pos(v), vol = v->volume, speed = v->speed;
     bool was_on = v->stage == ST_ON, playing = was_on && !v->paused, muted = v->muted, lite = v->lite, loop = v->loop;
     std::wstring vid = v->id;
@@ -3054,8 +3128,21 @@ void video_destroy(Tab *t) {
     t->video = nullptr;
     t->video_mode = false;
     if (was_on) t->audible = false;
+    KillTimer(g_msg, kScrollTimer + t->id);
+    // the Scroller's lists on disk (one per video it played from a list the page gave) go with it, always
+    if (v->scroller && v->s_count) {
+        std::wstring dir = g_data + L"\\cache-video\\", pat = L"sc" + std::to_wstring(t->id) + L"-*.m3u8";
+        std::thread([dir, pat] {
+            Sleep(4000);
+            WIN32_FIND_DATAW fd;
+            HANDLE fh = FindFirstFileW((dir + pat).c_str(), &fd);
+            if (fh == INVALID_HANDLE_VALUE) return;
+            do DeleteFileW((dir + fd.cFileName).c_str()); while (FindNextFileW(fh, &fd));
+            FindClose(fh);
+        }).detach();
+    }
     // incognito: its lists and captions (named after the video) go from the disk too, once mpv has let go of them
-    if (t->incognito) {
+    if (t->incognito && !v->scroller) {
         std::wstring dir = g_data + L"\\cache-video\\", id = v->id;
         std::thread([dir, id] {
             Sleep(4000);
@@ -3157,6 +3244,226 @@ static void CALLBACK lite_tick(HWND, UINT, UINT_PTR tid, DWORD) {
         }
     });
 }
+// ---------------------------------------------------------------- the Scroller's player (scroller.cpp)
+// One mpv for the whole feed: each video goes into it with "loadfile replace" (no second player: +80 MB for nothing
+// but a second less). Its place is the Scroller's slot; the page stays awake and on screen around it. Until a video
+// plays, the player hides and the slot shows its poster (the page's own picture of it).
+static void scroll_started(Tab *t, Video *v) {
+    KillTimer(g_msg, kScrollTimer + v->tab);
+    double aspect = 0;
+    if (v->mpv) M.get_property(v->mpv, "video-params/aspect", MPV_FORMAT_DOUBLE, &aspect);
+    if (v->stage == ST_ON) { v->lite_cover = false; v->eof = false; if (t == active_tab()) video_layout(); }
+    if (t) scroller_player_started(t, aspect, now_ms() - v->asked);
+}
+static void CALLBACK scroll_watch(HWND, UINT, UINT_PTR tid, DWORD) {
+    // a video that has not started 12 s after it was asked for is skipped (as the watchman of YouTube's)
+    KillTimer(g_msg, tid);
+    Tab *t = tab_by_id((int)(tid - kScrollTimer)); WinScope ws_t(win_of_tab(t));
+    Video *v = V(t);
+    if (!v || !v->scroller || v->restarted) return;
+    log_line(L"Scroller: el vídeo no empezó en 12 s");
+    PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)v->tab);
+}
+static scroll::Hop http_hop(const std::string &url, const std::wstring &headers, const std::wstring &ua, bool range, std::string *body) {
+    // one request of the Scroller's, without following redirects (scroll::vet_chain follows them, each checked): its
+    // status, where it redirects to, and (body) what it says, up to 512 KB. range: only its first byte (a video file:
+    // is it there?)
+    scroll::Hop out;
+    URL_COMPONENTS uc = { sizeof(uc) };
+    wchar_t host[256] = L"";
+    uc.lpszHostName = host; uc.dwHostNameLength = 256;
+    uc.dwUrlPathLength = (DWORD)-1; uc.dwExtraInfoLength = (DWORD)-1;
+    std::wstring wurl = wide(url);
+    if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) return out;
+    std::wstring path = std::wstring(uc.lpszUrlPath, uc.dwUrlPathLength) + (uc.lpszExtraInfo ? std::wstring(uc.lpszExtraInfo, uc.dwExtraInfoLength) : L"");
+    HINTERNET s = WinHttpOpen(ua.empty() ? L"Mozilla/5.0" : ua.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!s) return out;
+    WinHttpSetTimeouts(s, 4000, 4000, 8000, 10000);
+    HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
+    HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                         uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) : NULL;
+    if (r) {
+        DWORD off = WINHTTP_DISABLE_REDIRECTS;
+        WinHttpSetOption(r, WINHTTP_OPTION_DISABLE_FEATURE, &off, sizeof(off));
+        std::wstring h = headers + (range ? L"Range: bytes=0-0\r\n" : L"");
+        if (WinHttpSendRequest(r, h.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : h.c_str(), h.empty() ? 0 : (DWORD)-1L, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+            WinHttpReceiveResponse(r, NULL)) {
+            DWORD code = 0, len = sizeof(code);
+            WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &len, WINHTTP_NO_HEADER_INDEX);
+            out.status = (int)code;
+            wchar_t loc[4096] = L""; len = sizeof(loc);
+            if (code >= 300 && code < 400 && WinHttpQueryHeaders(r, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX, loc, &len, WINHTTP_NO_HEADER_INDEX))
+                out.location = utf8(loc);
+            if (body && code >= 200 && code < 300) {
+                char buf[16384];
+                for (;;) {
+                    DWORD got = 0;
+                    if (!WinHttpReadData(r, buf, sizeof(buf), &got)) { out.status = 0; break; }
+                    if (!got) break;
+                    body->append(buf, got);
+                    if (body->size() > 512 * 1024) { out.status = 0; break; }
+                }
+            }
+        }
+    }
+    if (r) WinHttpCloseHandle(r);
+    if (c) WinHttpCloseHandle(c);
+    WinHttpCloseHandle(s);
+    return out;
+}
+// every host a list names (its pieces, its keys), resolved: none may be the machine's or a local network's
+static bool scroll_hosts_ok(const std::string &list, const std::string &page_host) {
+    std::vector<std::string> hosts = scroll::list_hosts(list);
+    if (hosts.size() > 20) return false;
+    for (auto &h : hosts) if (!scroll::vet_host(h, page_host)) return false;
+    return true;
+}
+static void scroll_go(int id, int serial, const std::string &what, const std::string &audio) {
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
+    Video *v = V(t);
+    if (!v || !v->scroller || v->serial != serial) return;
+    v->s_url = what;
+    v->s_audio = audio;
+    if (!v->mpv) {
+        if (!start_player(v, 0)) {
+            log_line(L"Scroller: no arrancó el motor");
+            stop_player(v); t->video = nullptr; delete v;
+            scroller_player_event(t, VIDEO_FAILED);
+            return;
+        }
+    } else load_streams(v, 0, false);
+    SetTimer(g_msg, kScrollTimer + id, 12000, scroll_watch);
+}
+bool video_scroller_play(Tab *t, const ScrollMedia &m) {
+    if (!t || !t->view || !load_mpv()) return false;
+    std::string url = utf8(m.url), page_host = scroll::host_of(utf8(t->url));
+    if (!scroll::url_ok(url, page_host)) { log_line(L"Scroller: dirección no permitida para el reproductor"); return false; }
+    Video *v = V(t);
+    if (v && !v->scroller) { video_destroy(t); v = nullptr; }
+    if (!v) { v = new Video(); v->tab = t->id; v->scroller = true; v->id = L"scroller"; t->video = v; }
+    KillTimer(g_msg, kScrollTimer + t->id);
+    int id = t->id, serial = v->serial = ++g_serial;
+    v->asked = now_ms();
+    v->title = m.title; v->author = m.author;
+    v->dur = 0; v->pos = 0; v->eof = false; v->end_still = 0; v->restarted = false;
+    v->s_referer = utf8(m.referer); v->s_cookie = utf8(m.cookie); v->s_ua = utf8(m.ua);
+    v->s_loops = m.gif ? 2 : 0;   // (a gif of a second or two, three times before the next)
+    v->fmts.clear(); v->vf = v->af = -1;
+    if (m.box[2] > 0 && m.box[3] > 0) set_box(t, v, m.box[0], m.box[1], m.box[2], m.box[3], m.dpr);
+    if (v->stage == ST_ON) { v->lite_cover = true; if (t == active_tab()) video_layout(); }
+    // on a thread: the address followed to its end by Pluma (each redirect checked, and each host's addresses: a name or
+    // a redirect could point at the local network), so mpv opens the last one and follows nothing itself. An HLS list
+    // (the page's own copy if it gave one: those are signed for the page) is read, checked whole, its variant for the
+    // slot and its sound chosen, and those two lists, checked too, go to the disk: mpv opens only them, and only their
+    // pieces from the network
+    std::string given = utf8(m.list), ua = v->s_ua;
+    // (the cookies, only for their own host: the video's, which scroller.cpp gives them for only when it is the page's)
+    std::wstring hdrs, cookie_line;
+    std::string cookie_host = !m.cookie.empty() && scroll::header_ok(v->s_cookie) ? scroll::host_of(url) : "";
+    if (!m.referer.empty() && scroll::header_ok(v->s_referer)) hdrs += L"Referer: " + m.referer + L"\r\n";
+    if (!cookie_host.empty()) cookie_line = L"Cookie: " + m.cookie + L"\r\n";
+    bool hls = m.hls;
+    RECT slot = player_rect(v);
+    int want_h = (int)((slot.bottom - slot.top) * 0.9);
+    std::wstring dir = g_data + L"\\cache-video";
+    int n = ++v->s_count;
+    std::thread([id, serial, url, page_host, given, hdrs, cookie_line, cookie_host, ua, hls, want_h, dir, n] {
+        auto vet = [&](const std::string &h) { return scroll::vet_host(h, page_host); };
+        auto get = [&](const std::string &u, std::string *body, bool range) {
+            std::string at = scroll::vet_chain(u, page_host, cookie_host, [&](const std::string &x, bool cookie) {
+                if (body) body->clear();
+                return http_hop(x, cookie ? hdrs + cookie_line : hdrs, wide(ua), range, body);
+            }, vet);
+            return at;
+        };
+        std::string what, audio, why;
+        std::vector<std::string> for_mpv;   // (what mpv will ask for: the cookies go to it only if all is on their host)
+        if (!hls) {
+            what = get(url, nullptr, true);
+            if (what.empty()) why = "la dirección";
+            else for_mpv.push_back(what);
+        } else {
+            std::string text = given, base = url;
+            if (text.empty()) { base = get(url, &text, false); if (base.empty()) text.clear(); }
+            std::string safe;
+            if (text.empty() || !scroll::safe_list(text, base, page_host, safe) || !scroll_hosts_ok(safe, page_host)) why = "lista";
+            else {
+                // a master list: the variant that fills the slot, and the sound of its group (as YouTube's, video.cpp)
+                Video tmp;
+                tmp.fmts = parse_master(safe, base, true);
+                int vf = -1, af = -1;
+                for (size_t i = 0; i < tmp.fmts.size(); i++) if (!tmp.fmts[i].audio && tmp.fmts[i].h > 0 && tmp.fmts[i].h <= std::max(want_h, 240) && (vf < 0 || tmp.fmts[i].h > tmp.fmts[vf].h)) vf = (int)i;
+                if (vf < 0) for (size_t i = 0; i < tmp.fmts.size(); i++) if (!tmp.fmts[i].audio && tmp.fmts[i].h > 0 && (vf < 0 || tmp.fmts[i].h < tmp.fmts[vf].h)) vf = (int)i;
+                tmp.vf = vf;
+                af = pick_audio(&tmp);
+                std::string vtext, atext;
+                if (vf < 0) vtext = safe;   // (a media list itself: no variants)
+                SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
+                auto save = [&](const std::string &u, std::string &body, const wchar_t *tag) -> std::string {
+                    std::string b2, at = body.empty() ? get(u, &b2, false) : u, ok;
+                    if (body.empty()) body = b2;
+                    if (at.empty() || !scroll::safe_list(body, at, page_host, ok) || !scroll_hosts_ok(ok, page_host)) return "";
+                    for_mpv.push_back(ok);
+                    std::wstring p = dir + L"\\sc" + std::to_wstring(id) + L"-" + std::to_wstring(n) + tag + L".m3u8";
+                    return write_file(p, ok) ? utf8(p) : "";
+                };
+                what = save(vf >= 0 ? tmp.fmts[vf].url : base, vtext, L"v");
+                if (!what.empty() && af >= 0) { audio = save(tmp.fmts[af].url, atext, L"a"); if (audio.empty()) what.clear(); }
+                if (what.empty()) why = "lista";
+            }
+        }
+        bool mpv_cookie = scroll::cookie_for_mpv(cookie_host, for_mpv);
+        ui_post([id, serial, what, audio, why, mpv_cookie] {
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
+            Video *v = V(t);
+            if (!v || !v->scroller || v->serial != serial) return;
+            if (!mpv_cookie) v->s_cookie.clear();
+            if (what.empty()) {
+                log_line(L"Scroller: el vídeo no pasó la comprobación (" + wide(why) + L")");
+                PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_FAILED, (LPARAM)id);
+                return;
+            }
+            scroll_go(id, serial, what, audio);
+        });
+    }).detach();
+    return true;
+}
+void video_scroller_box(Tab *t, double x, double y, double w, double h, double dpr) {
+    Video *v = V(t);
+    if (!v || !v->scroller || g_fullscreen || zoom_busy()) return;
+    RECT old = v->box;
+    set_box(t, v, x, y, w, h, dpr);
+    if (!EqualRect(&old, &v->box) && t == active_tab()) video_layout();
+}
+void video_scroller_hide(Tab *t, bool hide) {
+    Video *v = V(t);
+    if (!v || !v->scroller || v->lite_cover == hide) return;
+    v->lite_cover = hide;
+    if (hide) set_flag(v, "pause", true);
+    if (t == active_tab()) video_layout();
+}
+void video_scroller_cmd(Tab *t, const std::wstring &what) {
+    Video *v = V(t);
+    if (!v || !v->scroller || !v->mpv) return;
+    if (what == L"pause") { if (v->stage == ST_ON) toggle_pause(v); }
+    else if (what == L"play") set_flag(v, "pause", false);
+    else if (what == L"mute") toggle_mute(v);
+    else if (what == L"loop") { v->loop = !v->loop; mpv_cmd(v, { "set", "loop-file", v->loop ? "inf" : "no" }); }
+}
+std::wstring video_scroller_state(Tab *t) {
+    Video *v = V(t);
+    if (!v || !v->scroller) return L"null";
+    double pos = refresh_pos(v);
+    wchar_t b[200];
+    swprintf_s(b, L"{\"pos\":%.2f,\"dur\":%.2f,\"paused\":%s,\"muted\":%s,\"loop\":%s}", pos, v->dur, v->paused ? L"true" : L"false",
+               v->muted ? L"true" : L"false", v->loop ? L"true" : L"false");
+    return b;
+}
+void video_scroller_stop(Tab *t) {
+    Video *v = V(t);
+    if (v && v->scroller) video_destroy(t);
+}
+
 // ---------------------------------------------------------------- sound only: Pluma's light YouTube Music page
 // The page is the player: its bar, its queue, next, shuffle. Pluma only plays one song at a time, with no window,
 // and asks the page four times a second (once a second from a tab out of sight) what to do: __pluma.music(state)

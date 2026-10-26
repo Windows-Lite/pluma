@@ -832,6 +832,8 @@ static void test_command(const std::wstring &what) {
     else if (starts_with(what, L"arrastre-a=")) { int n = 0, x = 0, y = 0; swscanf_s(what.c_str() + 11, L"%d,%d,%d", &n, &x, &y); ui_test_drag(2, n, x, y); }
     else if (what == L"arrastre-suelta") ui_test_drag(3, 0, 0, 0);
     else if (what == L"cerrar") PostMessageW(g_win, WM_CLOSE, 0, 0);   // its X
+    else if (what == L"scroller") scroller_toggle(t);   // ⋯ > Scroller
+    else if (starts_with(what, L"scroller-paso=")) scroller_step(t, _wtoi(what.c_str() + 14));
     else if (what == L"pos") log_line(L"prueba: vídeo en " + std::to_wstring(video_position(t)) + L" s" + (video_playing(t) ? L", sonando" : L""));
     else if (what == L"ventanas") {
         for (auto &w : g_windows) {
