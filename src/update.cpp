@@ -189,9 +189,9 @@ static bool swap_exe() {
 static void go_in(bool hidden) {
     // (not while other profiles' windows are open: they run from this Pluma.exe, and would be left on the old one)
     if (profiles_others_open()) {
-        SetTimer(g_win, 71, 60 * 1000, [](HWND h, UINT, UINT_PTR id, DWORD) {
+        SetTimer(g_app, 71, 60 * 1000, [](HWND h, UINT, UINT_PTR id, DWORD) {
             KillTimer(h, id);
-            if (!g_ready.empty() && g_set.update == 2 && !IsWindowVisible(g_win)) go_in(true);
+            if (!g_ready.empty() && g_set.update == 2 && !any_window_visible()) go_in(true);
         });
         return;
     }
@@ -201,8 +201,8 @@ static void go_in(bool hidden) {
 // the window thread decides once a version is waiting
 static void ready(const Release &rel) {
     g_ready = rel.tag;
-    log_line(std::wstring(L"actualización: esperando a entrar, ventana ") + (IsWindowVisible(g_win) ? L"abierta" : L"cerrada"));
-    if (g_set.update == 2 && !IsWindowVisible(g_win)) { go_in(true); return; }
+    log_line(std::wstring(L"actualización: esperando a entrar, ventana ") + (any_window_visible() ? L"abierta" : L"cerrada"));
+    if (g_set.update == 2 && !any_window_visible()) { go_in(true); return; }
     if (g_announced == rel.tag) return;
     g_announced = rel.tag;
     ui_notice(T(L"Nueva versión de Pluma lista: ") + rel.tag + T(L". Se instala al cerrar la ventana."), T(L"Reiniciar ahora"), [] { go_in(false); });
@@ -212,7 +212,7 @@ static void CALLBACK tick(HWND h, UINT, UINT_PTR id, DWORD) {
     SetTimer(h, id, 6 * 3600 * 1000, tick);   // then every 6 h
     check(false);
 }
-static void retry_soon() { SetTimer(g_win, 70, 30 * 60 * 1000, tick); }   // no answer (offline...): again in 30 min
+static void retry_soon() { SetTimer(g_app, 70, 30 * 60 * 1000, tick); }   // no answer (offline...): again in 30 min
 static void check(bool by_hand) {
     if (by_hand) {
         if (!wcscmp(kVersion, L"dev")) { ui_toast(T(L"Esta copia de Pluma no se actualiza sola")); return; }
@@ -278,5 +278,5 @@ void update_init() {
     wchar_t u[8];
     bool test_url = GetEnvironmentVariableW(L"PLUMA_ACTUALIZAR_URL", u, 8) > 0;
     if (g_incognito || !g_profile_id.empty() || (g_test && !test_url) || g_set.update == 0 || !wcscmp(kVersion, L"dev")) return;
-    SetTimer(g_win, 70, test_url ? 3000 : 30000, tick);
+    SetTimer(g_app, 70, test_url ? 3000 : 30000, tick);
 }

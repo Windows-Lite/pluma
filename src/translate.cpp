@@ -218,7 +218,7 @@ int translate_progress(Tab *t) {
 }
 static void stop(int id, int status) {
     auto it = g_jobs.find(id);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     if (it == g_jobs.end() || !t) return;
     Job &j = it->second;
     j.on = false;
@@ -233,7 +233,7 @@ static void pump(int id);
 static void round_done(int id, int gen) {
     // every request of the round answered: the page gets them all at once, then the next round
     auto it = g_jobs.find(id);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     if (it == g_jobs.end() || it->second.gen != gen || !t || !t->view) return;
     Job &j = it->second;
     std::wstring js = L"window.__plumaTr ? __plumaTr.put([" + j.put + L"]) : null";
@@ -271,7 +271,7 @@ static void got(int id, int gen, const std::vector<Piece> &ps, int status, const
 static void pump(int id) {
     // the next pieces of the page (up to ~12,000 characters), in up to three requests at once
     auto it = g_jobs.find(id);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     if (it == g_jobs.end() || !t || !t->view) return;
     Job &j = it->second;
     if (!j.on || j.busy) return;
@@ -280,7 +280,7 @@ static void pump(int id) {
     t->view->ExecuteScript(L"window.__plumaTr ? __plumaTr.take(12000) : null", Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
         [id, gen](HRESULT hr, LPCWSTR json) -> HRESULT {
             auto it = g_jobs.find(id);
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (it == g_jobs.end() || it->second.gen != gen || !t) return S_OK;
             Job &j = it->second;
             j.busy = false;
@@ -356,7 +356,7 @@ void translate_page(Tab *t) {
     t->view->ExecuteScript(js.c_str(), Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
         [id, gen](HRESULT hr, LPCWSTR json) -> HRESULT {
             auto it = g_jobs.find(id);
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (it == g_jobs.end() || it->second.gen != gen || !t) return S_OK;
             Job &j = it->second;
             j.busy = false;
@@ -427,7 +427,7 @@ static void detect(Tab *t) {
     std::wstring url = t->url;
     t->view->ExecuteScript(kDetectJs, Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
         [id, url](HRESULT hr, LPCWSTR json) -> HRESULT {
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!t || t->url != url || FAILED(hr) || !json) return S_OK;
             Json j = json_parse(json);
             if (j.kind != Json::OBJ) return S_OK;
@@ -449,7 +449,7 @@ void translate_attach(Tab *t) {
     v->add_ContentLoading(Callback<ICoreWebView2ContentLoadingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2ContentLoadingEventArgs *) -> HRESULT {
             // a new document: whatever was translated went with the old one
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!t) return S_OK;
             auto it = g_jobs.find(id);
             if (it != g_jobs.end()) { it->second.gen++; it->second.on = it->second.busy = false; }
@@ -459,12 +459,12 @@ void translate_attach(Tab *t) {
     ComPtr<ICoreWebView2_2> v2;
     if (SUCCEEDED(t->view.As(&v2)))
         v2->add_DOMContentLoaded(Callback<ICoreWebView2DOMContentLoadedEventHandler>(
-            [id](ICoreWebView2 *, ICoreWebView2DOMContentLoadedEventArgs *) -> HRESULT { detect(tab_by_id(id)); return S_OK; }).Get(), &tok);
+            [id](ICoreWebView2 *, ICoreWebView2DOMContentLoadedEventArgs *) -> HRESULT { { Tab *tt_ = tab_by_id(id); WinScope ws_(win_of_tab(tt_)); detect(tt_); } return S_OK; }).Get(), &tok);
     v->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *a) -> HRESULT {
             // (what was still loading at DOMContentLoaded: its words may say more)
             BOOL ok = FALSE; a->get_IsSuccess(&ok);
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (ok && t && !t->tr_state) detect(t);
             return S_OK;
         }).Get(), &tok);
@@ -479,7 +479,7 @@ void translate_attach(Tab *t) {
                 if (it == g_recheck.end()) return;
                 int id = it->second;
                 g_recheck.erase(it);
-                detect(tab_by_id(id));
+                { Tab *tt_ = tab_by_id(id); WinScope ws_(win_of_tab(tt_)); detect(tt_); }
             });
             if (tm) g_recheck[tm] = id;
             return S_OK;
@@ -502,7 +502,7 @@ void translate_selection(Tab *t, const std::wstring &given, bool has_point, POIN
     int id = t->id;
     t->view->ExecuteScript(kSelectionJs, Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
         [id, given, has_point, view_point](HRESULT hr, LPCWSTR json) -> HRESULT {
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!t || !t->ctrl) return S_OK;
             Json j = SUCCEEDED(hr) && json ? json_parse(json) : Json();
             std::wstring text = trim(given.empty() ? j[L"txt"].s : given);
@@ -614,7 +614,7 @@ void translate_context_menu(Tab *t, ICoreWebView2ContextMenuRequestedEventArgs *
         if (FAILED(hr)) return;
         mine->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
             [id, text, loc](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT {
-                ui_post([id, text, loc] { translate_selection(tab_by_id(id), text, true, loc); });
+                ui_post([id, text, loc] { Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t)); translate_selection(t, text, true, loc); });
                 return S_OK;
             }).Get(), &tk);
         int at = index_of(L"copy");
@@ -632,7 +632,7 @@ void translate_context_menu(Tab *t, ICoreWebView2ContextMenuRequestedEventArgs *
         if (FAILED(hr)) return;
         mine->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
             [id](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT {
-                ui_post([id] { Tab *t = tab_by_id(id); if (!t) return; if (t->tr_state) translate_original(t); else translate_page(t); });
+                ui_post([id] { Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t)); if (!t) return; if (t->tr_state) translate_original(t); else translate_page(t); });
                 return S_OK;
             }).Get(), &tk);
         items->InsertValueAtIndex((UINT32)at + 1, mine.Get());

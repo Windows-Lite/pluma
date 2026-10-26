@@ -157,7 +157,7 @@ void settings_page_refresh_soon() {
 }
 void settings_page_refresh() {
     // something changed elsewhere (the menu, another settings tab): the open pages show it
-    for (auto &t : g_tabs) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) post_state(t->view.Get(), Json());
+    for (Tab *t : all_tabs()) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) post_state(t->view.Get(), Json());
 }
 
 static void apply(const std::wstring &key, const Json &val) {
@@ -231,7 +231,7 @@ static void handle_sync(ICoreWebView2 *v, const Json &j) {
     }
 }
 void settings_broadcast(const std::wstring &msg) {
-    for (auto &t : g_tabs) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) t->view->PostWebMessageAsJson(msg.c_str());
+    for (Tab *t : all_tabs()) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) t->view->PostWebMessageAsJson(msg.c_str());
 }
 
 void settings_attach(ICoreWebView2 *v) {

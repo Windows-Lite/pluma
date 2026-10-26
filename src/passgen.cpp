@@ -63,7 +63,7 @@ static void add(Tab *t) {
     std::wstring s = script(t->incognito);
     if (s.empty()) return;
     t->view->AddScriptToExecuteOnDocumentCreated(s.c_str(), Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
-        [id](HRESULT hr, LPCWSTR sid) -> HRESULT { Tab *t = tab_by_id(id); if (t && SUCCEEDED(hr) && sid) t->passgen_id = sid; return S_OK; }).Get());
+        [id](HRESULT hr, LPCWSTR sid) -> HRESULT { Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t)); if (t && SUCCEEDED(hr) && sid) t->passgen_id = sid; return S_OK; }).Get());
 }
 static void watch_engine(ICoreWebView2 *v);
 static void watch_requests(Tab *t);
@@ -78,11 +78,11 @@ void passgen_settings_changed() {
     // (their frames, at their next page)
     std::wstring flip = L"dispatchEvent(new CustomEvent(" + json_escape(L"pluma-passgen-" + key()) + L",{detail:" +
                         (g_set.suggest_passwords ? L"true" : L"false") + L"}))";
-    for (auto &t : g_tabs) {
+    for (Tab *t : all_tabs()) {
         if (!t->view) continue;
         if (!t->passgen_id.empty()) t->view->RemoveScriptToExecuteOnDocumentCreated(t->passgen_id.c_str());
         t->passgen_id.clear();
-        add(t.get());
+        add(t);
         t->view->ExecuteScript(flip.c_str(), NULL);
     }
 }
@@ -230,7 +230,7 @@ static void keep_it_ourselves(int id) {
     }
 }
 
-static void CALLBACK tick(HWND, UINT, UINT_PTR tid, DWORD) {
+static void CALLBACK tick(HWND h, UINT, UINT_PTR tid, DWORD) {
     // what Pluma holds goes after a while, or with its tab (no prompt seen: nothing is written)
     double now = now_ms();
     std::vector<int> old;
@@ -239,7 +239,7 @@ static void CALLBACK tick(HWND, UINT, UINT_PTR tid, DWORD) {
     old.clear();
     for (auto &p : g_made) if (!tab_by_id(p.first) || now - p.second.at > kKeepMs) old.push_back(p.first);
     for (int id : old) forget_made(id);
-    if (g_sent.empty() && g_made.empty()) KillTimer(g_win, tid);
+    if (g_sent.empty() && g_made.empty()) KillTimer(h, tid);
 }
 static void heard_sent(Tab *t, const Json &j) {
     // {user, pass}: kept only if the password is one Pluma made for this tab
@@ -286,7 +286,8 @@ static PromptEnd watch_prompt(HWND w) {
     return GONE;
 }
 static void on_prompt(HWND w) {
-    // a window of the engine's, owned by this window, just showed: its save prompt, or its autofill list...
+    // a window of the engine's, owned by one of Pluma's windows (the current one here), just showed: its save prompt,
+    // or its autofill list...
     Tab *t = active_tab();
     if (g_test) log_line(L"passgen: ventana del motor " + std::to_wstring((long long)(INT_PTR)w) + (t && g_sent.count(t->id) ? L" (enviada)" : L""));
     if (!t || t->incognito || g_seen.count(w)) return;
@@ -303,6 +304,7 @@ static void on_prompt(HWND w) {
             g_seen.erase(w);
             auto it = g_sent.find(id);
             if (it == g_sent.end()) return;
+            WinScope ws(win_of_tab(tab_by_id(id)));   // (the notice, on the tab's window, wherever it went meanwhile)
             if (r == NOT_PROMPT) { it->second.busy = false; return; }   // (its autofill list: the prompt may still come)
             if (r == UPDATE) { forget(id); return; }                      // (an old login of this user: the person's call)
             keep_it_ourselves(id);
@@ -311,7 +313,12 @@ static void on_prompt(HWND w) {
 }
 static void CALLBACK on_show(HWINEVENTHOOK, DWORD, HWND w, LONG obj, LONG child, DWORD, DWORD) {
     if (obj != OBJID_WINDOW || child != CHILDID_SELF || !w || GetAncestor(w, GA_ROOT) != w) return;
-    if (GetWindow(w, GW_OWNER) != g_win) return;   // (other profiles' windows share the engine)
+    // owned by one of this Pluma's windows (other profiles' windows share the engine); that one is the current one
+    HWND owner = GetWindow(w, GW_OWNER);
+    Window *win = nullptr;
+    for (auto &x : g_windows) if (x->hwnd == owner) { win = x.get(); break; }
+    if (!win) return;
+    WinScope ws(win);
     wchar_t cls[64] = L"";
     GetClassNameW(w, cls, 64);
     if (wcscmp(cls, L"Chrome_WidgetWin_1")) return;
@@ -376,7 +383,7 @@ static void watch_requests(Tab *t) {
                 if (what == L"new") answer = make_for(id, j);
                 else if (what == L"sent") heard_sent(t, j);
                 for (auto &kv : j.obj) wipe(kv.second.s);
-                SetTimer(g_win, 0x5A61, 1000, tick);
+                SetTimer(g_app, 0x5A61, 1000, tick);   // (the app's: it outlives any one window)
             } else if (g_test) {
                 const wchar_t *o = origin.empty() ? L"-" : origin == mine ? L"el suyo" : origin == L"null" ? L"null" : L"otro";
                 log_line(std::wstring(L"passgen: petición de otro origen, ignorada (Origin ") + o + L", Sec-Fetch-Site " +

@@ -406,6 +406,10 @@ struct Layer {
     POINT pos{}; bool shown = false; float alpha = 1;
 };
 static Layer g_bottom, g_top, g_menu, g_center;
+// The controls and the photo are one set, in one window at a time: the one whose tab on screen shows its player
+// (other windows' players play on, without controls until that window's tab is used)
+static int g_ctl_win;
+static Window *ctl_window() { Window *w = win_by_id(g_ctl_win); return w ? w : win_last_used(); }
 static Anim g_ctl;              // the controls: 1 shown, 0 hidden
 static Anim g_vol_open;         // the volume slider opening
 static Anim g_bar_hot;          // the progress bar growing under the mouse
@@ -427,6 +431,8 @@ static void layer_place(Layer &l, int x, int y, int w, int hh, bool click_throug
     l.pos = { x, y };
     if (!l.h) l.h = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | (click_through ? WS_EX_TRANSPARENT : 0),
                                     L"PlumaControlesVideo", L"", WS_POPUP, x, y, w, hh, g_win, NULL, g_inst, NULL);
+    else if ((HWND)GetWindowLongPtrW(l.h, GWLP_HWNDPARENT) != g_win) SetWindowLongPtrW(l.h, GWLP_HWNDPARENT, (LONG_PTR)g_win);   // (now over this window)
+    g_ctl_win = g_cw->id;
 }
 static void layer_show(Layer &l, const std::function<void(ID2D1RenderTarget *, ID2D1SolidColorBrush *)> &draw, float alpha) {
     if (!l.h || l.w <= 0 || l.hh <= 0) return;
@@ -663,7 +669,7 @@ static void fetch_playlists(Video *v, std::vector<int> which, std::function<void
                 if (broke[k] >= 0) log_line(L"prueba: lista " + std::to_wstring(todo[k].i) + L" rota desde el trozo " + std::to_wstring(from) + L" (" +
                                             std::to_wstring((int)broke[k]) + L" s)");
             }
-            Video *v = V(tab_by_id(id));
+            Tab *tv_ = tab_by_id(id); WinScope ws_v(win_of_tab(tv_)); Video *v = V(tv_);
             if (!v || v->serial != serial) return;
             for (size_t k = 0; k < todo.size(); k++) if (!paths[k].empty()) v->fmts[todo[k].i].local = paths[k];
             then(v);
@@ -770,7 +776,9 @@ static void stop_player(Video *v) {
         std::thread([h, w, msgw] { M.terminate_destroy(h); if (w) PostMessageW(msgw, WM_VIDEO_GONE, (WPARAM)w, 0); }).detach();
     } else if (w) DestroyWindow(w);
 }
+static bool controls_here() { return !g_ctl_win || g_ctl_win == g_cw->id || !win_by_id(g_ctl_win); }
 static void hide_controls_now() {
+    if (!controls_here()) return;   // (another window's: they stay)
     layer_hide(g_bottom); layer_hide(g_top); layer_hide(g_menu); layer_hide(g_center);
     g_menu_page = 0; g_menu_top = 0; g_hot = C_NONE; g_mouse_x = -1;
 }
@@ -1275,6 +1283,7 @@ static void paint_all(Video *v) {
     paint_center(v);
 }
 static void CALLBACK anim_tick(HWND, UINT, UINT_PTR id, DWORD) {
+    WinScope ws(ctl_window());
     Video *v = V(active_tab());
     double now = now_ms();
     bool controls = g_ctl.running(now) || g_vol_open.running(now) || g_bar_hot.running(now);
@@ -1349,7 +1358,7 @@ static void add_sub(Video *v) {
         std::string text;
         bool ok = http_get(wide(url), text) && write_file(path, text);
         ui_post([ok, id, serial, which, path] {
-            Video *v = V(tab_by_id(id));
+            Tab *tv_ = tab_by_id(id); WinScope ws_v(win_of_tab(tv_)); Video *v = V(tv_);
             if (!ok || !v || v->serial != serial || which >= (int)v->caps.size()) return;
             v->caps[which].local = utf8(path);
             if (v->sub == which && v->loaded) add_sub(v);
@@ -1421,7 +1430,7 @@ static void on_property(Video *v, uint64_t code, mpv_event_property *p) {
     if (!p->data) return;
     double d = p->format == MPV_FORMAT_DOUBLE ? *(double *)p->data : 0;
     bool f = p->format == MPV_FORMAT_FLAG ? *(int *)p->data != 0 : false;
-    Tab *t = tab_by_id(v->tab);
+    Tab *t = tab_by_id(v->tab); WinScope ws_t(win_of_tab(t));
     switch (code) {
     case 0: {
         bool repaint = fabs(d - v->pos) >= 0.25 || (long long)d != (long long)v->pos;
@@ -1510,7 +1519,7 @@ static void audio_events();
 static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_VIDEO_EVENTS && lp == -1) { audio_events(); return 0; }
     if (msg == WM_VIDEO_EVENTS) {
-        Tab *t = tab_by_id((int)lp);
+        Tab *t = tab_by_id((int)lp); WinScope ws_t(win_of_tab(t));
         Video *v = V(t);
         if (!v || !v->mpv) return 0;
         while (v->mpv) {
@@ -1536,7 +1545,7 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
-    if (msg == WM_VIDEO_FAILED) { Tab *t = tab_by_id((int)lp); if (t && V(t)) video_back_to_page(t, (int)wp); return 0; }
+    if (msg == WM_VIDEO_FAILED) { Tab *t = tab_by_id((int)lp); WinScope ws_t(win_of_tab(t)); if (t && V(t)) video_back_to_page(t, (int)wp); return 0; }
     if (msg == WM_VIDEO_GONE) { DestroyWindow((HWND)wp); return 0; }
     return DefWindowProcW(h, msg, wp, lp);
 }
@@ -1613,6 +1622,7 @@ static void click_later() {
         KillTimer(g_msg, tid);
         if (!g_click_pending) return;
         g_click_pending = false;
+        WinScope ws(ctl_window());
         Video *v = V(active_tab());
         if (v && v->stage == ST_ON) toggle_pause(v);
     });
@@ -1650,6 +1660,7 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     // (SW_PARENTCLOSING / SW_PARENTOPENING), even when Pluma hid them meanwhile: they came back with their last picture
     // and stayed on the screen, over a new tab, after the video had gone (25/10). Pluma alone shows and hides them
     if (msg == WM_SHOWWINDOW && lp != 0) return 0;
+    WinScope ws(win_of_hwnd(h));   // (the window they are over)
     Video *v = V(active_tab());
     if (!v || v->stage != ST_ON) return DefWindowProcW(h, msg, wp, lp);
     if (msg == WM_MOUSEWHEEL && h == g_menu.h) {
@@ -1737,7 +1748,7 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(h, msg, wp, lp);
 }
 static LRESULT CALLBACK video_wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    Tab *t = tab_by_id((int)GetWindowLongPtrW(h, GWLP_USERDATA));
+    Tab *t = tab_by_id((int)GetWindowLongPtrW(h, GWLP_USERDATA)); WinScope ws_t(win_of_tab(t));
     Video *v = V(t);
     bool on = v && v->stage == ST_ON && v->wnd == h;
     switch (msg) {
@@ -1817,6 +1828,7 @@ static void check_picture(Video *v) {
 }
 static void CALLBACK ctl_tick(HWND, UINT, UINT_PTR id, DWORD) {
     // the controls go a moment after the mouse stops (not while paused, nor over them), and at once when it leaves
+    WinScope ws(ctl_window());
     Video *v = V(active_tab());
     if (!v || v->stage != ST_ON) { KillTimer(g_msg, id); return; }
     // nothing of the web is on screen: its processes, asleep, give back what they take again (149 MB in all
@@ -1877,7 +1889,7 @@ static void take_photo(Tab *t, Video *v) {
     RECT box = v->box, area = page_area();
     HRESULT hr = t->view->CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, st.Get(), Callback<ICoreWebView2CapturePreviewCompletedHandler>(
         [id, serial, st, box, area](HRESULT hr) -> HRESULT {
-            Video *v = V(tab_by_id(id));
+            Tab *tv_ = tab_by_id(id); WinScope ws_v(win_of_tab(tv_)); Video *v = V(tv_);
             if (!v || v->serial != serial) return S_OK;
             v->photo_asked = false;
             HGLOBAL g = NULL;
@@ -1956,12 +1968,13 @@ static void wake_page(Tab *t, UINT msg, POINT at, int delta) {
     // a moment after it wakes (sent at once, a turn of the wheel was lost now and then)
     SetTimer(g_msg, kPokeTimer, 60, [](HWND, UINT, UINT_PTR tid, DWORD) {
         KillTimer(g_msg, tid);
-        Tab *t = tab_by_id(g_poke.tab);
+        Tab *t = tab_by_id(g_poke.tab); WinScope ws_t(win_of_tab(t));
         if (t && t->view) for (auto &e : g_poke.events) t->view->CallDevToolsProtocolMethod(L"Input.dispatchMouseEvent", e.c_str(), NULL);
         g_poke.events.clear();
     });
 }
 static LRESULT CALLBACK photo_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    WinScope ws(win_of_hwnd(h));
     switch (msg) {
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps); paint_photo(h, dc); EndPaint(h, &ps); return 0; }
@@ -1992,9 +2005,10 @@ static void place_photo(Video *v, bool on_screen) {
         if (!g_photo) return;
     }
     if (!on_screen || !v || v->stage != ST_ON || !v->wnd || g_fullscreen || !photo_fits(v)) {
-        if (IsWindowVisible(g_photo) && !g_photo_leaving) ShowWindow(g_photo, SW_HIDE);
+        if (IsWindowVisible(g_photo) && !g_photo_leaving && GetParent(g_photo) == g_win) ShowWindow(g_photo, SW_HIDE);
         return;
     }
+    if (GetParent(g_photo) != g_win) { ShowWindow(g_photo, SW_HIDE); SetParent(g_photo, g_win); g_photo_shown = -1; }   // (now in this window)
     if (g_photo_leaving) { KillTimer(g_msg, kPhotoTimer); g_photo_leaving = false; }
     RECT a = page_area();
     SetWindowPos(g_photo, v->wnd, a.left, a.top, a.right - a.left, a.bottom - a.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -2003,12 +2017,13 @@ static void place_photo(Video *v, bool on_screen) {
 }
 static void hide_photo(bool later) {
     // (later: a moment more over the page, while it draws itself again after its sleep)
-    if (!g_photo || !IsWindowVisible(g_photo)) return;
+    if (!g_photo || !IsWindowVisible(g_photo) || GetParent(g_photo) != g_win) return;   // (in another window: not this one's)
     if (!later) { KillTimer(g_msg, kPhotoTimer); g_photo_leaving = false; ShowWindow(g_photo, SW_HIDE); return; }
     g_photo_leaving = true;
     SetTimer(g_msg, kPhotoTimer, 120, [](HWND, UINT, UINT_PTR tid, DWORD) {
         KillTimer(g_msg, tid);
         g_photo_leaving = false;
+        WinScope ws(win_of_hwnd(g_photo));
         Video *v = V(active_tab());
         if (!v || v->stage != ST_ON) ShowWindow(g_photo, SW_HIDE);
     });
@@ -2105,10 +2120,10 @@ static const wchar_t *kExtract = LR"JS((async () => {
 static void freeze_page(int id) {
     // the page, paused where it was, freezes and gives its memory back. (Not stopVideo: after it YouTube's player
     // ignores the seek back and starts again from 0; seen 25/10)
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     if (!t || !t->video_mode || !t->view) return;
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (p && p.pauseVideo) p.pauseVideo(); return 1; })()", [id](const Json &) {
-        Tab *t = tab_by_id(id);
+        Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
         if (!t || !t->video_mode || !t->view) return;
         if (t->ctrl) t->ctrl->put_IsVisible(FALSE);   // (awake behind the photo, it was drawing itself: warm_page)
         ComPtr<ICoreWebView2_19> v19;
@@ -2116,7 +2131,7 @@ static void freeze_page(int id) {
         ComPtr<ICoreWebView2_3> v3;
         if (SUCCEEDED(t->view.As(&v3)))
             v3->TrySuspend(Callback<ICoreWebView2TrySuspendCompletedHandler>([id](HRESULT hr, BOOL ok) -> HRESULT {
-                Tab *t = tab_by_id(id);
+                Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
                 // with nothing of the web on screen, the engine and its graphics give back what they hold too
                 if (t && t->video_mode && SUCCEEDED(hr) && ok) { t->suspended = true; if (user_away(3000)) tabs_trim(TRIM_IDLE); }
                 return S_OK;
@@ -2129,7 +2144,7 @@ static void CALLBACK freeze_check(HWND, UINT, UINT_PTR tid, DWORD) {
     // asleep 2.5 s after the change, the first scroll to the comments woke it cold, and it stuttered for seconds
     // (25/10). With the mouse over it, it stays awake (unless nobody touches the PC)
     int id = (int)(tid - kFreezeTimer);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     Video *v = V(t);
     if (!t || !v || v->stage != ST_ON || !t->video_mode || t->suspended) { KillTimer(g_msg, tid); return; }
     POINT pt; GetCursorPos(&pt);
@@ -2180,8 +2195,8 @@ static void CALLBACK end_tick(HWND, UINT, UINT_PTR id, DWORD) {
     // again, and the end never comes): it sat there, paused-looking, in a tab behind. In a loop, from the start
     // again; else the end, as mpv's own
     bool any = false;
-    for (auto &up : g_tabs) {
-        Video *v = V(up.get());
+    for (Tab *tab : all_tabs()) {
+        Video *v = V(tab);
         if (!v || v->stage != ST_ON || !v->mpv) continue;
         any = true;
         if (v->paused || v->eof || v->buffering || !v->loaded || v->dur <= 0) { v->end_still = 0; continue; }
@@ -2222,6 +2237,7 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     if (t == active_tab())
         SetTimer(g_msg, kWarmTimer, 1500, [](HWND, UINT, UINT_PTR tid, DWORD) {
             KillTimer(g_msg, tid);
+            WinScope ws(ctl_window());
             void *c = video_client();
             if (c) std::thread([c] { std::vector<BYTE> px; int w, h; video_frame(c, 640, px, w, h); video_client_done(c); }).detach();
         });
@@ -2229,7 +2245,7 @@ static void switch_now(Tab *t, Video *v, bool playing) {
 }
 static void CALLBACK sync_timer(HWND, UINT, UINT_PTR tid, DWORD) {
     KillTimer(g_msg, tid);
-    Tab *t = tab_by_id((int)(tid - kSyncTimer));
+    Tab *t = tab_by_id((int)(tid - kSyncTimer)); WinScope ws_t(win_of_tab(t));
     if (V(t)) sync_tick(t, V(t));
 }
 static void lite_start(Tab *t, Video *v);
@@ -2246,7 +2262,7 @@ static void sync_tick(Tab *t, Video *v) {
             L" return [p.getCurrentTime(), p.getPlayerState(), r.left, r.top, r.width, r.height, devicePixelRatio,"
             L" lm ? +lm[1] : null, el ? el.volume : null, p.getVolume ? p.getVolume() : null]; })()",
          [id](const Json &r) {
-             Tab *t = tab_by_id(id);
+             Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
              Video *v = V(t);
              if (!v || v->stage != ST_WAITING) return;
              if (r.kind != Json::ARR || r.arr.size() < 7) { video_destroy(t); return; }
@@ -2345,7 +2361,7 @@ static void video_try(Tab *t) {
     t->video = v;
     int id = t->id;
     eval(t, v->lite ? kLiteExtract : kExtract, [id](const Json &r) {
-        Tab *t = tab_by_id(id);
+        Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
         Video *v = V(t);
         if (!v || v->stage != ST_WAITING || v->mpv) return;
         auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); if (v->lite) lite_fail(t, why); t->video = nullptr; delete v; };
@@ -2392,7 +2408,7 @@ static void video_try(Tab *t) {
             std::string m3u8 = given;
             bool ok = !given.empty() || http_get(hls, m3u8);
             ui_post([id, serial, ok, m3u8, pt, at, hls] {
-                Tab *t = tab_by_id(id);
+                Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
                 Video *v = V(t);
                 if (!v || v->serial != serial || v->stage != ST_WAITING || v->mpv) return;
                 auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); if (v->lite) lite_fail(t, why); t->video = nullptr; delete v; };
@@ -2415,7 +2431,7 @@ static void video_try(Tab *t) {
                     v->start_at = v->lite ? pt : pt + ((at < 0 ? 0 : (now_ms() - at) / 1000.0) + ahead) * v->speed;   // (light: no page playing meanwhile)
                     if (!start_player(v, v->start_at)) {
                         log_line(L"vídeo propio: no arrancó el motor");
-                        Tab *t = tab_by_id(v->tab);
+                        Tab *t = tab_by_id(v->tab); WinScope ws_t(win_of_tab(t));
                         if (t && v->lite) lite_fail(t, L"no arrancó el motor");
                         stop_player(v); if (t) t->video = nullptr; delete v;
                         return;
@@ -2425,7 +2441,7 @@ static void video_try(Tab *t) {
                     // for minutes, 25/10); the page plays on meanwhile, nothing is lost
                     SetTimer(g_msg, kStartTimer + v->tab, 12000, [](HWND, UINT, UINT_PTR tid, DWORD) {
                         KillTimer(g_msg, tid);
-                        Tab *t = tab_by_id((int)(tid - kStartTimer));
+                        Tab *t = tab_by_id((int)(tid - kStartTimer)); WinScope ws_t(win_of_tab(t));
                         Video *v = V(t);
                         if (!v || v->stage != ST_WAITING || v->restarted) return;
                         static std::wstring retried;
@@ -2446,7 +2462,7 @@ static void video_try(Tab *t) {
 static void CALLBACK watch_tick(HWND, UINT, UINT_PTR tid, DWORD) {
     KillTimer(g_msg, tid);
     int id = (int)(tid - kWatchTimer);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     auto it = g_watch.find(id);
     if (it == g_watch.end()) return;
     if (!t || !t->view || t->video || !g_set.native_video || now_ms() > it->second || watch_id(t->url).empty()) { g_watch.erase(it); return; }
@@ -2456,7 +2472,7 @@ static void CALLBACK watch_tick(HWND, UINT, UINT_PTR tid, DWORD) {
     if (w != g_woken.end() && w->second != watch_id(t->url)) { g_woken.erase(w); w = g_woken.end(); }
     if (w != g_woken.end() && !user_away(4000)) { SetTimer(g_msg, tid, 1000, watch_tick); return; }
     eval(t, kState, [id](const Json &r) {
-        Tab *t = tab_by_id(id);
+        Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
         if (!t || !g_watch.count(id)) return;
         if (r.kind == Json::NUM && r.n == 1) { g_watch.erase(id); video_try(t); return; }
         SetTimer(g_msg, kWatchTimer + id, 400, watch_tick);
@@ -2585,7 +2601,7 @@ void video_layout() {
     }
     Video *v = V(act);
     place_photo(v, visible);
-    if (v && v->stage == ST_ON && visible) { paint_all(v); SetTimer(g_msg, kCtlTimer, 250, ctl_tick); }
+    if (v && v->stage == ST_ON && visible) { g_ctl_win = g_cw->id; paint_all(v); SetTimer(g_msg, kCtlTimer, 250, ctl_tick); }
     else hide_controls_now();
     check_page(act);
 }
@@ -2621,7 +2637,7 @@ static void lite_wheel(Tab *t, UINT msg, double x, double y, int delta) {
 }
 static void CALLBACK lite_tick(HWND, UINT, UINT_PTR tid, DWORD) {
     int id = (int)(tid - kLiteTimer);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     Video *v = V(t);
     if (!t || !v || !v->lite || v->stage != ST_ON) { KillTimer(g_msg, tid); return; }
     SetTimer(g_msg, tid, t == active_tab() ? 250 : 1000, lite_tick);
@@ -2635,7 +2651,7 @@ static void CALLBACK lite_tick(HWND, UINT, UINT_PTR tid, DWORD) {
                (int)lround(v->volume), v->muted ? 1 : 0);
     int serial = v->serial;
     eval(t, js, [id, serial](const Json &r) {
-        Tab *t = tab_by_id(id);
+        Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
         Video *v = V(t);
         if (!v || v->serial != serial || v->stage != ST_ON) return;
         v->lite_asked = 0;
@@ -2673,7 +2689,7 @@ static std::map<int, double> g_music_asked;   // light Music tabs being asked, a
 static const UINT_PTR kMusicTimer = 0x600000;
 static void audio_close() {
     // the music stops; mpv winds down on a thread of its own
-    Tab *t = tab_by_id(g_audio.tab);
+    Tab *t = tab_by_id(g_audio.tab); WinScope ws_t(win_of_tab(t));
     if (t) { t->audible = false; ui_invalidate(); }
     if (g_audio.mpv) {
         mpv_handle *h = g_audio.mpv;
@@ -2686,7 +2702,7 @@ static void audio_close() {
     g_audio.serial = serial;
 }
 static void audio_audible() {
-    Tab *t = tab_by_id(g_audio.tab);
+    Tab *t = tab_by_id(g_audio.tab); WinScope ws_t(win_of_tab(t));
     if (!t) return;
     // (audible: a tab out of sight with music is not frozen, so its page goes on with the queue)
     bool a = g_audio.mpv && g_audio.loaded && !g_audio.paused && !g_audio.eof;   // (muted too: the tab shows it, and is not frozen)
@@ -2839,7 +2855,7 @@ static void audio_command(Tab *t, const Json &c) {
 }
 static void CALLBACK music_tick(HWND, UINT, UINT_PTR tid, DWORD) {
     int id = (int)(tid - kMusicTimer);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     if (!t || !t->view || t->lite != LITE_MUSIC) {
         KillTimer(g_msg, tid);
         g_music_asked.erase(id);
@@ -2873,7 +2889,7 @@ static void CALLBACK music_tick(HWND, UINT, UINT_PTR tid, DWORD) {
     }
     eval(t, L"window.__pluma && __pluma.music ? __pluma.music(" + st + L") : null", [id](const Json &r) {
         g_music_asked[id] = 0;
-        Tab *t = tab_by_id(id);
+        Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
         if (!t || t->lite != LITE_MUSIC || r.kind != Json::ARR) return;
         for (auto &c : r.arr) if (c.kind == Json::OBJ) audio_command(t, c);
     });
@@ -3018,7 +3034,7 @@ bool video_playing(Tab *t) { Video *v = V(t); return v && v->stage == ST_ON && !
 void video_sound_changed() {
     // the sound effects or the pitch changed (the settings page, or a player's menu): every player, at once (the
     // settings page is a tab of its own, so the video plays in another one while its sliders move)
-    for (auto &up : g_tabs) { Video *v = V(up.get()); if (v && v->mpv) apply_sound(v); }
+    for (Tab *tab : all_tabs()) { Video *v = V(tab); if (v && v->mpv) apply_sound(v); }
     Video *v = V(active_tab());
     if (v && v->stage == ST_ON && g_menu_page) paint_menu(v);
 }
@@ -3028,8 +3044,32 @@ void video_toggle_mute(Tab *t) { Video *v = V(t); if (v && v->stage == ST_ON) to
 void video_settings_changed() {
     // the setting was turned off: every video goes back to its page; on: the one on screen is looked at
     if (!g_set.native_video) {
-        for (auto &up : g_tabs) if (up->video) video_back_to_page(up.get(), VIDEO_ASKED);
+        for (Tab *tab : all_tabs()) if (tab->video) { WinScope ws(win_of_tab(tab)); video_back_to_page(tab, VIDEO_ASKED); }
     } else if (active_tab()) video_page_changed(active_tab());
+}
+void video_tab_moved(Tab *t) {
+    // the tab went to another window (the current one): its player's window goes with it, alive (mpv draws on in
+    // it); the controls and the photo, if they were that tab's, come back over the new window as it lays out
+    Video *v = V(t);
+    if (!v || !v->wnd) return;
+    if (GetParent(v->wnd) != g_win) {
+        ShowWindow(v->wnd, SW_HIDE);
+        SetParent(v->wnd, g_win);
+    }
+    if (Window *was = win_by_id(g_ctl_win)) {
+        WinScope ws(was);
+        if (g_photo && GetParent(g_photo) == g_win) { KillTimer(g_msg, kPhotoTimer); g_photo_leaving = false; ShowWindow(g_photo, SW_HIDE); }
+        hide_controls_now();
+    }
+    g_ctl_win = g_cw->id;
+}
+void video_leave_window(HWND gone, HWND to) {
+    // a window closes: the controls and the photo (one set, for all windows) stay, out of sight, over another
+    for (Layer *l : { &g_bottom, &g_top, &g_menu, &g_center })
+        if (l->h && (HWND)GetWindowLongPtrW(l->h, GWLP_HWNDPARENT) == gone) { layer_hide(*l); SetWindowLongPtrW(l->h, GWLP_HWNDPARENT, (LONG_PTR)to); }
+    if (g_photo && GetParent(g_photo) == gone) { KillTimer(g_msg, kPhotoTimer); g_photo_leaving = false; ShowWindow(g_photo, SW_HIDE); SetParent(g_photo, to); }
+    Window *w = win_of_hwnd(to);
+    if (w && win_by_id(g_ctl_win) && win_by_id(g_ctl_win)->hwnd == gone) g_ctl_win = w->id;
 }
 void video_init() {
     WNDCLASSEXW wc = { sizeof(wc) };

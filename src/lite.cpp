@@ -236,7 +236,7 @@ void lite_attach(Tab *t) {
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
             // (the main frame only: frames have an event of their own)
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!t) return S_OK;
             LPWSTR uri = NULL;
             a->get_Uri(&uri);
@@ -256,7 +256,7 @@ void lite_attach(Tab *t) {
                 t->lite = LITE_NONE;
                 g_serve.erase(id);
                 log_line(std::wstring(site->name) + L" ligero: la página normal" + std::wstring(kind >= 2 ? L" en esta pestaña" : L" para esta dirección"));
-                ui_post([id, clean] { Tab *t = tab_by_id(id); if (t && t->view) t->view->Navigate(clean.c_str()); });
+                ui_post([id, clean] { Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t)); if (t && t->view) t->view->Navigate(clean.c_str()); });
                 return S_OK;
             }
             // leaving a site ends "its normal page in this tab" (and what failed there is tried again next time)
@@ -278,7 +278,7 @@ void lite_attach(Tab *t) {
     v->add_WebResourceRequested(Callback<ICoreWebView2WebResourceRequestedEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2WebResourceRequestedEventArgs *a) -> HRESULT {
             auto it = g_serve.find(id);
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (it == g_serve.end() || !t) return S_OK;
             ComPtr<ICoreWebView2WebResourceRequest> req;
             LPWSTR uri = NULL, method = NULL;
@@ -298,7 +298,7 @@ void lite_attach(Tab *t) {
     v->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *a) -> HRESULT {
             BOOL ok = FALSE; a->get_IsSuccess(&ok);
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (ok && t && t->lite == LITE_MUSIC) audio_page_loaded(t);
             auto tell = g_tell.find(id);
             if (!ok || tell == g_tell.end()) return S_OK;
@@ -306,7 +306,7 @@ void lite_attach(Tab *t) {
             g_tell.erase(tell);
             if (!s) return S_OK;
             ui_notice(T(s->shows_normal), T(s->back), [id] {
-                Tab *t = tab_by_id(id);
+                Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
                 g_normal.erase(id);
                 g_pass.erase(id);
                 if (t && t->view) t->view->Navigate(t->url.c_str());
@@ -317,7 +317,7 @@ void lite_attach(Tab *t) {
 
 void lite_settings_changed() {
     // a site off: its light pages open become the site's own (they load again); on: from its next page
-    for (auto &t : g_tabs) {
+    for (Tab *t : all_tabs()) {
         const Site *s = site_by_id(t->lite);
         if (s && !*s->on && t->view) t->view->Reload();
     }

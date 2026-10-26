@@ -6,16 +6,21 @@
 #include <thread>
 
 HINSTANCE g_inst;
-HWND g_win, g_bar, g_edit;
+std::vector<std::unique_ptr<Window>> g_windows;
+static Window g_no_window;            // (before the first one is made: the current window is never null)
+Window *g_cw = &g_no_window;
+HWND g_app;
+static std::vector<std::unique_ptr<Window>> g_gone;   // windows closed: freed at the next message, with nothing of theirs on the stack
+static int g_next_window = 1;
 std::wstring g_root, g_state, g_data, g_profile_id;
-bool g_incognito, g_test, g_test_visible, g_dev, g_quitting, g_fullscreen, g_motion = true;
+bool g_incognito, g_test, g_test_visible, g_dev, g_quitting, g_motion = true;
 double g_open_asked = 0;
 ComPtr<ICoreWebView2Environment> g_env;
 Settings g_set;
 std::vector<HistoryEntry> g_history;
 
 static std::wstring g_class = L"PlumaVentana", g_mutex = L"PlumaNavegadorUnico";
-static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_OPEN = WM_APP + 3;
+static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_OPEN = WM_APP + 3, WM_APP_FRONT = WM_APP + 4;
 static const ULONG_PTR kCopyOpen = 0x504C55;   // WM_COPYDATA from a second Pluma.exe: urls, one per line
 static const ULONG_PTR kCopyProfile = 0x504C56;   // ... from another profile's window: "open this profile" (id, then urls)
 static const ULONG_PTR kCopyOpenHere = 0x504C57;  // ... urls for this window itself (not routed to the last used profile)
@@ -25,8 +30,6 @@ static double g_burst_t0;
 static LARGE_INTEGER g_t0, g_freq;
 static bool g_start_hidden, g_env_ready;
 static std::vector<std::wstring> g_waiting_urls;   // asked for before the engine was ready
-static WINDOWPLACEMENT g_before_fs = { sizeof(WINDOWPLACEMENT) };
-static int g_caption_down;
 
 // ---------------------------------------------------------------- small helpers
 double now_ms() {
@@ -347,14 +350,14 @@ void history_add(const std::wstring &url, const std::wstring &title) {
     e.last = (long long)time(NULL);
     if (!title.empty()) e.title = title;
     g_hist_dirty = true;
-    SetTimer(g_win, kTimerHistory, 4000, NULL);
+    SetTimer(g_app, kTimerHistory, 4000, NULL);
 }
 void history_title(const std::wstring &url, const std::wstring &title) {
     auto it = g_hist_index.find(url);
     if (it == g_hist_index.end() || title.empty() || g_history[it->second].title == title) return;
     g_history[it->second].title = title;
     g_hist_dirty = true;
-    SetTimer(g_win, kTimerHistory, 4000, NULL);
+    SetTimer(g_app, kTimerHistory, 4000, NULL);
 }
 bool history_import(const std::wstring &url, const std::wstring &title, int visits, long long last) {
     // from another browser: add if new, else keep the more recent visit and add up the counts (the caller flushes once)
@@ -501,11 +504,67 @@ std::vector<HistoryEntry> history_top(int n) {
     return out;
 }
 
-// ---------------------------------------------------------------- the window
+// ---------------------------------------------------------------- the windows
+WinScope::~WinScope() {
+    // back to the one before; if it went meanwhile (closed during the scope), to the one used last
+    g_cw = win_alive(saved) ? saved : !g_windows.empty() ? win_last_used() : g_cw;
+}
+bool win_alive(const Window *w) {
+    for (auto &x : g_windows) if (x.get() == w) return true;
+    return false;
+}
+Window *win_of_hwnd(HWND h) {
+    // the window itself, or one of its children (the bar, the address, the views' own), or a popup it owns
+    for (int depth = 0; h && depth < 8; depth++) {
+        for (auto &w : g_windows) if (w->hwnd == h) return w.get();
+        h = GetParent(h);   // (the parent of a child, the owner of a popup)
+    }
+    return nullptr;
+}
+Window *win_of_tab(const Tab *t) {
+    if (!t) return nullptr;
+    for (auto &w : g_windows) for (auto &x : w->tabs) if (x.get() == t) return w.get();
+    return nullptr;
+}
+Window *win_by_id(int id) {
+    for (auto &w : g_windows) if (w->id == id) return w.get();
+    return nullptr;
+}
+Window *win_last_used() {
+    Window *best = nullptr;
+    for (auto &w : g_windows) {
+        bool vis = IsWindowVisible(w->hwnd) != FALSE;
+        bool best_vis = best && IsWindowVisible(best->hwnd);
+        if (!best || (vis && !best_vis) || (vis == best_vis && w->used > best->used)) best = w.get();
+    }
+    return best ? best : g_cw;
+}
+bool any_window_visible() {
+    for (auto &w : g_windows) if (IsWindowVisible(w->hwnd) && !IsIconic(w->hwnd)) return true;
+    return false;
+}
+std::vector<Tab *> all_tabs() {
+    std::vector<Tab *> out;
+    for (auto &w : g_windows) for (auto &t : w->tabs) out.push_back(t.get());
+    return out;
+}
+std::wstring win_name(const Window *w) {
+    // as Edge's "Move tab to": the window's tab on screen says which one it is
+    std::wstring title;
+    if (w && w->active >= 0 && w->active < (int)w->tabs.size()) {
+        const Tab *t = w->tabs[w->active].get();
+        title = !t->title.empty() ? t->title : t->url.empty() ? T(L"Pestaña nueva") : url_host(t->url);
+    }
+    if (title.size() > 40) title = title.substr(0, 39) + L"…";
+    int k = 1;   // (its place among the open ones, not its id: "Ventana 2" while there are two)
+    for (auto &o : g_windows) { if (o.get() == w) break; k++; }
+    std::wstring n = std::wstring(T(L"Ventana")) + L" " + std::to_wstring(k);
+    return title.empty() ? n : n + L": " + title;
+}
 static void save_placement() {
     if (g_incognito) return;
     WINDOWPLACEMENT wp = { sizeof(wp) };
-    if (g_fullscreen) wp = g_before_fs;
+    if (g_fullscreen) wp = g_cw->before_fs;
     else if (!GetWindowPlacement(g_win, &wp)) return;
     write_file(g_data + L"\\ventana.bin", std::string((const char *)&wp, sizeof(wp)));
 }
@@ -524,7 +583,6 @@ static void restore_placement() {
     SetWindowPlacement(g_win, &wp);
     if (show == SW_SHOWMAXIMIZED) SetPropW(g_win, L"max", (HANDLE)1);
 }
-static RECT g_test_rect;   // tests: where the window was before fullscreen
 RECT fullscreen_rect() {
     // the screen the window is on; in tests, a screen of that size where the window is (off the user's screen)
     MONITORINFO mi = { sizeof(mi) };
@@ -545,9 +603,9 @@ void fullscreen_now(bool on) {
     DwmSetWindowAttribute(g_win, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
     SetTimer(g_win, kTimerTransitions, 700, NULL);
     if (on) {
-        g_before_fs.length = sizeof(g_before_fs);
-        GetWindowPlacement(g_win, &g_before_fs);
-        GetWindowRect(g_win, &g_test_rect);
+        g_cw->before_fs.length = sizeof(g_cw->before_fs);
+        GetWindowPlacement(g_win, &g_cw->before_fs);
+        GetWindowRect(g_win, &g_cw->test_rect);
         RECT m = fullscreen_rect();
         g_fullscreen = true;
         SetWindowLongW(g_win, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN);
@@ -558,9 +616,9 @@ void fullscreen_now(bool on) {
         g_fullscreen = false;
         SetWindowLongW(g_win, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN);
         // (tests: not SetWindowPlacement, which brings a window off the screen back onto it)
-        if (g_test) SetWindowPos(g_win, HWND_BOTTOM, g_test_rect.left, g_test_rect.top, g_test_rect.right - g_test_rect.left,
-                                 g_test_rect.bottom - g_test_rect.top, SWP_NOACTIVATE | (g_test_visible ? SWP_NOZORDER : 0));
-        else SetWindowPlacement(g_win, &g_before_fs);
+        RECT &tr = g_cw->test_rect;
+        if (g_test) SetWindowPos(g_win, HWND_BOTTOM, tr.left, tr.top, tr.right - tr.left, tr.bottom - tr.top, SWP_NOACTIVATE | (g_test_visible ? SWP_NOZORDER : 0));
+        else SetWindowPlacement(g_win, &g_cw->before_fs);
         SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
     }
     ui_layout();
@@ -574,21 +632,36 @@ void set_fullscreen(bool on) {
     if (!g_motion || !IsWindowVisible(g_win) || IsIconic(g_win) || video_aspect() <= 0) { fullscreen_now(on); return; }
     zoom_start(on);
 }
-static void show_window() {
-    g_start_hidden = false;
-    if (g_test) {
-        // a test instance draws for real but off the screen, without taking the focus from the user
-        int w = 1400, h = 900, x = -7000, y = 100;
-        wchar_t size[32] = L"", at[32] = L"";
-        if (GetEnvironmentVariableW(L"PLUMA_TAMANO", size, 32)) swscanf_s(size, L"%dx%d", &w, &h);   // e.g. 1920x1040
-        // PLUMA_A_LA_VISTA=x,y: on the screen, over the rest (to record a transition as the user sees it)
-        if (GetEnvironmentVariableW(L"PLUMA_A_LA_VISTA", at, 32) && swscanf_s(at, L"%d,%d", &x, &y) == 2) g_test_visible = true;
-        SetWindowPos(g_win, g_test_visible ? HWND_TOPMOST : HWND_BOTTOM, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        return;
-    }
-    if (!IsWindowVisible(g_win)) ShowWindow(g_win, GetPropW(g_win, L"max") ? SW_SHOWMAXIMIZED : SW_SHOW);
+static void test_place(Window *w) {
+    // a test instance draws for real but off the screen, without taking the focus from the user; its windows one
+    // under the other (a window placed already off the screen, as one dragged out by a test, stays where it is)
+    int ww = 1400, h = 900, x = -7000, y = 100;
+    wchar_t size[32] = L"", at[32] = L"";
+    if (GetEnvironmentVariableW(L"PLUMA_TAMANO", size, 32)) swscanf_s(size, L"%dx%d", &ww, &h);   // e.g. 1920x1040
+    // PLUMA_A_LA_VISTA=x,y: on the screen, over the rest (to record a transition as the user sees it)
+    if (GetEnvironmentVariableW(L"PLUMA_A_LA_VISTA", at, 32) && swscanf_s(at, L"%d,%d", &x, &y) == 2) g_test_visible = true;
+    RECT r; GetWindowRect(w->hwnd, &r);
+    if (!g_test_visible && r.left < -3000 && IsWindowVisible(w->hwnd)) return;
+    if (!g_test_visible && r.left < -3000 && GetPropW(w->hwnd, L"colocada")) { SetWindowPos(w->hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW); return; }
+    int k = 0;
+    for (auto &o : g_windows) { if (o.get() == w) break; k++; }
+    if (g_test_visible) { x += k * 60; y += k * 60; } else y += k * (h + 60);
+    SetWindowPos(w->hwnd, g_test_visible ? HWND_TOPMOST : HWND_BOTTOM, x, y, ww, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+void win_show(Window *w, bool activate) {
+    if (!w) return;
+    WinScope ws(w);
+    if (g_test) { test_place(w); return; }
+    if (!IsWindowVisible(g_win)) ShowWindow(g_win, GetPropW(g_win, L"max") ? SW_SHOWMAXIMIZED : activate ? SW_SHOW : SW_SHOWNOACTIVATE);
     else if (IsIconic(g_win)) ShowWindow(g_win, SW_RESTORE);
-    SetForegroundWindow(g_win);
+    if (activate) SetForegroundWindow(g_win);
+}
+static void show_window() { g_start_hidden = false; win_show(g_cw, true); }
+static void show_all_windows() {
+    // (the session's windows: the first one in front)
+    g_start_hidden = false;
+    for (size_t i = g_windows.size(); i-- > 1;) win_show(g_windows[i].get(), false);
+    if (!g_windows.empty()) win_show(g_windows[0].get(), true);
 }
 static void hide_window() {
     // closed but kept warm: the session is saved, the pages frozen and the memory given back (tabs_on_hide)
@@ -605,26 +678,101 @@ static void hide_window() {
     if (!g_incognito) sync_on_close();   // back up now if due (the session and history are already saved)
 }
 static void open_urls(const std::vector<std::wstring> &urls) {
+    // what comes from outside (a link, Pluma opened again) goes to the window used last
+    WinScope ws(win_last_used());
     if (!g_env_ready) { for (auto &u : urls) g_waiting_urls.push_back(u); show_window(); return; }
-    bool was_hidden = !IsWindowVisible(g_win);
+    bool was_hidden = !any_window_visible();
     if (was_hidden) g_open_asked = now_ms();
     if (was_hidden && g_tabs.empty() && !g_incognito) session_restore();
     for (auto &u : urls) tab_new(u, true);
     if (urls.empty() && g_tabs.empty()) tab_new(L"", true);
     if (urls.empty() && was_hidden) { Tab *t = active_tab(); if (t) tab_activate(g_active); }
+    if (was_hidden)   // (started hidden with more windows in the session: they all come)
+        for (auto &w : g_windows)
+            if (w.get() != g_cw && !IsWindowVisible(w->hwnd) && !w->tabs.empty()) { win_show(w.get(), false); WinScope ws2(w.get()); tab_activate(g_active); }
     show_window();
     if (urls.empty() && active_tab() && active_tab()->url.empty()) ui_focus_address();
 }
 static void quit_now() {
     log_line(L"saliendo");
     g_quitting = true;
-    SetPropW(g_win, L"saliendo", (HANDLE)1);   // a Pluma.exe started now waits for this one to go, then starts
+    for (auto &w : g_windows) SetPropW(w->hwnd, L"saliendo", (HANDLE)1);   // a Pluma.exe started now waits for this one to go, then starts
     ui_close_popups();
-    if (IsWindowVisible(g_win)) { save_placement(); session_save(); }
+    if (any_window_visible()) {
+        WinScope ws(g_windows.empty() ? nullptr : g_windows[0].get());
+        save_placement();
+        session_save();
+    }
     history_flush();
     update_on_quit();
     if (!g_incognito) sync_on_close();   // a last backup if due; wWinMain waits for it before leaving
-    SetTimer(g_win, kTimerQuit, 150, NULL);
+    SetTimer(g_app, kTimerQuit, 150, NULL);
+}
+void win_close(Window *w) {
+    // one of several windows: its tabs go to the recently closed (as Edge's), its views and players with them
+    if (!win_alive(w) || g_windows.size() < 2) return;
+    {
+        WinScope ws(w);
+        ui_close_popups();
+        zoom_stop();
+        tabs_close_window();
+        views_leave_window(g_win);
+        ui_window_free();
+    }
+    HWND h = w->hwnd;
+    for (auto it = g_windows.begin(); it != g_windows.end(); ++it)
+        if (it->get() == w) { g_gone.push_back(std::move(*it)); g_windows.erase(it); break; }   // (freed at the next message)
+    if (g_cw == w) g_cw = win_last_used();
+    DestroyWindow(h);
+    log_line(L"ventana cerrada; quedan " + std::to_wstring(g_windows.size()));
+    session_save_soon();
+}
+static Window *make_window(const RECT *where) {
+    auto up = std::make_unique<Window>();
+    Window *w = up.get();
+    w->id = g_next_window++;
+    w->used = now_ms();
+    g_windows.push_back(std::move(up));
+    WinScope ws(w);
+    RECT r = where ? *where : RECT{ CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT + 1200, CW_USEDEFAULT + 800 };
+    CreateWindowExW(0, g_class.c_str(), app_name().c_str(), WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, r.left, r.top,
+                    where ? r.right - r.left : 1200, where ? r.bottom - r.top : 800, NULL, NULL, g_inst, w);
+    return w;
+}
+Window *win_new(const RECT *where) {
+    // a new window (Ctrl+N, a tab taken out): by default as big as the current one and a step down and right (as Edge)
+    RECT r{};
+    bool max = false;
+    if (where) r = *where;
+    else if (g_win) {
+        WINDOWPLACEMENT wp = { sizeof(wp) };
+        GetWindowPlacement(g_win, &wp);
+        max = IsZoomed(g_win) != FALSE;
+        if (IsZoomed(g_win) || IsIconic(g_win)) r = wp.rcNormalPosition; else GetWindowRect(g_win, &r);
+        int step = (int)(30 * GetDpiForWindow(g_win) / 96);
+        OffsetRect(&r, step, step);
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi);
+        if (r.bottom > mi.rcWork.bottom || r.right > mi.rcWork.right) OffsetRect(&r, mi.rcWork.left - r.left + step, mi.rcWork.top - r.top + step);
+    } else SetRect(&r, 100, 100, 1300, 900);
+    Window *w = make_window(&r);
+    WinScope ws(w);
+    SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    if (max) SetPropW(g_win, L"max", (HANDLE)1);
+    ui_window_init();
+    log_line(L"ventana nueva (" + std::to_wstring(g_windows.size()) + L" abiertas)");
+    return w;
+}
+void win_open_new(const std::wstring &url) {
+    // the incognito window's "new window" is one more of its own (all its tabs are incognito anyway)
+    Window *w = win_new(nullptr);
+    {
+        WinScope ws(w);
+        tab_new(url, true);
+        win_show(w, true);
+        if (url.empty()) ui_focus_address(false);
+    }
+    session_save_soon();
 }
 
 static int frame_y(HWND h) {
@@ -637,8 +785,56 @@ static int frame_x(HWND h) {
 }
 static bool caption_code(int c) { return c == HTMINBUTTON || c == HTMAXBUTTON || c == HTCLOSE; }
 
+// tests: "Pluma.exe pluma-prueba:<what>" drives Pluma without a mouse (tools\traducir-prueba.ps1, tools\ventanas.ps1)
+static int g_test_window;   // ventana=<n>: the window the next ones work on (0: the one used last)
+static void test_command(const std::wstring &what) {
+    Window *tw = win_by_id(g_test_window);
+    WinScope ws(tw ? tw : win_last_used());
+    Tab *t = active_tab();
+    if (what == L"traducir") translate_page(t);
+    else if (what == L"original") translate_original(t);
+    else if (what == L"seleccion") translate_selection(t, L"", false, POINT{});
+    else if (what == L"menu") ui_open_menu_quietly(true);
+    else if (what == L"menu-principal") ui_open_menu_quietly(false);
+    else if (what == L"menu-pestana") ui_open_tab_menu_quietly();
+    else if (what == L"perfil") ui_open_profile_menu(true);
+    else if (what == L"oferta") ui_translate_offer(t);
+    else if (what == L"clic-derecho") translate_test_pick_menu();   // the next page menu: logged, Pluma's row chosen
+    else if (starts_with(what, L"destino=")) translate_set_target(what.substr(8));
+    else if (starts_with(what, L"ventana=")) g_test_window = _wtoi(what.c_str() + 8);
+    else if (what == L"ventana-nueva") { win_open_new(); g_test_window = g_windows.back()->id; }
+    else if (what == L"mover-nueva") { Window *n = t ? tab_to_new_window(t, nullptr) : nullptr; if (n) g_test_window = n->id; }
+    else if (starts_with(what, L"mover=")) { Window *to = win_by_id(_wtoi(what.c_str() + 6)); if (t && to) tab_move(t, to, (int)to->tabs.size(), true); }
+    else if (starts_with(what, L"arrastre-empieza=")) ui_test_drag(0, _wtoi(what.c_str() + 17), 0, 0);
+    else if (starts_with(what, L"arrastre=")) { int dx = 0, dy = 0; swscanf_s(what.c_str() + 9, L"%d,%d", &dx, &dy); ui_test_drag(1, 0, dx, dy); }
+    else if (starts_with(what, L"arrastre-a=")) { int n = 0, x = 0, y = 0; swscanf_s(what.c_str() + 11, L"%d,%d,%d", &n, &x, &y); ui_test_drag(2, n, x, y); }
+    else if (what == L"arrastre-suelta") ui_test_drag(3, 0, 0, 0);
+    else if (what == L"cerrar") PostMessageW(g_win, WM_CLOSE, 0, 0);   // its X
+    else if (what == L"pos") log_line(L"prueba: vídeo en " + std::to_wstring(video_position(t)) + L" s" + (video_playing(t) ? L", sonando" : L""));
+    else if (what == L"ventanas") {
+        for (auto &w : g_windows) {
+            std::wstring line = L"prueba: ventana " + std::to_wstring(w->id) + (IsWindowVisible(w->hwnd) ? L" visible" : L" oculta") +
+                                L", activa " + std::to_wstring(w->active) + L":";
+            for (auto &x : w->tabs) line += L" [" + x->url.substr(0, 60) + L"]";
+            log_line(line);
+        }
+    } else if (starts_with(what, L"foto=")) {   // a picture with Pluma's panels as the screen shows them
+        std::wstring name = what.substr(5);
+        bool safe = !name.empty() && name.size() < 40;
+        for (wchar_t c : name) if (!iswalnum(c) && c != L'-') safe = false;
+        if (safe) video_debug_shot(g_state + L"\\" + name + L".png");
+    }
+}
+
 static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     static const UINT taskbar_created = RegisterWindowMessageW(L"TaskbarButtonCreated");
+    if (msg == WM_NCCREATE) {
+        Window *nw = (Window *)((CREATESTRUCTW *)lp)->lpCreateParams;
+        if (nw) nw->hwnd = h;
+    }
+    Window *self = win_of_hwnd(h);
+    if (!self) return DefWindowProcW(h, msg, wp, lp);   // (before it is made, or once it is closing)
+    WinScope ws(self);
     if (msg == taskbar_created && msg) { ui_taskbar_badge(); return 0; }
     switch (msg) {
     case WM_NCCALCSIZE:
@@ -676,13 +872,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_NCMOUSELEAVE: ui_caption_hover(0); break;
     case WM_NCLBUTTONDOWN: case WM_NCLBUTTONDBLCLK:
-        if (caption_code((int)wp)) { g_caption_down = (int)wp; ui_caption_press((int)wp, true); return 0; }
+        if (caption_code((int)wp)) { g_cw->caption_down = (int)wp; ui_caption_press((int)wp, true); return 0; }
         ui_close_popups();
         break;
     case WM_NCLBUTTONUP:
-        if (caption_code((int)wp) || g_caption_down) {
-            int down = g_caption_down;
-            g_caption_down = 0;
+        if (caption_code((int)wp) || g_cw->caption_down) {
+            int down = g_cw->caption_down;
+            g_cw->caption_down = 0;
             ui_caption_press(0, false);
             if ((int)wp == down) {
                 if (down == HTMINBUTTON) ShowWindow(h, SW_MINIMIZE);
@@ -703,14 +899,15 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_GETMINMAXINFO: ((MINMAXINFO *)lp)->ptMinTrackSize = { 480, 320 }; return 0;
     case WM_DPICHANGED: {
+        // (a window following a dragged tab keeps where the drag puts it: only its size changes)
         RECT *r = (RECT *)lp;
-        SetWindowPos(h, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(h, NULL, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE | (g_cw->dragged ? SWP_NOMOVE : 0));
         ui_dpi_changed();
         return 0;
     }
     case WM_ACTIVATE:
         ui_window_activated(LOWORD(wp) != WA_INACTIVE);
-        if (LOWORD(wp) != WA_INACTIVE && !g_incognito) profile_touch();
+        if (LOWORD(wp) != WA_INACTIVE) { g_cw->used = now_ms(); if (!g_incognito) profile_touch(); }
         break;
     case WM_SETFOCUS: {
         Tab *t = active_tab();
@@ -726,7 +923,8 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         BOOL anim = TRUE;
         SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0);
         g_motion = anim != FALSE;
-        if (lp && !wcscmp((LPCWSTR)lp, L"ImmersiveColorSet") && g_set.theme == 2) { ui_theme_changed(); tabs_apply_theme(); }
+        // (every window gets it: the theme changes once, with the first)
+        if (lp && !wcscmp((LPCWSTR)lp, L"ImmersiveColorSet") && g_set.theme == 2 && self == g_windows[0].get()) { ui_theme_changed(); tabs_apply_theme(); }
         break;
     }
     case WM_ERASEBKGND: return 1;
@@ -740,12 +938,22 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         EndPaint(h, &ps);
         return 0;
     }
-    case WM_CLOSE:
+    case WM_CLOSE: {
         if (g_quitting) break;
-        // (the incognito window and other profiles' windows go for good: only the default one stays warm)
-        if (g_set.resident && !g_incognito && g_profile_id.empty()) { hide_window(); return 0; }
+        // one of several windows: it goes (its tabs to the recently closed, as in Edge)
+        int open = 0;
+        for (auto &w : g_windows) if (IsWindowVisible(w->hwnd)) open++;
+        if (open > 1 || (g_windows.size() > 1 && !IsWindowVisible(h))) { win_close(self); return 0; }
+        // the last one: (the incognito window and other profiles' windows go for good: only the default one stays warm)
+        if (g_set.resident && !g_incognito && g_profile_id.empty()) {
+            // (hidden windows left by nobody: only this one stays, to come back)
+            for (size_t i = g_windows.size(); i-- > 0;) if (g_windows[i].get() != self) win_close(g_windows[i].get());
+            hide_window();
+            return 0;
+        }
         quit_now();
         return 0;
+    }
     case WM_COPYDATA: {
         auto cds = (COPYDATASTRUCT *)lp;
         if ((cds->dwData != kCopyOpen && cds->dwData != kCopyProfile && cds->dwData != kCopyOpenHere) || cds->cbData > (1 << 20)) return FALSE;
@@ -767,34 +975,20 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (profile_valid_id(id) || id.empty()) profile_open(id, urls);
             return TRUE;
         }
-        // test instances: "Pluma.exe pluma-prueba:<what>" drives the translator without a mouse (tools\traducir-prueba.ps1)
-        if (g_test && !urls.empty() && starts_with(urls[0], L"pluma-prueba:")) {
-            std::wstring what = urls[0].substr(13);
-            Tab *t = active_tab();
-            if (what == L"traducir") translate_page(t);
-            else if (what == L"original") translate_original(t);
-            else if (what == L"seleccion") translate_selection(t, L"", false, POINT{});
-            else if (what == L"menu") ui_open_menu_quietly(true);
-            else if (what == L"menu-principal") ui_open_menu_quietly(false);
-            else if (what == L"perfil") ui_open_profile_menu(true);
-            else if (what == L"oferta") ui_translate_offer(t);
-            else if (what == L"clic-derecho") translate_test_pick_menu();   // the next page menu: logged, Pluma's row chosen
-            else if (starts_with(what, L"destino=")) translate_set_target(what.substr(8));
-            else if (starts_with(what, L"foto=")) {   // a picture with Pluma's panels as the screen shows them
-                std::wstring name = what.substr(5);
-                bool safe = !name.empty() && name.size() < 40;
-                for (wchar_t c : name) if (!iswalnum(c) && c != L'-') safe = false;
-                if (safe) video_debug_shot(g_state + L"\\" + name + L".png");
-            }
-            return TRUE;
-        }
+        // test instances: "Pluma.exe pluma-prueba:<what>" drives Pluma without a mouse
+        if (g_test && !urls.empty() && starts_with(urls[0], L"pluma-prueba:")) { test_command(urls[0].substr(13)); return TRUE; }
         // links from other apps go to the profile used last (as in Edge)
         std::wstring last = cds->dwData == kCopyOpen && !urls.empty() && g_profile_id.empty() && !g_incognito ? profile_last_used() : L"";
         if (!last.empty()) { profile_open(last, urls); return TRUE; }
         open_urls(urls);
         return TRUE;
     }
-    case WM_APP_SHOW: open_urls({}); return 0;
+    case WM_APP_SHOW:
+        // Pluma opened again (its icon, the taskbar's middle click) with a window on screen: a new window, as Edge;
+        // else the window comes back
+        if (any_window_visible() && g_env_ready) win_open_new(); else open_urls({});
+        return 0;
+    case WM_APP_FRONT: open_urls({}); return 0;   // another profile asks for this one's window: to the front
     case WM_APP_QUIT: if (g_profile_id.empty() && !g_incognito) profiles_quit_others(); quit_now(); return 0;
     case WM_APP + 40: profile_reload_state(); return 0;   // another process wrote this profile's history and bookmarks
     case WM_APP + 41: history_flush(); bookmarks_save(); return 1;   // ... is about to: what is in memory goes to disk first
@@ -806,11 +1000,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_test) { g_burst_left = (int)wp; g_burst_n = 0; g_burst_t0 = now_ms(); SetTimer(h, kTimerBurst, (UINT)lp, NULL); }
         return 0;
     case WM_TIMER:
-        if (wp == kTimerQuit) { KillTimer(h, kTimerQuit); DestroyWindow(h); }
-        else if (wp == kTimerHistory) { KillTimer(h, kTimerHistory); history_flush(); }
-        else if (wp == kTimerTabs) tabs_tick();
-        else if (wp == kTimerSession) { KillTimer(h, kTimerSession); session_save(); }
-        else if (wp == kTimerTransitions) {
+        if (wp == kTimerTransitions) {
             KillTimer(h, kTimerTransitions);
             BOOL off = FALSE;
             if (!zoom_busy()) DwmSetWindowAttribute(h, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof(off));
@@ -826,19 +1016,45 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_ENDSESSION:
-        if (wp) { if (IsWindowVisible(h)) { save_placement(); session_save(); } history_flush(); }
+        // (every window gets it: the session, with all of them, is saved once)
+        if (wp && self == g_windows[0].get()) { if (any_window_visible()) { save_placement(); session_save(); } history_flush(); }
         return 0;
     case WM_DESTROY:
-        log_line(L"ventana destruida");
-        g_quitting = true;
-        for (auto &t : g_tabs) if (t->ctrl) t->ctrl->Close();
-        g_tabs.clear();
-        PostQuitMessage(0);
+        if (g_quitting) {
+            for (auto &t : g_tabs) if (t->ctrl) t->ctrl->Close();
+            g_tabs.clear();
+        }
         return 0;
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
-void session_save_soon() { if (g_win) SetTimer(g_win, kTimerSession, 1500, NULL); }
+// Pluma's own window, never shown: what is the app's and not a window's (timers, posts from other threads)
+static LRESULT CALLBACK app_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_TIMER:
+        if (wp == kTimerQuit) {
+            KillTimer(h, kTimerQuit);
+            log_line(L"ventanas destruidas");
+            std::vector<HWND> all;
+            for (auto &w : g_windows) all.push_back(w->hwnd);
+            for (HWND x : all) DestroyWindow(x);
+            PostQuitMessage(0);
+        }
+        else if (wp == kTimerHistory) { KillTimer(h, kTimerHistory); history_flush(); }
+        else if (wp == kTimerTabs) tabs_tick();
+        else if (wp == kTimerSession) { KillTimer(h, kTimerSession); session_save(); }
+        return 0;
+    case WM_APP + 21: {   // ui_post: something from another thread, on this one (in the window used last)
+        auto f = (std::function<void()> *)lp;
+        { WinScope ws(win_last_used()); (*f)(); }
+        delete f;
+        return 0;
+    }
+    case WM_APP + 22: ui_frame(); return 0;   // one animation frame for every window that moves (ui.cpp)
+    }
+    return DefWindowProcW(h, msg, wp, lp);
+}
+void session_save_soon() { if (g_app) SetTimer(g_app, kTimerSession, 1500, NULL); }
 void app_quit() { if (g_profile_id.empty() && !g_incognito) profiles_quit_others(); quit_now(); }
 void app_close_window() { PostMessageW(g_win, WM_CLOSE, 0, 0); }
 std::wstring app_name() {
@@ -971,20 +1187,28 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     wc.hIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
     wc.hIconSm = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
     RegisterClassExW(&wc);
-    g_win = CreateWindowExW(0, g_class.c_str(), L"Pluma", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
-                            1200, 800, NULL, NULL, inst, NULL);
+    WNDCLASSEXW ac = { sizeof(ac) };
+    ac.lpfnWndProc = app_proc;
+    ac.hInstance = inst;
+    ac.lpszClassName = L"PlumaApp";
+    RegisterClassExW(&ac);
+    g_app = CreateWindowExW(0, L"PlumaApp", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, inst, NULL);
+    make_window(nullptr);
     if (!g_test) restore_placement();
     SetWindowPos(g_win, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     ui_init();
+    ui_window_init();
     video_init();
-    SetTimer(g_win, kTimerTabs, 5000, NULL);
+    SetTimer(g_app, kTimerTabs, 5000, NULL);
     if (!g_start_hidden) {
         if (!g_incognito) session_restore();   // the tabs are drawn at once; their pages come when the engine is up
+        WinScope first(g_windows[0].get());
         for (auto &u : urls) tab_new(u, true);
         if (g_tabs.empty()) tab_new(L"", true);
-        show_window();
+        show_all_windows();
         if (active_tab() && active_tab()->url.empty()) ui_focus_address(false);
-        log_line(L"ventana a la vista en " + std::to_wstring((int)now_ms()) + L" ms");
+        log_line(L"ventana a la vista en " + std::to_wstring((int)now_ms()) + L" ms" +
+                 (g_windows.size() > 1 ? L" (" + std::to_wstring(g_windows.size()) + L" ventanas)" : L""));
     }
     if (g_profile_id.empty() && !g_incognito) update_finish();   // (only the default one updates)
     if (!for_profile.empty()) profile_launch_child(last, for_profile);
@@ -1002,14 +1226,21 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         g_env_ready = true;
         log_line(L"motor listo en " + std::to_wstring((int)now_ms()) + L" ms");
         ext_sync([] { ui_layout(); });
-        if (!g_tabs.empty()) tab_activate(g_active < 0 ? 0 : g_active);   // gives the one on screen its page
+        for (auto &w : g_windows) { WinScope ws(w.get()); if (!g_tabs.empty()) tab_activate(g_active < 0 ? 0 : g_active); }   // gives the ones on screen their page
         if (!g_waiting_urls.empty()) { auto u = g_waiting_urls; g_waiting_urls.clear(); open_urls(u); }
         spare_prepare();
         update_init();
     });
 
     MSG m;
-    while (GetMessageW(&m, NULL, 0, 0)) { TranslateMessage(&m); DispatchMessageW(&m); }
+    while (GetMessageW(&m, NULL, 0, 0)) {
+        if (!g_gone.empty()) g_gone.clear();   // (nothing of a closed window is on the stack here)
+        // the current window: the one this message is for (a TIMERPROC of a window gets its window too)
+        if (Window *w = win_of_hwnd(m.hwnd)) g_cw = w;
+        else if (!win_alive(g_cw) && !g_windows.empty()) g_cw = win_last_used();
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
     // everything is saved by now: leave at once. Tearing the engine down politely made quitting take seconds, and a
     // Pluma opened meanwhile could find this one still there; the engine closes itself when its host is gone
     if (mutex) CloseHandle(mutex);

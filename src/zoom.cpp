@@ -24,6 +24,7 @@ static std::atomic<bool> g_busy{ false }, g_want{ false }, g_shown{ false }, g_c
 static RECT g_after;                     // the player's window once changed (screen coordinates); written before g_changed
 static HWND g_cover;                     // the zoom's window (the window's thread's: the mouse goes through it)
 static bool g_enter;                     // this zoom goes into fullscreen
+static std::atomic<HWND> g_zwin{ NULL };  // the window it zooms in (its thread's messages go there)
 
 static D2D1_RECT_F fit(double aspect, RECT r) {
     // the picture inside an area, as a player shows it (black bars where it does not fill)
@@ -134,7 +135,7 @@ static void zoom_run(bool enter, RECT mon, RECT box, double aspect, void *client
     } while (false);
     double t_ready = now_ms();
     // the window shows it (and coming out, changes under it; with no frame, it simply changes)
-    PostMessageW(g_win, WM_APP_ZOOM, 1, ok ? 1 : 0);
+    PostMessageW(g_zwin.load(), WM_APP_ZOOM, 1, ok ? 1 : 0);
     if (ok) {
         if (enter) {
             wait_for(g_shown, 500);
@@ -144,7 +145,7 @@ static void zoom_run(bool enter, RECT mon, RECT box, double aspect, void *client
             double t0 = now_ms();
             while (!g_stop && now_ms() - t0 < kZoomMs + 16) Sleep(4);
             // all covered: the window goes fullscreen underneath
-            PostMessageW(g_win, WM_APP_ZOOM, 3, 0);
+            PostMessageW(g_zwin.load(), WM_APP_ZOOM, 3, 0);
             wait_for(g_changed, 500);
             wait_for(g_settled, kSettleMaxMs);
         } else {
@@ -164,7 +165,7 @@ static void zoom_run(bool enter, RECT mon, RECT box, double aspect, void *client
     if (g_dev) log_line(L"zoom: " + std::to_wstring((int)(now_ms() - began)) + L" ms (fotograma " + std::to_wstring((int)(t_frame - began)) +
                         L", listo " + std::to_wstring((int)(t_ready - began)) + L")" + (ok ? L"" : L" (sin fotograma: cambio directo)"));
     target.Reset(); root.Reset(); dark.Reset(); pic.Reset(); dev.Reset();
-    PostMessageW(g_win, WM_APP_ZOOM, 2, 0);
+    PostMessageW(g_zwin.load(), WM_APP_ZOOM, 2, 0);
 }
 static LRESULT CALLBACK cover_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     // the zoom lets the mouse through to what is under it (Pluma's own windows): its cursor, its clicks
@@ -189,6 +190,7 @@ void zoom_start(bool on) {
     g_shown = g_changed = g_settled = g_stop = false;
     g_enter = on;
     g_busy = true;
+    g_zwin = g_win;
     g_cover = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"PlumaZoom", L"", WS_POPUP,
                               mon.left, mon.top, mon.right - mon.left, mon.bottom - mon.top, NULL, NULL, g_inst, NULL);
     // and not Windows' own animations meanwhile: of the window (they ran on after the change), nor of the zoom's,
@@ -205,6 +207,9 @@ void zoom_stop() {
     if (!g_busy) return;
     g_stop = true;
     if (g_cover) ShowWindow(g_cover, SW_HIDE);
+    // (its window closing, one of several: the zoom's end goes to another, or it would never come)
+    if (g_zwin.load() == g_win)
+        for (auto &w : g_windows) if (w->hwnd != g_win) { g_zwin = w->hwnd; break; }
 }
 static void change() {
     if (!g_stop) fullscreen_now(g_want);

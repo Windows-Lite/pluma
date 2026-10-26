@@ -89,6 +89,13 @@ static const Text kTexts[] = {
     { L"Nueva ventana de incógnito", L"New incognito window", L"Nova janela anônima", L"Nouvelle fenêtre de navigation privée", L"Neues Inkognito-Fenster", L"Nuova finestra in incognito" },
     { L"Abrir en una ventana de incógnito", L"Open in incognito window", L"Abrir em janela anônima", L"Ouvrir dans une fenêtre de navigation privée", L"In Inkognito-Fenster öffnen", L"Apri in una finestra in incognito" },
     { L"Ctrl+Mayús+N", L"Ctrl+Shift+N", L"Ctrl+Shift+N", L"Ctrl+Maj+N", L"Strg+Umschalt+N", L"Ctrl+Maiusc+N" },
+    // windows
+    { L"Nueva ventana", L"New window", L"Nova janela", L"Nouvelle fenêtre", L"Neues Fenster", L"Nuova finestra" },
+    { L"Ctrl+N", L"Ctrl+N", L"Ctrl+N", L"Ctrl+N", L"Strg+N", L"Ctrl+N" },
+    { L"Abrir en una ventana nueva", L"Open in new window", L"Abrir em nova janela", L"Ouvrir dans une nouvelle fenêtre", L"In neuem Fenster öffnen", L"Apri in una nuova finestra" },
+    { L"Ventana", L"Window", L"Janela", L"Fenêtre", L"Fenster", L"Finestra" },
+    { L"Mover a una ventana nueva", L"Move to new window", L"Mover para nova janela", L"Déplacer vers une nouvelle fenêtre", L"In neues Fenster verschieben", L"Sposta in una nuova finestra" },
+    { L"Mover a ", L"Move to ", L"Mover para ", L"Déplacer vers ", L"Verschieben nach ", L"Sposta in " },
     { L"Incógnito", L"Incognito", L"Anônima", L"Privé", L"Inkognito", L"Incognito" },
     { L"incógnito", L"incognito", L"anônima", L"navigation privée", L"inkognito", L"incognito" },
     { L"Pluma no guarda el historial ni las cookies de estas pestañas:", L"Pluma doesn't keep the history or cookies of these tabs:", L"O Pluma não guarda o histórico nem os cookies destas guias:", L"Pluma ne garde ni l'historique ni les cookies de ces onglets :", L"Pluma speichert weder Verlauf noch Cookies dieser Tabs:", L"Pluma non salva la cronologia né i cookie di queste schede:" },

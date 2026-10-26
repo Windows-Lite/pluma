@@ -69,7 +69,9 @@ código y commits en inglés; nada de em dashes.
 ```
 tools\prueba.ps1 [-Nombre t1] [-Url ...] [-Puerto 9401] [-Limpio] [-Salir]   instancia de prueba fuera de la pantalla
 tools\medir.ps1 [-Nombre t1] [-Detalle]      RAM como la cuenta el Administrador de tareas, por tipo de proceso
-tools\captura.exe <clase> <png> [click x y | mclick | rclick | key vk | char texto | wait ms]   foto de la ventana
+tools\captura.exe <clase> <png> [click x y | mclick | rclick | key vk | char texto | wait ms | drag x1 y1 x2 y2 pasos]
+                                              foto de la ventana; <clase>|<palabras>: la de esa clase con esas palabras
+                                              en el título (con varias ventanas, FindWindow da la de más arriba)
 node tools\cdp.js <puerto> <url> <expresión>  evalúa en una página (DevTools); tools\clic.js: clic de verdad
 tools\escenario.ps1 -Nombre x [-Ajustes 'clave=valor',...]   las 7 pestañas de la comparación con Firefox, medidas
 tools\tres.ps1 -Nombre x [-Ajustes ...]       3 pestañas (Wikipedia, GitHub, Google), medidas
@@ -527,3 +529,41 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
   Pluma cree que se ve.
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.
+
+## Ventanas (`src/main.cpp`, `tabs_move` y el arrastre en `src/ui.cpp`)
+Pedido el 26/10: «abrir pestañas diferentes, sacar una pestaña a ventana diferente, juntar una pestaña a otra ventana»,
+como Edge. Plan aprobado: todas las ventanas en el mismo proceso (uno por perfil).
+- `Window` (pluma.h): sus pestañas, la activa, pantalla completa. `g_cw` es la ventana «actual» y `g_win`, `g_bar`,
+  `g_edit`, `g_tabs`, `g_active`, `g_fullscreen` son macros sobre ella: el código de siempre trabaja en la actual.
+  `WinScope ws(w)` la cambia mientras dura; cada procedimiento de ventana, el bucle de mensajes y cada respuesta del
+  motor (`tab_by_id` + `WinScope ws(win_of_tab(t))`) ponen la suya. Lo de toda la app (temporizadores de historial,
+  sesión, actualizaciones, recortes, precarga; `ui_post`; los fotogramas de animación) va en `g_app`, una ventana solo
+  de mensajes. Un TIMERPROC mata su temporizador con el HWND que recibe. El estado de la barra (escala, dibujo, iconos,
+  ratón, aviso) es de cada ventana (`UiWin`, al final de ui.cpp); los paneles (menú, sugerencias, burbuja) son de
+  todas y se abren sobre la ventana actual.
+- Una pestaña pasa a otra ventana VIVA (`tab_move`: `put_ParentWindow` de su vista y `SetParent` de la ventana de mpv):
+  nada se recarga, un vídeo sigue sonando (comprobado: 15,8 -> 19,9 s movido, 34,2 -> 38,2 s tras volver arrastrado)
+  y lo escrito en un formulario sigue ahí. Los controles del reproductor y la foto de la página son uno para todas:
+  van a la ventana cuya pestaña a la vista tiene el reproductor (`g_ctl_win`).
+- Nueva ventana: Ctrl+N, ⋯ > Nueva ventana, «Abrir en una ventana nueva» en el menú de un enlace, y abrir Pluma (su
+  icono, clic central en la barra de tareas) con una ventana ya a la vista, como Edge. Si no hay ninguna a la vista,
+  vuelve la de antes. Otro perfil que pide traer la ventana usa `WM_APP+4` (delante), no `WM_APP+1` (abriría otra).
+- Cerrar una de varias: se cierra y sus pestañas van a «Reabrir pestaña cerrada». La última: residente como siempre
+  (las demás que quedaran ocultas se cierran). Ctrl+Mayús+Q guarda todas.
+- Menú de la pestaña: «Mover a una ventana nueva» y «Mover a Ventana N: <título>» por cada otra.
+- Arrastre, copiado de `TabDragController` de Chromium: más de 5 px empieza; dentro de la tira (15 DIP de margen arriba
+  y abajo) solo reordena; fuera, la pestaña pasa a una ventana nueva del tamaño de la de antes que sigue al ratón;
+  sobre la tira de otra ventana entra en el hueco de debajo. La única pestaña de una ventana mueve la ventana entera
+  y, si entra en otra, esa ventana se cierra. Soltada fuera de todo, la ventana nueva se queda ahí. Todo en píxeles de
+  pantalla de `GetMessagePos` (la ventana que sigue al ratón ya se movió cuando llega el mensaje); con escala distinta
+  en otra pantalla, el agarre se recalcula y `WM_DPICHANGED` no mueve la ventana arrastrada.
+- Sesión: un bloque por ventana; desde la segunda, una línea `ventana <izq> <arriba> <der> <abajo> <maximizada>` sin
+  tabulador (un Pluma anterior la salta y abre todo en una). La primera sigue en `ventana.bin`.
+- Pruebas: `Pluma.exe pluma-prueba:ventana=<id>` (sobre cuál van las siguientes), `ventana-nueva`, `ventanas` (lista en
+  `pluma.log`), `mover-nueva`, `mover=<id>`, `menu-pestana`, `cerrar`, `pos` (segundo del vídeo),
+  `arrastre-empieza=<n>`, `arrastre=dx,dy`, `arrastre-a=<id>,x,y`, `arrastre-suelta`; y el arrastre con mensajes de
+  ratón de verdad, `captura.exe "PlumaVentana.<nombre>|<título>" x.png drag x1 y1 x2 y2 pasos`. Las ventanas de prueba
+  van una debajo de otra fuera de la pantalla (la segunda 960 px más abajo).
+- Medido el 26/10 (example.com y example.org): 136 MB con una ventana, 134 con dos (la interfaz, 13 MB en los dos casos).
+- Sin probar en las pruebas (todo fuera de la pantalla): el cambio de escala al pasar de una pantalla a otra
+  arrastrando, la captura del ratón real y el clic central en la barra de tareas.
