@@ -776,6 +776,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             else if (what == L"seleccion") translate_selection(t, L"", false, POINT{});
             else if (what == L"menu") ui_open_menu_quietly(true);
             else if (what == L"menu-principal") ui_open_menu_quietly(false);
+            else if (what == L"perfil") ui_open_profile_menu(true);
             else if (what == L"oferta") ui_translate_offer(t);
             else if (what == L"clic-derecho") translate_test_pick_menu();   // the next page menu: logged, Pluma's row chosen
             else if (starts_with(what, L"destino=")) translate_set_target(what.substr(8));

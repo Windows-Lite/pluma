@@ -425,8 +425,11 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
   Lo arranca el de siempre (`CreateProcess`, también si lo pide otro perfil por WM_COPYDATA) para que el Administrador
   de tareas los agrupe. El motor rechaza una ventana con otras opciones que la primera: los hijos reciben las del padre
   (`PLUMA_MOTOR_IDIOMA`, `PLUMA_MOTOR_ARGS`).
-- Botón de perfil a la izquierda de las pestañas (círculo con inicial y color): lista (abre su ventana o la trae
-  delante), «Nuevo perfil», «Administrar perfiles» (Configuración > Perfiles: nombre, color, quitar con confirmación,
+- Avatar del perfil en la barra, justo después de la dirección (círculo con inicial y color; como Edge, que no lo pone
+  en las pestañas; pedido el 26/10), con su nombre de aviso al posar el ratón. Su panel, como el de Edge: el perfil en
+  grande, «Configuración del perfil», «Otros perfiles» (abre su ventana o la trae delante), «Añadir perfil» y «Nueva
+  ventana de incógnito». En incógnito, en su sitio, la etiqueta «Incógnito» (su panel: «Cerrar ventana de incógnito»).
+  Prueba: `Pluma.exe pluma-prueba:perfil` lo abre sin coger el foco. Configuración > Perfiles (nombre, color, quitar con confirmación,
   que cierra su ventana, borra sus archivos y marca su perfil del motor para borrar con `ICoreWebView2Profile8::Delete`).
   Con más de un perfil, el título dice cuál es y el botón de la barra de tareas lleva su círculo (`SetOverlayIcon`).
 - Los enlaces de otros programas van al último perfil usado (`perfil-ultimo.txt`, al activar una ventana); abrir Pluma

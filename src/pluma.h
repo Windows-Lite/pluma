@@ -426,6 +426,7 @@ void ui_translate_changed();              // a page's translation started, moved
 bool ui_translate_offer(Tab *t);          // the popup that offers to translate, quietly (never takes the focus); false: not now
 void ui_open_translate_menu();            // ... and opened by the person (the address bar's icon)
 void ui_open_menu_quietly(bool translate); // tests: the main menu or the translate popup, without the focus
+void ui_open_profile_menu(bool quiet);      // the avatar's flyout (incognito: the badge's); quiet: tests, without the focus
 void ui_bubble(RECT anchor, const std::wstring &title, const std::wstring &text, bool loading);   // under anchor (screen)
 void ui_bubble_text(const std::wstring &title, const std::wstring &text, bool loading);          // its words change
 void ui_blend_panels(BYTE *bits, int w, int h, POINT origin);   // tests: the open panels into a picture (video_debug_shot)
