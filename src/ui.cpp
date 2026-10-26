@@ -1184,6 +1184,14 @@ static void blur_address(bool to_page) {
         else SetFocus(g_win);
     }
 }
+// Enter, or a suggestion or a site chosen: the bar leaves edit mode at once, as in Chrome and Edge, and the page gets
+// the focus. A tab with no view yet (a new tab, the preload that takes its place) gets it when its view comes
+// (tab_activate); till then the window holds it. (Not the tab held before tab_navigate: a preload replaced it.)
+static void address_done(const std::wstring &url) {
+    blur_address(true);
+    if (ui_address_focused()) SetFocus(g_win);
+    ui_set_address_text(url);
+}
 static void commit_address(bool new_tab) {
     if (sug_commit(new_tab)) return;
     wchar_t buf[8192];
@@ -1194,7 +1202,7 @@ static void commit_address(bool new_tab) {
     Tab *t = active_tab();
     if (new_tab || !t) t = tab_new(L"", true);
     tab_navigate(t, url);
-    ui_set_address_text(url);
+    address_done(url);
 }
 static void delete_word_left() {
     DWORD s = 0, e = 0;
@@ -1462,7 +1470,7 @@ static bool sug_commit(bool new_tab) {
     Tab *t = active_tab();
     if (new_tab || !t) t = tab_new(L"", true);
     tab_navigate(t, url);
-    ui_set_address_text(url);
+    address_done(url);
     return true;
 }
 
@@ -2912,7 +2920,7 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_TAB_AUDIO: tab_mute(tab_by_id(h.id)); break;
     case H_NOTICE_BTN: { auto a = g_notice.action; notice_close(); if (a) a(); break; }
     case H_NOTICE_X: notice_close(); break;
-    case H_NTP_ROW: if (h.id < (int)g_ntp_rows.size()) { Tab *t = active_tab(); std::wstring u = g_ntp_rows[h.id].url; if (t) tab_navigate(t, u); else tab_new(u, true); } break;
+    case H_NTP_ROW: if (h.id < (int)g_ntp_rows.size()) { Tab *t = active_tab(); std::wstring u = g_ntp_rows[h.id].url; if (t) { tab_navigate(t, u); address_done(u); } else tab_new(u, true); } break;
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
     case H_READER: reader_toggle(active_tab()); break;
@@ -2931,7 +2939,7 @@ static void bar_click(HitInfo h, float x, float y) {
                 open_menu_page(PAGE_BM_OPEN, { a.x, a.y, bb.x, bb.y }, h.id);
                 break;
             }
-        } else { std::wstring u = n->url; Tab *t = active_tab(); if (t && t->url.empty()) tab_navigate(t, u); else tab_new(u, true); }
+        } else { std::wstring u = n->url; Tab *t = active_tab(); if (t && t->url.empty()) { tab_navigate(t, u); address_done(u); } else tab_new(u, true); }
         break;
     }
     default: break;
