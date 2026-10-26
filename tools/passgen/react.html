@@ -1,0 +1,27 @@
+<!doctype html><meta charset="utf-8"><title>Registro (React)</title><link rel="stylesheet" href="style.css">
+<h1>Registro</h1>
+<div id="app">
+  <input id="email" type="email" placeholder="Correo">
+  <input id="pw" type="password" placeholder="Contraseña" autocomplete="new-password">
+  <input id="pw2" type="password" placeholder="Confirmar contraseña" autocomplete="new-password">
+  <p id="state">estado: vacío</p>
+</div>
+<script>
+// As React does: each input remembers the value it last set itself (its "value tracker", on the element) and an
+// input event counts only if the value read through the prototype differs from it. A plain el.value = x from a
+// script updates the tracker, so React never sees it; the native setter plus an input event does.
+const state = {};
+for (const el of document.querySelectorAll('input')) {
+  const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  let tracked = el.value;
+  Object.defineProperty(el, 'value', { configurable: true, get() { return d.get.call(this); }, set(v) { tracked = '' + v; d.set.call(this, v); } });
+  el.__tracker = { get: () => tracked, set: (v) => { tracked = v; } };
+}
+document.addEventListener('input', (e) => {
+  const el = e.target, now = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').get.call(el);
+  if (now === el.__tracker.get()) return;   // React: no change
+  el.__tracker.set(now);
+  state[el.id] = now;
+  document.getElementById('state').textContent = 'estado: pw=' + (state.pw || '').length + ' pw2=' + (state.pw2 || '').length + ' iguales=' + (state.pw && state.pw === state.pw2);
+}, true);
+</script>

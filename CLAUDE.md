@@ -55,6 +55,7 @@ código y commits en inglés; nada de em dashes.
 - `src/lite.cpp` + `src/youtube.html`, `src/music.html`, `src/reddit.html`, `src/lite.html`: webs ligeras, YouTube, YouTube Music y Reddit
   (apartados de abajo).
 - `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
+- `src/passgen.cpp` + `src/passgen.js`: «Usar contraseña segura» en los formularios de registro (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
 - `Pluma.exe` no va en git (25/10, el usuario: «no debería estar en el repo»): cada push a `main` lo compila una Action
@@ -316,6 +317,33 @@ Plan aprobado el 26/10 (las webs que más visita: YouTube Music 1.590 visitas en
   apagar en el menú: «Sugerir lo que más visito», `sugerir_visitadas`). La × de cada fila (al pasar el ratón) quita
   la página suya, o el sitio de las sugerencias para siempre (`ocultas.tsv`), con «Deshacer». Pedido el 25/10: «que
   solo aparezcan páginas que yo haya añadido, como YouTube... que las pueda añadir fácilmente como un marcador».
+
+## Contraseñas seguras (`src/passgen.cpp`, `src/passgen.js`)
+Pedido el 26/10: «Sugerir contraseñas seguras» como Chrome y Edge (la de Edge necesita la sincronización de Microsoft,
+que el motor no tiene).
+- `passgen.js` (RCDATA 220) va en cada página y marco (AddScriptToExecuteOnDocumentCreated, antes que los scripts de la
+  web) con sus textos (`T()`) y el ajuste escritos dentro (`/*PLUMA_CFG*/`). Un solo `focusin` en la ventana; nada más
+  corre hasta que una contraseña coge el foco. Nunca en `pluma.local`, en youtube.com ni en las páginas ligeras de
+  Pluma (las que tienen `__pluma`, `lite.cpp`).
+- Cuándo, las reglas locales de Chromium: `autocomplete="new-password"`, dos campos de contraseña (nueva y repetir; con
+  tres, el primero es la actual), nombres que lo dicen (new, confirm, repeat, nueva, regist...) o un formulario de
+  registro; nunca `current-password` ni un campo solo en un formulario de entrar.
+- La contraseña, como el generador de Chromium (`password_generator.cc`): 15 caracteres sin los que se confunden
+  (l I 1 O 0 o), minúscula, mayúscula, número y un símbolo de `-_.:!`, sin `--` ni `__`; respeta minlength, maxlength y
+  pattern. `crypto.getRandomValues` sin sesgo de módulo.
+- Se dibuja en una sombra cerrada en la capa de arriba (popover; dentro del `dialog` abierto si lo hay), estilos propios
+  (adoptedStyleSheets: sin `<style>` ni innerHTML, por Trusted Types y CSP), claro u oscuro con la página. Intro solo
+  con la fila marcada (Abajo), Esc la quita; rellena con el setter nativo y `input`/`change` (React lo ve).
+- Guardarla: la guarda el gestor del motor al enviar el formulario. OJO: `IsPasswordAutosaveEnabled` no guarda solo
+  (WebView2Feedback #4857): el motor PREGUNTA («¿Guardar la contraseña?», una ventana suya) y guarda al pulsar Guardar.
+  Comprobado: con Guardar, tras reiniciar el formulario de entrar se rellena con la generada.
+- Ajuste `sugerir_contrasenas` (Configuración > Privacidad y datos), encendido. Al cambiarlo (o el idioma) cada vista
+  recibe el script nuevo y las páginas abiertas un evento cuyo nombre solo sabe Pluma (`ExecuteScript`); los marcos,
+  en su próxima página. En incógnito sale igual y dice que no se guarda.
+- Pruebas: `node tools\passgen-test.js` (el generador) y `tools\passgen\prueba.ps1` en la sesión interactiva con
+  `PLUMA_EXE` (páginas en `tools\passgen`, una con CSP estricta y Trusted Types; `tools\passgen-e2e.js`; acepta la
+  pregunta del motor con UI Automation). OJO: el motor pone su pregunta y su lista de autorrelleno en la pantalla más
+  cercana aunque la ventana de prueba esté fuera; `tools\passgen\ventanas.ps1 -Watch` las saca al instante.
 
 ## Incógnito
 - Ventana de incógnito (⋯ > Nueva ventana de incógnito, Ctrl+Mayús+N, o «Abrir en una ventana de incógnito» en el menú
