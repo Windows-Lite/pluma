@@ -286,11 +286,19 @@ void app_restart(bool hidden);            // starts Pluma.exe again (after an up
 std::wstring fixup_input(const std::wstring &typed);   // what was typed in the address bar -> the url to load
 
 extern HINSTANCE g_inst;
-extern HWND g_win, g_bar, g_edit;
+// g_win, g_bar, g_edit, g_tabs, g_active, g_fullscreen: the current window's (windows, below)
+struct Window;
+extern Window *g_cw;
+#define g_win (g_cw->hwnd)
+#define g_bar (g_cw->bar)
+#define g_edit (g_cw->edit)
+#define g_tabs (g_cw->tabs)
+#define g_active (g_cw->active)
+#define g_fullscreen (g_cw->fullscreen)
 extern std::wstring g_root, g_state;   // the exe's folder; %LOCALAPPDATA%\Pluma (or its test folder)
 extern std::wstring g_data;            // this profile's own files: g_state for the default one, g_state\perfiles\<id> for others
 extern std::wstring g_profile_id;      // the profile this window is ("" = the default one, "Personal")
-extern bool g_test, g_dev, g_quitting, g_fullscreen;
+extern bool g_test, g_dev, g_quitting;
 extern bool g_incognito;   // the incognito window (--incognito): every tab InPrivate, all dark, nothing kept
 extern bool g_test_visible;   // a test instance on the screen (PLUMA_A_LA_VISTA), to record what the user would see
 extern double g_open_asked;               // when a page was asked for (start, or from memory): for the log
@@ -369,9 +377,51 @@ struct Tab {
     Anim x, w, hover, close_hover;
     bool placed = false;
 };
-extern std::vector<std::unique_ptr<Tab>> g_tabs;
+
+// ---------------------------------------------------------------- windows (main.cpp)
+// One Pluma (a profile's) has one window or several, all in this process: a tab moves from one to another alive (its
+// view and its player change parent window; nothing loads again). The code works on the current window (g_cw), which
+// every way into Pluma sets first: the message loop and every window procedure (by the window the message is for),
+// a tab's events and timers (WinScope by the tab).
+struct Window {
+    int id = 0;                        // 1, 2... in the order they were made (never reused)
+    HWND hwnd = NULL, bar = NULL, edit = NULL;
+    std::vector<std::unique_ptr<Tab>> tabs;
+    int active = -1;
+    bool fullscreen = false;
+    WINDOWPLACEMENT before_fs = { sizeof(WINDOWPLACEMENT) };
+    RECT test_rect{};                  // tests: where it was before fullscreen
+    int caption_down = 0;
+    bool dragged = false;              // it follows a tab being dragged (ui.cpp): it does not snap back on a DPI change
+    void *ui = nullptr;                // its bar's own state (ui.cpp)
+    double used = 0;                   // when it was last activated: what comes from outside goes to the last used
+};
+extern std::vector<std::unique_ptr<Window>> g_windows;   // in the order they were made
+struct WinScope {                      // another current window for a while (nullptr: the same), then back
+    Window *saved;
+    explicit WinScope(Window *w) : saved(g_cw) { if (w) g_cw = w; }
+    ~WinScope();
+    WinScope(const WinScope &) = delete;
+    WinScope &operator=(const WinScope &) = delete;
+};
+Window *win_of_hwnd(HWND h);           // the window h is, or is in, or is owned by (nullptr: none of this Pluma's)
+Window *win_of_tab(const Tab *t);
+Window *win_by_id(int id);
+bool win_alive(const Window *w);
+Window *win_last_used();               // the window used last (a visible one if there is any)
+Window *win_new(const RECT *where);    // a window with no tab yet, not shown; where: its outer rect (nullptr: by the current one)
+void win_show(Window *w, bool activate);
+void win_close(Window *w);             // one of several: its tabs go to the recently closed, and it goes
+void win_open_new(const std::wstring &url = L"");   // Ctrl+N, the menu's "Nueva ventana": a window with a tab
+bool any_window_visible();
+std::vector<Tab *> all_tabs();         // every tab of every window
+extern HWND g_app;                     // a window of Pluma's own, never shown: app-wide timers, posts from threads
+void tab_move(Tab *t, Window *to, int at, bool activate);   // a tab into another window, alive (its page does not load again)
+Window *tab_to_new_window(Tab *t, const RECT *where);      // ... into a new window of its own (shown)
+void views_leave_window(HWND gone);    // views parked on a window that goes (the spare, the keeper, a preload) move to another
+std::wstring win_name(const Window *w); // "Ventana 2: <its tab's title>" for the tab menu
+
 void with_profile(std::function<void(ICoreWebView2Profile *)> f);   // the browser profile, once a view exists
-extern int g_active;
 
 Tab *active_tab();
 Tab *tab_by_id(int id);
@@ -386,6 +436,7 @@ void tab_reopen_closed();
 void tabs_layout_views();                 // put the active view where the page goes
 void tabs_tick();                         // every few seconds: freeze, unload
 void tabs_discard_all();
+void tabs_close_window();                 // the current window closes (one of several): its tabs to the recently closed
 void tabs_on_hide();                      // the window closed (kept in memory): freeze the pages, then give memory back
 enum { TRIM_FROZEN, TRIM_IDLE, TRIM_ALL };
 void tabs_trim(int mode);                 // processes with nothing on screen give their unused memory back to Windows
@@ -409,6 +460,11 @@ size_t engine_memory_mb();               // private memory of all Pluma processe
 
 // ---------------------------------------------------------------- the bar (ui.cpp)
 void ui_init();
+void ui_window_init();                    // the current window's bar, address box and drawing (once each window is made)
+void ui_window_free();                    // ... and they go with it
+void ui_frame();                          // one animation frame: every window that moves is drawn
+void ui_test_drag(int step, int a, int b, int c);   // tests: 0 grab tab a, 1 move by (b, c), 2 to window a at (b, c), 3 drop
+void ui_open_tab_menu_quietly();          // tests: the active tab's menu, without the focus
 void ui_layout();                         // window resized, fullscreen, tabs added...
 void ui_invalidate();
 float ui_band_height();                   // px; 0 in fullscreen
@@ -459,6 +515,8 @@ enum { VIDEO_ASKED, VIDEO_ENDED, VIDEO_LEAVE, VIDEO_FAILED, VIDEO_WOKEN };
 void video_back_to_page(Tab *t, int how); // the page again: ASKED (and stays there), ENDED, LEAVE (it navigates), FAILED,
                                           // WOKEN (the person went to the page: the player comes back once left alone)
 void video_destroy(Tab *t);               // the tab or its page goes: the player too, the page untouched
+void video_tab_moved(Tab *t);             // the tab went to another window: its player goes with it
+void video_leave_window(HWND gone, HWND to);   // a window closes: what the players keep in it goes to another
 void video_layout();                      // window moved or resized, tab switched: the player follows
 bool video_on(Tab *t);
 bool video_settled();                     // the player on screen already draws at its new size

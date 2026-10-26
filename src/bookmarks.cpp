@@ -300,7 +300,7 @@ std::wstring bm_page_state(const std::wstring &path, const Json &texts) {
     return o + L"}";
 }
 void bm_pages_refresh() {
-    for (auto &t : g_tabs)
+    for (Tab *t : all_tabs())
         if (t->view && settings_page_url(t->url) && (t->url.find(L"/bookmarks") != std::wstring::npos))
             t->view->PostWebMessageAsJson(bm_page_state(t->url, Json()).c_str());
 }

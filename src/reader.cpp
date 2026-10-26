@@ -130,7 +130,7 @@ static void open_reader(Tab *t, bool automatic) {
     double t0 = now_ms();
     t->view->ExecuteScript(parse_js().c_str(), Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
         [id, url, automatic, t0](HRESULT hr, LPCWSTR json) -> HRESULT {
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!t || !t->view || t->url != url) return S_OK;
             std::wstring a = SUCCEEDED(hr) && json ? json : L"null";
             if (a == L"null" || a.size() < 10) {
@@ -192,7 +192,7 @@ static void heard(int id, const std::wstring &u) {
     size_t q = rest.find(L'?');
     if (q == std::wstring::npos) return;
     auto tok = g_token.find(id);
-    Tab *t = tab_by_id(id);
+    Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
     if (!t || tok == g_token.end() || rest.substr(0, q) != tok->second || !t->reader) return;
     std::wstring query = rest.substr(q + 1);
     query = query.substr(0, query.find(L'&'));   // (then n=<count>: every request a new address, never the image cache)
@@ -202,7 +202,7 @@ static void heard(int id, const std::wstring &u) {
         int s = _wtoi(val.c_str());
         if (s >= 12 && s <= 40 && s != g_set.reader_size) { g_set.reader_size = s; settings_save(); }
     } else if (key == L"always") reader_site_set(site_of(t->url), val == L"1");
-    else if (key == L"exit") ui_post([id] { reader_toggle(tab_by_id(id)); });
+    else if (key == L"exit") ui_post([id] { { Tab *tt_ = tab_by_id(id); WinScope ws_(win_of_tab(tt_)); reader_toggle(tt_); } });
 }
 
 static void check(Tab *t) {
@@ -214,7 +214,7 @@ static void check(Tab *t) {
     std::wstring url = t->url;
     t->view->ExecuteScript(check_js().c_str(), Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
         [id, url](HRESULT hr, LPCWSTR json) -> HRESULT {
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!t || t->url != url || FAILED(hr) || !json) return S_OK;
             Json j = json_parse(json);
             auto tok = g_token.find(id);
@@ -255,7 +255,7 @@ void reader_attach(Tab *t) {
     else v->AddWebResourceRequestedFilter((std::wstring(kBeacon) + L"*").c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!t) return S_OK;
             LPWSTR uri = NULL;
             a->get_Uri(&uri);
@@ -266,7 +266,7 @@ void reader_attach(Tab *t) {
             if (marked(nf, &clean) && (p == g_pending.end() || p->second.nf != clean)) {
                 // the mark without a reader page waiting for it (it never shows, but just in case): the article itself
                 a->put_Cancel(TRUE);
-                ui_post([id, clean] { Tab *t = tab_by_id(id); if (t && t->view) t->view->Navigate(clean.c_str()); });
+                ui_post([id, clean] { Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t)); if (t && t->view) t->view->Navigate(clean.c_str()); });
                 return S_OK;
             }
             if (p != g_pending.end() && with_mark(p->second.nf) != nf) drop_pending(t);
@@ -296,7 +296,7 @@ void reader_attach(Tab *t) {
             req->get_Method(&method);
             bool get = method && !wcscmp(method, L"GET");
             CoTaskMemFree(method);
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (!get || !t) return S_OK;
             std::wstring token = random_hex(), nonce;
             std::string body = page_for(t, p->second, token, nonce);
@@ -313,12 +313,12 @@ void reader_attach(Tab *t) {
     ComPtr<ICoreWebView2_2> v2;
     if (SUCCEEDED(t->view.As(&v2)))
         v2->add_DOMContentLoaded(Callback<ICoreWebView2DOMContentLoadedEventHandler>(
-            [id](ICoreWebView2 *, ICoreWebView2DOMContentLoadedEventArgs *) -> HRESULT { check(tab_by_id(id)); return S_OK; }).Get(), &tok);
+            [id](ICoreWebView2 *, ICoreWebView2DOMContentLoadedEventArgs *) -> HRESULT { { Tab *tt_ = tab_by_id(id); WinScope ws_(win_of_tab(tt_)); check(tt_); } return S_OK; }).Get(), &tok);
     v->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *a) -> HRESULT {
             // what was still loading at DOMContentLoaded may make it an article
             BOOL ok = FALSE; a->get_IsSuccess(&ok);
-            Tab *t = tab_by_id(id);
+            Tab *t = tab_by_id(id); WinScope ws_t(win_of_tab(t));
             if (ok && t && !t->readerable) check(t);
             return S_OK;
         }).Get(), &tok);
@@ -334,7 +334,7 @@ void reader_attach(Tab *t) {
                 if (it == g_recheck.end()) return;
                 int id = it->second;
                 g_recheck.erase(it);
-                check(tab_by_id(id));
+                { Tab *tt_ = tab_by_id(id); WinScope ws_(win_of_tab(tt_)); check(tt_); }
             });
             if (tm) g_recheck[tm] = id;
             return S_OK;

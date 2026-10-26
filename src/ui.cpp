@@ -13,7 +13,8 @@
 static const float kTabRowH = 38, kToolRowH = 44, kNoticeH = 44, kCapW = 46, kTabMax = 236, kTabMin = 40, kTabGap = 2,
                    kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30, kBmRowH = 32, kBmBtnH = 24, kAvatarW = 32;
 static const double kHoverMs = 120, kTabMs = 180, kPanelMs = 140;
-static float g_s = 1;
+static float &ui_g_s();
+#define g_s (ui_g_s())   // the window's screen scale (state of each window: UiWin, at the end)
 float ui_scale() { return g_s; }
 static float S(float v) { return v * g_s; }
 static std::wstring strip_scheme(const std::wstring &u);
@@ -28,7 +29,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
                  G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
-                 G_COPY = 0xE8C8, G_WARN = 0xE7BA };
+                 G_COPY = 0xE8C8, G_WINDOW = 0xE78B, G_NEW_WINDOW_OUT = 0xE8A7, G_SWITCH = 0xE8AB, G_WARN = 0xE7BA };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -66,17 +67,21 @@ static ComPtr<IWICImagingFactory> g_wic;
 static ComPtr<IDWriteFontCollection> g_ui_fonts;   // the fuentes folder's, when the chosen family is one of them (else Windows's)
 static ComPtr<IDWriteFontCollection> g_own_fonts;  // Roboto and Roboto Mono, from the fuentes folder
 static std::wstring g_ui_family = L"Segoe UI", g_icon_family = L"Segoe Fluent Icons";
-static ComPtr<ID2D1HwndRenderTarget> g_rt;
+static ComPtr<ID2D1HwndRenderTarget> &ui_g_rt();
+#define g_rt (ui_g_rt())
 static D2D1_RENDER_TARGET_TYPE render_type() {
     // PLUMA_DIBUJO=cpu draws the bar without the graphics card (to compare what each costs)
     wchar_t v[8] = L"";
     GetEnvironmentVariableW(L"PLUMA_DIBUJO", v, 8);
     return !wcscmp(v, L"cpu") ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT;
 }
-static ComPtr<ID2D1SolidColorBrush> g_br;
+static ComPtr<ID2D1SolidColorBrush> &ui_g_br();
+#define g_br (ui_g_br())
 struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, chip, chip_b, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, title; };
-static Formats g_f;
-static HFONT g_edit_font;
+static Formats &ui_g_f();
+#define g_f (ui_g_f())
+static HFONT &ui_g_edit_font();
+#define g_edit_font (ui_g_edit_font())
 static std::unordered_map<std::wstring, float> g_widths;   // text widths, measured once
 static HBRUSH g_edit_brush;
 static COLORREF g_edit_bg;
@@ -215,29 +220,73 @@ static void soft_shadow(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, D2D1_REC
 
 // ---------------------------------------------------------------- state of the bar
 struct Ghost { float w, x = 0; int slot; std::wstring title; ComPtr<ID2D1Bitmap> icon; Anim k; };   // a tab closing
-static std::vector<Ghost> g_ghosts;
-static std::unordered_map<int, ComPtr<ID2D1Bitmap>> g_icons;      // tab id -> favicon on the bar's target
-static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> g_host_icons, g_ext_icons;
-static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
-static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
-static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
+static std::vector<Ghost> &ui_g_ghosts();
+#define g_ghosts (ui_g_ghosts())
+static std::unordered_map<int, ComPtr<ID2D1Bitmap>> &ui_g_icons();
+#define g_icons (ui_g_icons())
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_host_icons();
+#define g_host_icons (ui_g_host_icons())
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_ext_icons();
+#define g_ext_icons (ui_g_ext_icons())
+static Anim &ui_g_sheet_k();
+#define g_sheet_k (ui_g_sheet_k())
+static Anim &ui_g_notice_h();
+#define g_notice_h (ui_g_notice_h())
+static Anim &ui_g_addr_focus();
+#define g_addr_focus (ui_g_addr_focus())
+static Anim &ui_g_menu_btn_open();
+#define g_menu_btn_open (ui_g_menu_btn_open())
+static int &ui_g_sheet_from();
+#define g_sheet_from (ui_g_sheet_from())
+static int &ui_g_sheet_to();
+#define g_sheet_to (ui_g_sheet_to())
+static float &ui_g_frozen_w();
+#define g_frozen_w (ui_g_frozen_w())
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
            H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE, H_TRANSLATE };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
-static HitInfo g_hover, g_press;
-static std::unordered_map<int, Anim> g_btn_hover;  // per control
-static int g_caption_hot, g_caption_down;
-static bool g_tracking, g_dragging, g_active_window = true;
-static int g_drag_id; static float g_drag_dx, g_drag_x, g_press_x;
+static HitInfo &ui_g_hover();
+#define g_hover (ui_g_hover())
+static HitInfo &ui_g_press();
+#define g_press (ui_g_press())
+static std::unordered_map<int, Anim> &ui_g_btn_hover();
+#define g_btn_hover (ui_g_btn_hover())
+static int &ui_g_caption_hot();
+#define g_caption_hot (ui_g_caption_hot())
+static int &ui_g_caption_down();
+#define g_caption_down (ui_g_caption_down())
+static bool &ui_g_tracking();
+#define g_tracking (ui_g_tracking())
+static bool &ui_g_dragging();
+#define g_dragging (ui_g_dragging())
+static bool &ui_g_active_window();
+#define g_active_window (ui_g_active_window())
+static int &ui_g_drag_id();
+#define g_drag_id (ui_g_drag_id())
+static float &ui_g_drag_dx();
+#define g_drag_dx (ui_g_drag_dx())
+static float &ui_g_drag_x();
+#define g_drag_x (ui_g_drag_x())
+static float &ui_g_press_x();
+#define g_press_x (ui_g_press_x())
+static float &ui_g_press_y();
+#define g_press_y (ui_g_press_y())
 struct Notice { std::wstring text, button; std::function<void()> action; double until = 0; bool on = false; int owner = 0; };
-static Notice g_notice;
-static std::wstring g_addr_text;                  // what the address shows when not being typed in
-static std::vector<HistoryEntry> g_ntp_rows;
-static bool g_ntp_pins, g_ntp_filled;            // the rows are the person's own pages (else suggestions); computed
+static Notice &ui_g_notice();
+#define g_notice (ui_g_notice())
+static std::wstring &ui_g_addr_text();
+#define g_addr_text (ui_g_addr_text())
+static std::vector<HistoryEntry> &ui_g_ntp_rows();
+#define g_ntp_rows (ui_g_ntp_rows())
+static bool &ui_g_ntp_pins();
+#define g_ntp_pins (ui_g_ntp_pins())
+static bool &ui_g_ntp_filled();
+#define g_ntp_filled (ui_g_ntp_filled())
 static double g_ntp_mem_at = -1e9; static size_t g_ntp_mem;
 static WNDPROC g_edit_proc;
 static bool g_in_change;
-static std::wstring g_typed;                      // what the person typed (without the inline completion)
+static std::wstring &ui_g_typed();
+#define g_typed (ui_g_typed())
 static void close_suggestions();
 static void update_suggestions();
 static void sug_move(int d);
@@ -266,7 +315,8 @@ float ui_band_height() {
 
 // ---------------------------------------------------------------- layout of the tab row
 struct Geo { float W, strip_l, strip_r, cap_l, tab_w, plus_x, addr_l, addr_r, menu_x, ext_l, avatar_l, avatar_w; };
-static Geo g_geo;
+static Geo &ui_g_geo();
+#define g_geo (ui_g_geo())
 static size_t ext_buttons() { size_t n = 0; for (auto &e : g_exts) if (e.enabled && !e.popup.empty()) n++; return std::min<size_t>(n, 4); }
 static void compute_geo() {
     RECT rc; GetClientRect(g_bar, &rc);
@@ -297,7 +347,8 @@ static void compute_geo() {
 // settled: where they end up, for clicks: closing tabs fast must not wait for the animation (the next tab's cross
 // is under the mouse at once, as in Chrome)
 struct Slot { Tab *t; float x, w; };
-static float g_strip_end;
+static float &ui_g_strip_end();
+#define g_strip_end (ui_g_strip_end())
 static std::vector<Slot> tab_slots(double now, bool settled = false) {
     std::vector<Slot> out;
     float x = g_geo.strip_l;
@@ -1024,7 +1075,8 @@ static void release_bitmaps() {
 // gives timers their turn only when no painting is pending) and the motion keeps the screen's own rhythm.
 static HANDLE g_anim_event;
 static std::atomic<bool> g_anim_on{ false }, g_frame_pending{ false };
-static bool g_bar_busy;
+static bool &ui_g_bar_busy();
+#define g_bar_busy (ui_g_bar_busy())
 static void want_frames() {
     if (!g_anim_event) return;
     if (!g_anim_on.exchange(true)) SetEvent(g_anim_event);
@@ -1034,7 +1086,7 @@ static void anim_thread() {
         WaitForSingleObject(g_anim_event, INFINITE);
         while (g_anim_on) {
             if (FAILED(DwmFlush())) Sleep(16);
-            if (!g_frame_pending.exchange(true)) PostMessageW(g_bar, WM_APP + 22, 0, 0);
+            if (!g_frame_pending.exchange(true)) PostMessageW(g_app, WM_APP + 22, 0, 0);   // (ui_frame, for every window)
         }
     }
 }
@@ -1090,7 +1142,7 @@ static void start_animation_thread() {
     g_anim_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     std::thread(anim_thread).detach();
 }
-void ui_post(std::function<void()> f) { PostMessageW(g_bar, WM_APP + 21, 0, (LPARAM)new std::function<void()>(std::move(f))); }
+void ui_post(std::function<void()> f) { PostMessageW(g_app, WM_APP + 21, 0, (LPARAM)new std::function<void()>(std::move(f))); }
 
 // ---------------------------------------------------------------- the address field
 bool ui_address_focused() { return g_edit && GetFocus() == g_edit; }
@@ -1157,6 +1209,9 @@ static void delete_word_left() {
     SendMessageW(g_edit, EM_REPLACESEL, TRUE, (LPARAM)L"");
 }
 static LRESULT CALLBACK edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    Window *self = win_of_hwnd(h);
+    if (!self) return CallWindowProcW(g_edit_proc, h, msg, wp, lp);
+    WinScope ws(self);
     switch (msg) {
     case WM_KEYDOWN: {
         bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
@@ -1249,6 +1304,7 @@ static void panel_free(Panel &p) {
 }
 static void panel_render(Panel &p) {
     if (!p.h || p.w <= 0 || p.hh <= 0) return;
+    WinScope ws(win_of_hwnd(GetWindow(p.h, GW_OWNER)));   // (drawn with its window's scale and fonts)
     if (!p.dc) {
         BITMAPINFO bi = {};
         bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -1285,7 +1341,7 @@ static void panel_render(Panel &p) {
 }
 static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp);
 static void panel_open(Panel &p, int x, int y, int w, int hh, bool activate) {
-    if (p.closing) panel_free(p);
+    if (p.closing || (p.h && GetWindow(p.h, GW_OWNER) != g_win)) panel_free(p);   // (open over another window: it moves to this one)
     p.closing = false;
     if (p.w != w || p.hh != hh) {
         p.rt.Reset();
@@ -1586,7 +1642,7 @@ void ui_open_menu() {
 void data_clear_all() {
     ComPtr<ICoreWebView2_13> v13; ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Profile2> p2;
     Tab *t = nullptr;
-    for (auto &x : g_tabs) if (x->view && !x->incognito) { t = x.get(); break; }
+    for (Tab *x : all_tabs()) if (x->view && !x->incognito) { t = x; break; }
     history_clear();
     if (t && SUCCEEDED(t->view.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && SUCCEEDED(pr.As(&p2)))
         p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE |
@@ -1615,6 +1671,7 @@ static std::vector<MItem> build_page(int page) {
     std::vector<MItem> v;
     if (page == PAGE_MAIN) {
         v.push_back(item(T(L"Pestaña nueva"), G_NEWTAB, T(L"Ctrl+T"), [] { after_menu([] { tab_new(L"", true); }); }));
+        v.push_back(item(T(L"Nueva ventana"), G_WINDOW, T(L"Ctrl+N"), [] { after_menu([] { win_open_new(); }); }));
         v.push_back(item(T(L"Nueva ventana de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { app_open_incognito(); }); }));
         MItem re = item(T(L"Reabrir pestaña cerrada"), G_UNDO, T(L"Ctrl+Mayús+T"), [] { after_menu([] { tab_reopen_closed(); }); });
         v.push_back(re);
@@ -1719,6 +1776,23 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(item(T(L"Recargar"), G_RELOAD, L"", [id] { after_menu([id] { int i = tab_index(id); if (i >= 0) { tab_activate(i); tab_reload(false); } }); }));
         v.push_back(item(T(L"Duplicar"), G_NEWTAB, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t && !t->url.empty()) tab_new(t->url, true, tab_index(id) + 1, t->incognito); }); }));
         if (t->view) v.push_back(item(t->muted ? T(L"Volver a dar sonido") : T(L"Silenciar"), t->muted ? G_VOL : G_MUTE, L"", [id] { after_menu([id] { tab_mute(tab_by_id(id)); }); }));
+        v.push_back(sep());
+        // to another window, as Edge's "Move tab to": a new one, or each of the others (by the tab it shows)
+        if (g_tabs.size() > 1)
+            v.push_back(item(T(L"Mover a una ventana nueva"), G_NEW_WINDOW_OUT, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t) tab_to_new_window(t, nullptr); }); }));
+        for (auto &w : g_windows) {
+            if (w.get() == g_cw) continue;
+            int wid = w->id;
+            v.push_back(item(T(L"Mover a ") + win_name(w.get()), G_SWITCH, L"", [id, wid] { after_menu([id, wid] {
+                Tab *t = tab_by_id(id);
+                Window *to = win_by_id(wid);
+                if (!t || !to) return;
+                Window *from = win_of_tab(t);
+                tab_move(t, to, (int)to->tabs.size(), true);
+                win_show(to, true);
+                if (from && from->tabs.empty()) win_close(from);
+            }); }));
+        }
         v.push_back(sep());
         v.push_back(item(T(L"Cerrar las de la derecha"), G_X, L"", [id] { after_menu([id] { int i = tab_index(id); while (i >= 0 && (int)g_tabs.size() > i + 1) tab_close((int)g_tabs.size() - 1); }); }));
         v.push_back(item(T(L"Cerrar las demás"), G_X, L"", [id] { after_menu([id] { for (int k = (int)g_tabs.size() - 1; k >= 0; k--) if (g_tabs[k]->id != id) tab_close(k); }); }));
@@ -2199,13 +2273,34 @@ void ui_blend_panels(BYTE *bits, int w, int h, POINT origin) {
             }
     }
 }
+void ui_frame() {
+    // one animation frame: every window whose bar moves, and the panels fading or sliding
+    g_frame_pending = false;
+    double now = now_ms();
+    bool busy = false;
+    std::vector<Window *> ws;
+    for (auto &w : g_windows) ws.push_back(w.get());
+    for (Window *w : ws) {
+        if (!win_alive(w) || !w->ui) continue;
+        WinScope scope(w);
+        if (g_bar_busy) { paint(); busy |= g_bar_busy; }
+    }
+    for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble, &g_tip })
+        if (p->h && (p->fade.running(now) || p->slide.running(now) || p->closing)) { panel_render(*p); busy |= p->h != NULL; }
+    if (!busy) g_anim_on = false;
+}
+static bool panel_here(const Panel &p) { return p.h && GetWindow(p.h, GW_OWNER) == g_win; }   // over the current window
 void ui_close_popups() {
-    close_suggestions();
-    if (g_menu.h && !g_menu.closing) menu_close();
-    if (g_bubble.h && !g_bubble.closing && now_ms() - g_bub_opened > 500) bubble_close();   // (not the page taking the focus back from its own menu)
+    // (only the current window's: the others' stay as they are)
+    if (panel_here(g_sug)) close_suggestions();
+    if (panel_here(g_menu) && !g_menu.closing) menu_close();
+    if (panel_here(g_bubble) && !g_bubble.closing && now_ms() - g_bub_opened > 500) bubble_close();   // (not the page taking the focus back from its own menu)
 }
 
 static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    Window *owner = win_of_hwnd(h);   // (a panel's parent is the window it is over)
+    if (!owner) return DefWindowProcW(h, msg, wp, lp);
+    WinScope ws(owner);
     Panel *p = h == g_menu.h ? &g_menu : h == g_sug.h ? &g_sug : h == g_toast.h ? &g_toast : h == g_bubble.h ? &g_bubble : h == g_tip.h ? &g_tip : nullptr;
     switch (msg) {
     case WM_TIMER:
@@ -2319,6 +2414,206 @@ static void drag_update(float x) {
     }
     ui_invalidate();
 }
+// ---------------------------------------------------------------- a tab dragged between windows (as Chromium's TabDragController)
+// Inside its strip a tab only moves along it. Taken out (more than 15 DIP above or below it, or past its ends) it goes
+// to a window of its own that follows the mouse; over another window's strip it goes in there, at the slot under the
+// mouse. The only tab of a window moves the window itself, and that window closes if the tab goes into another.
+// Dropped over nothing, the new window stays where it is. All in screen pixels; the views move alive (tab_move).
+struct TabDrag { bool on = false; int tab = 0, floating = 0; POINT off{}; UINT off_dpi = 0; float dx_dip = 0, dy_dip = 0; };
+static TabDrag g_tdrag;
+static POINT g_test_pointer;   // (tests: where the mouse would be)
+static RECT strip_on_screen(Window *w) {
+    WinScope ws(w);
+    RECT rc; GetClientRect(g_bar, &rc);
+    POINT a = { 0, (LONG)-S(15) }, b = { rc.right, (LONG)S(kTabRowH + 15) };   // (Chromium's vertical magnetism)
+    ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+    return { a.x, a.y, b.x, b.y };
+}
+static Window *strip_under(POINT pt, Window *skip) {
+    // our windows from the top down: the first whose strip has the point (one that covers the point without its
+    // strip there hides what is under it)
+    for (HWND h = GetTopWindow(NULL); h; h = GetWindow(h, GW_HWNDNEXT)) {
+        Window *w = nullptr;
+        for (auto &o : g_windows) if (o->hwnd == h) w = o.get();
+        if (!w || w == skip || !IsWindowVisible(h) || IsIconic(h) || w->fullscreen) continue;
+        RECT r = strip_on_screen(w);
+        if (PtInRect(&r, pt)) return w;
+        RECT wr; GetWindowRect(h, &wr);
+        if (PtInRect(&wr, pt)) return nullptr;
+    }
+    return nullptr;
+}
+static int slot_at(Window *w, POINT pt) {
+    WinScope ws(w);
+    ScreenToClient(g_bar, &pt);
+    float c = pt.x - g_tdrag.dx_dip * g_s + g_geo.tab_w / 2;
+    int at = (int)((c - g_geo.strip_l) / (g_geo.tab_w + S(kTabGap)));
+    return std::max(0, std::min(at, (int)g_tabs.size()));
+}
+static POINT grab_offset(Window *f) {
+    // where the mouse holds the window: on its tab, as far into it as the tab was held
+    WinScope ws(f);
+    compute_geo();
+    float dx = std::max(S(8), std::min(g_tdrag.dx_dip * g_s, g_geo.tab_w - S(8)));
+    POINT c = { (LONG)(g_geo.strip_l + dx), (LONG)(g_tdrag.dy_dip * g_s) };
+    ClientToScreen(g_bar, &c);
+    RECT wr; GetWindowRect(g_win, &wr);
+    g_tdrag.off_dpi = GetDpiForWindow(g_win);
+    return { c.x - wr.left, c.y - wr.top };
+}
+static void float_follow(Window *f, POINT pt) {
+    if (GetDpiForWindow(f->hwnd) != g_tdrag.off_dpi) g_tdrag.off = grab_offset(f);   // (onto a screen of another scale)
+    SetWindowPos(f->hwnd, NULL, pt.x - g_tdrag.off.x, pt.y - g_tdrag.off.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+static void capture_to(Window *w) { WinScope ws(w); if (GetCapture() != g_bar) SetCapture(g_bar); }
+static void drag_in_strip(Window *w, POINT pt) {
+    WinScope ws(w);
+    g_press = { H_TAB, g_tdrag.tab };
+    g_drag_id = g_tdrag.tab;
+    g_drag_dx = g_tdrag.dx_dip * g_s;
+    g_dragging = true;
+    ScreenToClient(g_bar, &pt);
+    drag_update((float)pt.x);
+}
+static void drag_out_of_strip(Window *w) { WinScope ws(w); g_dragging = false; g_press = {}; ui_invalidate(); }
+static void bring_up(Window *w) {
+    // the window the tab goes into comes to the front (in tests, under the rest, without the focus)
+    if (g_test) SetWindowPos(w->hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    else SetForegroundWindow(w->hwnd);
+}
+static void drag_begin(POINT pt) {
+    (void)pt;
+    g_tdrag = TabDrag();
+    g_tdrag.on = true;
+    g_tdrag.tab = g_drag_id;
+    g_tdrag.dx_dip = g_drag_dx / g_s;
+    g_tdrag.dy_dip = g_press_y / g_s;
+    if (g_tabs.size() == 1) {   // the window's only tab: the window goes with it
+        if (IsZoomed(g_win)) ShowWindow(g_win, SW_RESTORE);
+        g_tdrag.floating = g_cw->id;
+        g_cw->dragged = true;
+        g_tdrag.off = grab_offset(g_cw);
+    } else g_dragging = true;
+}
+static void drag_end() {
+    if (!g_tdrag.on) return;
+    TabDrag d = g_tdrag;
+    g_tdrag = TabDrag();
+    for (auto &w : g_windows) { WinScope ws(w.get()); g_dragging = false; g_press = {}; ui_invalidate(); }
+    if (Window *f = win_by_id(d.floating)) { f->dragged = false; if (!g_test) SetForegroundWindow(f->hwnd); }
+    HWND cap = GetCapture();
+    if (cap && win_of_hwnd(cap)) ReleaseCapture();
+    session_save_soon();
+}
+static void drag_mouse(POINT pt) {
+    Tab *t = tab_by_id(g_tdrag.tab);
+    Window *in = win_of_tab(t);
+    if (!t || !in) { drag_end(); return; }
+    Window *fl = g_tdrag.floating ? win_by_id(g_tdrag.floating) : nullptr;
+    Window *target = strip_under(pt, fl);
+    if (fl) {
+        if (!target) { float_follow(fl, pt); return; }
+        // over another window's strip: the tab goes in there, and its own window goes
+        g_tdrag.floating = 0;
+        fl->dragged = false;
+        tab_move(t, target, slot_at(target, pt), true);
+        capture_to(target);
+        bring_up(target);
+        drag_in_strip(target, pt);
+        if (fl->tabs.empty()) {
+            ShowWindow(fl->hwnd, SW_HIDE);
+            int fid = fl->id;
+            ui_post([fid] { Window *w = win_by_id(fid); if (w && w->tabs.empty()) win_close(w); });   // (not under its own messages)
+        }
+        log_line(L"pestaña arrastrada a la ventana " + std::to_wstring(target->id));
+        return;
+    }
+    RECT strip = strip_on_screen(in);
+    if (PtInRect(&strip, pt) && IsWindowVisible(in->hwnd)) { drag_in_strip(in, pt); return; }
+    if (target && target != in) {   // straight from one strip into another
+        drag_out_of_strip(in);
+        tab_move(t, target, slot_at(target, pt), true);
+        capture_to(target);
+        bring_up(target);
+        drag_in_strip(target, pt);
+        return;
+    }
+    // out of every strip: a window of its own, under the mouse, as big as the one it left
+    drag_out_of_strip(in);
+    if (in->tabs.size() == 1) {
+        g_tdrag.floating = in->id;
+        in->dragged = true;
+        g_tdrag.off = grab_offset(in);
+        float_follow(in, pt);
+        return;
+    }
+    RECT r;
+    WINDOWPLACEMENT wp = { sizeof(wp) };
+    if (IsZoomed(in->hwnd) || in->fullscreen) { GetWindowPlacement(in->hwnd, &wp); r = in->fullscreen ? in->before_fs.rcNormalPosition : wp.rcNormalPosition; }
+    else GetWindowRect(in->hwnd, &r);
+    OffsetRect(&r, pt.x - r.left - (LONG)(g_tdrag.dx_dip * 2), pt.y - r.top - (LONG)(g_tdrag.dy_dip));
+    Window *nw = win_new(&r);
+    SetPropW(nw->hwnd, L"colocada", (HANDLE)1);   // (where the drag puts it, also in tests)
+    nw->dragged = true;
+    g_tdrag.floating = nw->id;
+    tab_move(t, nw, 0, true);
+    g_tdrag.off = grab_offset(nw);
+    float_follow(nw, pt);
+    win_show(nw, !g_test);
+    { WinScope ws(nw); tab_activate(g_active); }
+    capture_to(nw);
+    log_line(L"pestaña sacada a una ventana nueva");
+}
+static POINT event_point(HWND h, LPARAM lp) {
+    // where the mouse was, on the screen: from the message itself (a window following the mouse has moved since its
+    // client coordinates were taken); tests send their own coordinates
+    if (!g_test) { DWORD mp = GetMessagePos(); return { GET_X_LPARAM(mp), GET_Y_LPARAM(mp) }; }
+    POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+    ClientToScreen(h, &p);
+    return p;
+}
+void ui_test_drag(int step, int a, int b, int c) {
+    // tests (pluma-prueba:arrastre...): 0 grab tab a of the current window by its middle, 1 move by (b, c) pixels,
+    // 2 move to (b, c) of window a's bar, 3 drop
+    if (step == 0) {
+        if (a < 0 || a >= (int)g_tabs.size()) return;
+        int id = g_tabs[a]->id;
+        for (auto &s : tab_slots(now_ms(), true)) if (s.t->id == id) {
+            g_press = { H_TAB, id };
+            g_drag_id = id;
+            g_drag_dx = s.w / 2;
+            g_press_x = s.x + s.w / 2;
+            g_press_y = S(kTabY + kTabH / 2);
+        }
+        g_test_pointer = { (LONG)g_press_x, (LONG)g_press_y };
+        ClientToScreen(g_bar, &g_test_pointer);
+        return;
+    }
+    if (step == 1) { g_test_pointer.x += b; g_test_pointer.y += c; }
+    if (step == 2) {
+        Window *w = win_by_id(a);
+        if (!w) return;
+        POINT p = { b, c };
+        ClientToScreen(w->bar, &p);
+        g_test_pointer = p;
+    }
+    if (step == 3) { drag_end(); return; }
+    if (!g_tdrag.on) {
+        if (g_press.what != H_TAB) return;
+        drag_begin(g_test_pointer);
+    }
+    drag_mouse(g_test_pointer);
+}
+void ui_open_tab_menu_quietly() {
+    // tests: the active tab's menu, under it, without the focus
+    Tab *t = active_tab();
+    if (!t) return;
+    for (auto &s : tab_slots(now_ms(), true)) if (s.t == t) {
+        POINT pt = { (LONG)(s.x + s.w / 2), (LONG)S(kTabY + kTabH) };
+        ClientToScreen(g_bar, &pt);
+        open_menu_page(PAGE_TAB, { pt.x, pt.y, pt.x, pt.y }, t->id, true);
+    }
+}
 static void ntp_refresh() { g_ntp_filled = false; g_hover = HitInfo(); ui_layout(); }
 static void ntp_take_off(size_t i) {
     // a row off the new tab page: one of the person's own pages, or a suggested site (it does not come back), with a
@@ -2393,6 +2688,9 @@ static void bar_click(HitInfo h, float x, float y) {
     }
 }
 static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    Window *self = win_of_hwnd(h);
+    if (!self) return DefWindowProcW(h, msg, wp, lp);   // (before its window knows it, or once it is closing)
+    WinScope ws(self);
     switch (msg) {
     case WM_NCHITTEST: {
         POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
@@ -2416,9 +2714,15 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         // (not in tests: they move the mouse with messages, and Windows, seeing the real one elsewhere, says it left)
         if (!g_tracking && !g_test) { TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 }; TrackMouseEvent(&tme); g_tracking = true; }
         ui_caption_hover(0);
-        if (g_press.what == H_TAB && (wp & MK_LBUTTON)) {
-            if (!g_dragging && fabs(x - g_press_x) > S(5) && g_tabs.size() > 1) g_dragging = true;
-            if (g_dragging) { drag_update(x); return 0; }
+        if (g_tdrag.on) {
+            if (wp & MK_LBUTTON) drag_mouse(event_point(h, lp)); else drag_end();
+            return 0;
+        }
+        if (g_press.what == H_TAB && (wp & MK_LBUTTON) && hypotf(x - g_press_x, y - g_press_y) > S(5)) {
+            POINT p = event_point(h, lp);
+            drag_begin(p);
+            drag_mouse(p);
+            return 0;
         }
         set_hover(hit_test(x, y));
         if (g_frozen_w > 0 && y > S(kTabRowH + 10)) { g_frozen_w = 0; compute_geo(); ui_invalidate(); }
@@ -2439,6 +2743,7 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         tip_close();
         g_press = hi;
         g_press_x = x;
+        g_press_y = y;
         if (hi.what == H_TAB) {
             // a tab is chosen on press, as in every browser; dragging moves it
             int i = tab_index(hi.id);
@@ -2459,13 +2764,12 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONUP: {
         float x = (float)GET_X_LPARAM(lp), y = (float)GET_Y_LPARAM(lp);
+        if (g_tdrag.on) { drag_end(); return 0; }
         HitInfo hi = hit_test(x, y);
         HitInfo pressed = g_press;
         g_press = {};
-        bool was_drag = g_dragging;
         g_dragging = false;
         if (GetCapture() == h) ReleaseCapture();
-        if (was_drag) { Tab *t = tab_by_id(g_drag_id); if (t) { auto sl = tab_slots(now_ms()); (void)sl; } ui_invalidate(); return 0; }
         if (hi.what == pressed.what && hi.id == pressed.id && hi.what != H_TAB) bar_click(hi, x, y);
         ui_invalidate();
         return 0;
@@ -2493,7 +2797,15 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
-    case WM_CAPTURECHANGED: if (g_dragging) { g_dragging = false; ui_invalidate(); } return 0;
+    case WM_CAPTURECHANGED:
+        if (g_tdrag.on) {
+            Window *o = win_of_hwnd((HWND)lp);
+            if (o && (HWND)lp == o->bar) return 0;   // (the drag went on to another of our windows' bars)
+            drag_end();
+            return 0;
+        }
+        if (g_dragging) { g_dragging = false; ui_invalidate(); }
+        return 0;
     case WM_COMMAND:
         if ((HWND)lp == g_edit && HIWORD(wp) == EN_CHANGE && !g_in_change) {
             int n = GetWindowTextLengthW(g_edit);
@@ -2513,16 +2825,6 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return (LRESULT)g_edit_brush;
     }
     case WM_APP + 21: { auto f = (std::function<void()> *)lp; (*f)(); delete f; return 0; }
-    case WM_APP + 22: {   // one animation frame
-        g_frame_pending = false;
-        double now = now_ms();
-        bool busy = false;
-        if (g_bar_busy) { paint(); busy |= g_bar_busy; }
-        for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble, &g_tip })
-            if (p->h && (p->fade.running(now) || p->slide.running(now) || p->closing)) { panel_render(*p); busy |= p->h != NULL; }
-        if (!busy) g_anim_on = false;
-        return 0;
-    }
     case WM_TIMER:
         if (wp == 34) {   // the mouse rests on a tab that was let go: it starts loading before the click
             KillTimer(h, 34);
@@ -2558,7 +2860,8 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
     if (ctrl && !alt) {
         if (vk == 'T' && shift) { tab_reopen_closed(); return true; }
         if (vk == 'N' && shift) { app_open_incognito(); return true; }   // the incognito window, as in Chrome
-        if (vk == 'T' || vk == 'N') { tab_new(L"", true); return true; }
+        if (vk == 'N') { win_open_new(); return true; }   // a new window, as in every browser
+        if (vk == 'T') { tab_new(L"", true); return true; }
         if (vk == 'W' || vk == VK_F4) { tab_close(g_active); return true; }
         if (vk == VK_TAB || vk == VK_PRIOR || vk == VK_NEXT) {
             if (g_tabs.size() < 2) return true;
@@ -2617,12 +2920,8 @@ void ui_init() {
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, g_d2d.GetAddressOf());
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown **)g_dw.GetAddressOf());
     CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&g_wic));
-    g_s = GetDpiForWindow(g_win) / 96.0f;
     load_fonts();
-    make_formats();
     g_theme.snap(dark_theme() ? 1.0f : 0.0f);
-    BOOL dark = dark_theme();
-    DwmSetWindowAttribute(g_win, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
 
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.style = CS_DBLCLKS;
@@ -2637,15 +2936,24 @@ void ui_init() {
     pc.lpszClassName = L"PlumaPanel";
     pc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     RegisterClassExW(&pc);
+    start_animation_thread();
+}
+void ui_window_init() {
+    // the current window's own: its bar, its address field, its scale and the text sizes for it
+    g_s = GetDpiForWindow(g_win) / 96.0f;
+    make_formats();
+    BOOL dark = dark_theme();
+    DwmSetWindowAttribute(g_win, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
     RECT rc; GetClientRect(g_win, &rc);
     g_bar = CreateWindowExW(0, L"PlumaBarra", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, rc.right, rc.bottom, g_win, NULL, g_inst, NULL);
     g_edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 100, 20, g_bar, NULL, g_inst, NULL);
     SendMessageW(g_edit, WM_SETFONT, (WPARAM)g_edit_font, FALSE);
     SendMessageW(g_edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
     SendMessageW(g_edit, EM_SETLIMITTEXT, 8000, 0);
-    g_edit_proc = (WNDPROC)SetWindowLongPtrW(g_edit, GWLP_WNDPROC, (LONG_PTR)edit_proc);
+    WNDPROC old = (WNDPROC)SetWindowLongPtrW(g_edit, GWLP_WNDPROC, (LONG_PTR)edit_proc);
+    if (!g_edit_proc) g_edit_proc = old;   // (the same EDIT procedure for every window)
     compute_geo();
-    start_animation_thread();
+    if (g_windows.size() > 1) ui_taskbar_badge();
 }
 void ui_layout() {
     if (!g_bar) return;
@@ -2665,17 +2973,23 @@ void ui_layout() {
 void ui_theme_changed() {
     g_theme.go(dark_theme() ? 1.0f : 0.0f, 300);
     BOOL dark = dark_theme();
-    DwmSetWindowAttribute(g_win, 20, &dark, sizeof(dark));
-    InvalidateRect(g_win, NULL, FALSE);
-    if (g_edit) InvalidateRect(g_edit, NULL, TRUE);
-    ui_invalidate();
+    for (auto &w : g_windows) {
+        WinScope ws(w.get());
+        DwmSetWindowAttribute(g_win, 20, &dark, sizeof(dark));
+        InvalidateRect(g_win, NULL, FALSE);
+        if (g_edit) InvalidateRect(g_edit, NULL, TRUE);
+        ui_invalidate();
+    }
 }
 void ui_font_changed() {
     load_fonts();
-    make_formats();
-    SendMessageW(g_edit, WM_SETFONT, (WPARAM)g_edit_font, TRUE);
-    compute_geo();
-    ui_invalidate();
+    for (auto &w : g_windows) {
+        WinScope ws(w.get());
+        make_formats();
+        SendMessageW(g_edit, WM_SETFONT, (WPARAM)g_edit_font, TRUE);
+        compute_geo();
+        ui_invalidate();
+    }
 }
 void ui_dpi_changed() {
     g_s = GetDpiForWindow(g_win) / 96.0f;
@@ -2712,7 +3026,7 @@ void ui_taskbar_badge() {
         tb->HrInit();
     }
     static HICON badge;
-    if (g_incognito || profiles_list().size() < 2) { tb->SetOverlayIcon(g_win, NULL, NULL); return; }
+    if (g_incognito || profiles_list().size() < 2) { for (auto &w : g_windows) tb->SetOverlayIcon(w->hwnd, NULL, NULL); return; }
     // its avatar, drawn once into an icon
     const int n = 32;
     Profile p = profile_current();
@@ -2754,7 +3068,137 @@ void ui_taskbar_badge() {
     DeleteObject(color); DeleteObject(mask);
     if (!icon) return;
     std::wstring name = profile_shown_name(p);
-    tb->SetOverlayIcon(g_win, icon, name.c_str());
+    for (auto &w : g_windows) tb->SetOverlayIcon(w->hwnd, icon, name.c_str());
     if (badge) DestroyIcon(badge);
     badge = icon;
+}
+
+// ---------------------------------------------------------------- the state of each window's bar
+// (one per window, made at its first use; the names above are these fields of the current window, g_cw)
+#undef g_s
+#undef g_rt
+#undef g_br
+#undef g_f
+#undef g_edit_font
+#undef g_ghosts
+#undef g_icons
+#undef g_host_icons
+#undef g_ext_icons
+#undef g_sheet_k
+#undef g_notice_h
+#undef g_addr_focus
+#undef g_menu_btn_open
+#undef g_sheet_from
+#undef g_sheet_to
+#undef g_frozen_w
+#undef g_hover
+#undef g_press
+#undef g_btn_hover
+#undef g_caption_hot
+#undef g_caption_down
+#undef g_tracking
+#undef g_dragging
+#undef g_active_window
+#undef g_drag_id
+#undef g_drag_dx
+#undef g_drag_x
+#undef g_press_x
+#undef g_press_y
+#undef g_notice
+#undef g_addr_text
+#undef g_ntp_rows
+#undef g_ntp_pins
+#undef g_ntp_filled
+#undef g_typed
+#undef g_geo
+#undef g_strip_end
+#undef g_bar_busy
+struct UiWin {
+    float g_s = 1;
+    ComPtr<ID2D1HwndRenderTarget> g_rt{};
+    ComPtr<ID2D1SolidColorBrush> g_br{};
+    Formats g_f{};
+    HFONT g_edit_font = NULL;
+    std::vector<Ghost> g_ghosts{};
+    std::unordered_map<int, ComPtr<ID2D1Bitmap>> g_icons{};
+    std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> g_host_icons{};
+    std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> g_ext_icons{};
+    Anim g_sheet_k{};
+    Anim g_notice_h{};
+    Anim g_addr_focus{};
+    Anim g_menu_btn_open{};
+    int g_sheet_from = 0;
+    int g_sheet_to = 0;
+    float g_frozen_w = 0;
+    HitInfo g_hover{};
+    HitInfo g_press{};
+    std::unordered_map<int, Anim> g_btn_hover{};
+    int g_caption_hot = 0;
+    int g_caption_down = 0;
+    bool g_tracking = false;
+    bool g_dragging = false;
+    bool g_active_window = true;
+    int g_drag_id = 0;
+    float g_drag_dx = 0;
+    float g_drag_x = 0;
+    float g_press_x = 0;
+    float g_press_y = 0;
+    Notice g_notice{};
+    std::wstring g_addr_text{};
+    std::vector<HistoryEntry> g_ntp_rows{};
+    bool g_ntp_pins = false;
+    bool g_ntp_filled = false;
+    std::wstring g_typed{};
+    Geo g_geo{};
+    float g_strip_end = 0;
+    bool g_bar_busy = false;
+};
+static UiWin *UI() { if (!g_cw->ui) g_cw->ui = new UiWin(); return (UiWin *)g_cw->ui; }
+static float &ui_g_s() { return UI()->g_s; }
+static ComPtr<ID2D1HwndRenderTarget> &ui_g_rt() { return UI()->g_rt; }
+static ComPtr<ID2D1SolidColorBrush> &ui_g_br() { return UI()->g_br; }
+static Formats &ui_g_f() { return UI()->g_f; }
+static HFONT &ui_g_edit_font() { return UI()->g_edit_font; }
+static std::vector<Ghost> &ui_g_ghosts() { return UI()->g_ghosts; }
+static std::unordered_map<int, ComPtr<ID2D1Bitmap>> &ui_g_icons() { return UI()->g_icons; }
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_host_icons() { return UI()->g_host_icons; }
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_ext_icons() { return UI()->g_ext_icons; }
+static Anim &ui_g_sheet_k() { return UI()->g_sheet_k; }
+static Anim &ui_g_notice_h() { return UI()->g_notice_h; }
+static Anim &ui_g_addr_focus() { return UI()->g_addr_focus; }
+static Anim &ui_g_menu_btn_open() { return UI()->g_menu_btn_open; }
+static int &ui_g_sheet_from() { return UI()->g_sheet_from; }
+static int &ui_g_sheet_to() { return UI()->g_sheet_to; }
+static float &ui_g_frozen_w() { return UI()->g_frozen_w; }
+static HitInfo &ui_g_hover() { return UI()->g_hover; }
+static HitInfo &ui_g_press() { return UI()->g_press; }
+static std::unordered_map<int, Anim> &ui_g_btn_hover() { return UI()->g_btn_hover; }
+static int &ui_g_caption_hot() { return UI()->g_caption_hot; }
+static int &ui_g_caption_down() { return UI()->g_caption_down; }
+static bool &ui_g_tracking() { return UI()->g_tracking; }
+static bool &ui_g_dragging() { return UI()->g_dragging; }
+static bool &ui_g_active_window() { return UI()->g_active_window; }
+static int &ui_g_drag_id() { return UI()->g_drag_id; }
+static float &ui_g_drag_dx() { return UI()->g_drag_dx; }
+static float &ui_g_drag_x() { return UI()->g_drag_x; }
+static float &ui_g_press_x() { return UI()->g_press_x; }
+static float &ui_g_press_y() { return UI()->g_press_y; }
+static Notice &ui_g_notice() { return UI()->g_notice; }
+static std::wstring &ui_g_addr_text() { return UI()->g_addr_text; }
+static std::vector<HistoryEntry> &ui_g_ntp_rows() { return UI()->g_ntp_rows; }
+static bool &ui_g_ntp_pins() { return UI()->g_ntp_pins; }
+static bool &ui_g_ntp_filled() { return UI()->g_ntp_filled; }
+static std::wstring &ui_g_typed() { return UI()->g_typed; }
+static Geo &ui_g_geo() { return UI()->g_geo; }
+static float &ui_g_strip_end() { return UI()->g_strip_end; }
+static bool &ui_g_bar_busy() { return UI()->g_bar_busy; }
+void ui_window_free() {
+    // the window goes (one of several): its panels, its drawing and what it measured
+    for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble, &g_tip })
+        if (p->h && GetWindow(p->h, GW_OWNER) == g_win) panel_free(*p);
+    UiWin *u = (UiWin *)g_cw->ui;
+    if (!u) return;
+    if (u->g_edit_font) DeleteObject(u->g_edit_font);
+    delete u;
+    g_cw->ui = nullptr;
 }

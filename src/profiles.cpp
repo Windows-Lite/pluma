@@ -15,7 +15,7 @@ static const std::vector<unsigned> kColors = { 0x2f6fed, 0x0f9d58, 0xe8710a, 0xd
 const std::vector<unsigned> &profile_colors() { return kColors; }
 static std::wstring list_file() { return g_state + L"\\perfiles.tsv"; }
 static std::wstring last_file() { return g_state + L"\\perfil-ultimo.txt"; }
-static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2;
+static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_FRONT = WM_APP + 4;   // (FRONT: its window to the front; SHOW opens one more if one is open)
 static const ULONG_PTR kCopyProfile = 0x504C56, kCopyOpenHere = 0x504C57;   // (main.cpp)
 
 bool profile_valid_id(const std::wstring &id) {
@@ -103,7 +103,7 @@ static std::vector<HWND> other_windows() {
     EnumWindows([](HWND h, LPARAM lp) -> BOOL {
         auto *c = (Ctx *)lp;
         wchar_t cls[160];
-        if (GetClassNameW(h, cls, 160) && starts_with(cls, c->prefix.c_str()) && h != g_win) c->out.push_back(h);
+        if (GetClassNameW(h, cls, 160) && starts_with(cls, c->prefix.c_str()) && !win_of_hwnd(h)) c->out.push_back(h);   // (not this one's own windows)
         return TRUE;
     }, (LPARAM)&ctx);
     return ctx.out;
@@ -113,14 +113,17 @@ void profiles_quit_others() { for (HWND h : other_windows()) PostMessageW(h, WM_
 static void broadcast_changed() {
     // the others read the list again (names, colours): their bar, title and settings pages
     HWND def = profile_window(L"");
-    if (def && def != g_win) PostMessageW(def, WM_APP + 42, 0, 0);
+    if (def && !win_of_hwnd(def)) PostMessageW(def, WM_APP + 42, 0, 0);
     for (HWND h : other_windows()) PostMessageW(h, WM_APP + 42, 0, 0);
 }
 void profiles_changed() {
     g_list_read = false;
-    Tab *t = active_tab();
-    if (g_win) SetWindowTextW(g_win, (!t || t->title.empty() ? app_name() : t->title + L" - " + app_name()).c_str());
-    ui_layout();
+    for (auto &w : g_windows) {   // (every window's title says the profile, and its bar shows it)
+        WinScope ws(w.get());
+        Tab *t = active_tab();
+        SetWindowTextW(g_win, (!t || t->title.empty() ? app_name() : t->title + L" - " + app_name()).c_str());
+        ui_layout();
+    }
     ui_taskbar_badge();
     settings_page_refresh();
 }
@@ -165,7 +168,7 @@ void profile_open(const std::wstring &id, const std::vector<std::wstring> &urls)
         DWORD pid = 0; GetWindowThreadProcessId(w, &pid);
         AllowSetForegroundWindow(pid);
         if (!urls.empty()) send_lines(w, kCopyOpenHere, urls);
-        else PostMessageW(w, WM_APP_SHOW, 0, 0);
+        else PostMessageW(w, WM_APP_FRONT, 0, 0);
         return;
     }
     if (g_profile_id.empty() && !g_incognito) { profile_launch_child(id, urls); return; }

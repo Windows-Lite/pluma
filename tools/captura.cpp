@@ -1,5 +1,6 @@
 // captura.exe <window class> <out.png> [click x y | rclick x y | mclick x y | move x y | key vk | char text | wait ms
-//                                       | cls class | burst n ms]...
+//                                       | cls class | burst n ms | drag x1 y1 x2 y2 steps]...
+// <window class> may be "class|words": the window of that class whose title has those words (one of several windows)
 // Takes a picture of a window (also one off the screen) with everything DWM composes in it, web pages included,
 // and can first send it mouse and key messages, for testing Pluma without touching the screen or the focus.
 // burst n ms: n pictures, one every ms (out.png -> out-00.png, out-01.png...), to catch what flickers.
@@ -37,6 +38,39 @@ static void mouse(HWND top, int x, int y, UINT down, UINT up) {
     LPARAM lp = MAKELPARAM(q.x, q.y);
     SendMessageW(h, WM_MOUSEMOVE, 0, lp);
     if (down) { SendMessageW(h, down, down == WM_LBUTTONDOWN ? MK_LBUTTON : 0, lp); Sleep(30); SendMessageW(h, up, 0, lp); }
+}
+static void drag(HWND top, int x1, int y1, int x2, int y2, int steps) {
+    // the left button down at (x1, y1), moved in steps to (x2, y2) (anywhere, also off the window: a tab taken out of
+    // its strip) and up there; every message to the window under the start, as when it holds the mouse
+    // (the points stay where they are on the screen: the window may move with the drag, as one with a single tab)
+    HWND h = child_at(top, x1, y1);
+    POINT a = { x1, y1 }, b = { x2, y2 };
+    ClientToScreen(top, &a); ClientToScreen(top, &b);
+    auto at = [&](int x, int y) { POINT q = { x, y }; ScreenToClient(h, &q); return MAKELPARAM(q.x, q.y); };
+    SendMessageW(h, WM_MOUSEMOVE, 0, at(a.x, a.y));
+    SendMessageW(h, WM_LBUTTONDOWN, MK_LBUTTON, at(a.x, a.y));
+    if (steps < 1) steps = 1;
+    for (int k = 1; k <= steps; k++) {
+        Sleep(16);
+        if (!IsWindow(h)) return;
+        SendMessageW(h, WM_MOUSEMOVE, MK_LBUTTON, at(a.x + (b.x - a.x) * k / steps, a.y + (b.y - a.y) * k / steps));
+    }
+    Sleep(30);
+    if (IsWindow(h)) SendMessageW(h, WM_LBUTTONUP, 0, at(b.x, b.y));
+}
+static HWND find(const std::wstring &spec) {
+    size_t bar = spec.find(L'|');
+    if (bar == std::wstring::npos) return FindWindowW(spec.c_str(), NULL);
+    struct Ctx { std::wstring cls, words; HWND out; } c = { spec.substr(0, bar), spec.substr(bar + 1), NULL };
+    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
+        auto *c = (Ctx *)lp;
+        wchar_t cls[256], title[512];
+        if (!GetClassNameW(h, cls, 256) || c->cls != cls) return TRUE;
+        GetWindowTextW(h, title, 512);
+        if (wcsstr(title, c->words.c_str())) { c->out = h; return FALSE; }
+        return TRUE;
+    }, (LPARAM)&c);
+    return c.out;
 }
 static IWICImagingFactory *g_wic;
 static bool shoot(HWND w, const wchar_t *path) {
@@ -105,7 +139,7 @@ int wmain(int argc, wchar_t **argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitialize(NULL);
     CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&g_wic));
-    HWND w = FindWindowW(argv[1], NULL);
+    HWND w = find(argv[1]);
     if (!w) { fprintf(stderr, "no window\n"); return 1; }
     for (int i = 3; i < argc; i++) {
         std::wstring a = argv[i];
@@ -129,8 +163,11 @@ int wmain(int argc, wchar_t **argv) {
             if (GetGUIThreadInfo(GetWindowThreadProcessId(w, NULL), &gi)) f = gi.hwndFocus;
             if (!f) { fprintf(stderr, "nothing has the focus\n"); continue; }
             for (const wchar_t *c = argv[++i]; *c; c++) { SendMessageW(f, WM_CHAR, *c, 1); Sleep(15); }
+        } else if (a == L"drag" && i + 5 < argc) {
+            drag(w, _wtoi(argv[i + 1]), _wtoi(argv[i + 2]), _wtoi(argv[i + 3]), _wtoi(argv[i + 4]), _wtoi(argv[i + 5]));
+            i += 5;
         } else if (a == L"wait" && i + 1 < argc) Sleep(_wtoi(argv[++i]));
-        else if (a == L"cls" && i + 1 < argc) { HWND o = FindWindowW(argv[++i], NULL); if (o) w = o; }
+        else if (a == L"cls" && i + 1 < argc) { HWND o = find(argv[++i]); if (o) w = o; }
         else if (a == L"burst" && i + 2 < argc) {
             int n = _wtoi(argv[i + 1]), every = _wtoi(argv[i + 2]);
             i += 2;
