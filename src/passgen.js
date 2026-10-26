@@ -36,21 +36,25 @@
     for (const flags of ['v', 'u']) { try { return new RegExp('^(?:' + p + ')$', flags); } catch (e) {} }
     return null;
   };
-  // f: { minLength, maxLength, pattern } as the input element gives them (-1 / '' when absent); null if nothing fits
-  const generate = (f) => {
+  // f: { minLength, maxLength, pattern } as the input element gives them (-1 / '' when absent); null if nothing fits.
+  // make(len, set index): a candidate (build, or Pluma's own: see fromPluma)
+  const SETS = [[LOWER, UPPER, DIGITS, SYMBOLS], [LOWER, UPPER, DIGITS], [LOWER, DIGITS], [UPPER, DIGITS], [LOWER, UPPER], [LOWER], [DIGITS]];
+  const limits = (f) => {
     const lo = Math.max(4, f.minLength > 0 ? f.minLength : 0), hi = Math.min(200, f.maxLength > 0 ? f.maxLength : 200);
+    return { lo, hi, len: Math.min(hi, Math.max(lo, 15)) };
+  };
+  const generate = (f, make = (len, k) => build(len, SETS[k])) => {
+    const { lo, hi, len } = limits(f);
     if (lo > hi) return null;
-    const len = Math.min(hi, Math.max(lo, 15));
     const re = compile(f.pattern);
-    const sets = [[LOWER, UPPER, DIGITS, SYMBOLS], [LOWER, UPPER, DIGITS], [LOWER, DIGITS], [UPPER, DIGITS], [LOWER, UPPER], [LOWER], [DIGITS]];
-    if (!re) return build(len, sets[0]);
+    if (!re) return make(len, 0);
     // a pattern: the usual length first, then the nearest others, from the strongest set of characters down
     const lens = [len];
     for (let d = 1; d <= 64; d++) { if (len + d <= hi) lens.push(len + d); if (len - d >= lo) lens.push(len - d); }
-    for (const s of sets)
+    for (let s = 0; s < SETS.length; s++)
       for (let k = 0; k < lens.length; k++)
         for (let i = 0; i < (k ? 3 : 30); i++) {
-          const p = build(lens[k], s);
+          const p = make(lens[k], s);
           if (p && re.test(p)) return p;
         }
     return null;
@@ -177,7 +181,8 @@ svg { width: 20px; height: 20px; flex: none; fill: none; stroke: #3a66d6; stroke
     if (field !== el) hide();
     let pw = generated.get(el);
     if (!pw) {
-      pw = generate({ minLength: el.minLength, maxLength: el.maxLength, pattern: el.getAttribute('pattern') || '' });
+      const f = { minLength: el.minLength, maxLength: el.maxLength, pattern: el.getAttribute('pattern') || '' };
+      pw = fromPluma(f) || generate(f);
       if (!pw) return;
       generated.set(el, pw);
     }
@@ -220,6 +225,65 @@ svg { width: 20px; height: 20px; flex: none; fill: none; stroke: #3a66d6; stroke
     const pw = generated.get(field), list = group || [field];
     hide();
     for (const el of list) put(el, pw);
+    track(list[0], pw);
+  }
+
+  // ---------------------------------------------------------------- Pluma's part: the password and keeping it
+  // The engine asks before saving a password (it should not: IsPasswordAutosaveEnabled), and Pluma keeps a suggested
+  // one itself if that prompt is closed without saving. For that Pluma makes the password (so
+  // it knows it is one of its own) and hears when it was sent, with which user. Both through requests to the page's
+  // own site, at a path Pluma answers itself before anything goes out (/.well-known/pluma-passgen/: same origin, so a
+  // CSP that allows the site's own calls lets them through; web messages stay off for pages). Waited for (a few ms) so
+  // the report is out before the page goes: the engine never shows its handler a sendBeacon, and an async request can
+  // die with the page. Pluma only listens to the tab's own site (the request's Origin, which no script can set), and
+  // only to a password it made for that tab. Where that fails (a CSP without 'self'), the page makes it and the
+  // engine asks, as before.
+  const XHR = G.XMLHttpRequest, xOpen = XHR.prototype.open, xSend = XHR.prototype.send, parse = JSON.parse, json = JSON.stringify;
+  const tell = (path, body) => {
+    const x = new XHR();
+    if (!/^https?:$/.test(location.protocol)) return '';
+    xOpen.call(x, 'POST', location.origin + '/.well-known/pluma-passgen/' + path, false);
+    xSend.call(x, json(body));
+    return x.status === 200 ? x.responseText : '';
+  };
+  const fromPluma = (f) => {
+    if (CFG.incognito) return null;   // (nothing is kept from there)
+    let made = null;
+    try { const { lo, hi, len } = limits(f); if (lo <= hi) made = parse(tell('new', { lo, hi, len, pattern: !!compile(f.pattern) }) || 'null'); } catch (e) {}
+    if (!made) return null;
+    const taken = {};
+    return generate(f, (len, k) => { const b = len + ':' + k, n = taken[b] || 0; taken[b] = n + 1; return (made[b] || [])[n] || null; });
+  };
+  let used = null;   // { field, pw, submitted, user, pass }
+  const userOf = (el) => {
+    // the username, as Chromium guesses it: the nearest filled text field before the password, in its form
+    const scope = scopeOf(el);
+    const inputs = [...(scope.elements || scope.querySelectorAll('input'))].filter((x) => x.localName === 'input');
+    for (let k = inputs.indexOf(el) - 1; k >= 0; k--) {
+      const x = inputs[k];
+      if (/^(text|email|tel)$/.test(x.type) && x.value && !x.disabled) return x.value;
+    }
+    const u = scope.querySelector && scope.querySelector('input[autocomplete~="username"], input[autocomplete~="email"]');
+    return (u && u.value) || '';
+  };
+  const sent = () => {
+    if (!used || used.submitted || !used.field.value) return;
+    used.submitted = true; used.user = userOf(used.field); used.pass = used.field.value;
+    try { tell('sent', { user: used.user, pass: used.pass }); } catch (e) {}
+  };
+  function track(el, pw) {
+    if (CFG.incognito) return;   // (nothing is kept from there)
+    const first = !used;
+    used = { field: el, pw, submitted: false, user: '', pass: '' };
+    if (!first) return;
+    // sent: its form's submit, or (a form without <form>) a button pressed or Enter in the field
+    G.addEventListener('submit', (e) => { if (used && e.target && e.target.contains && e.target.contains(used.field)) sent(); }, { capture: true, passive: true });
+    G.addEventListener('click', (e) => {
+      if (!used || used.field.form) return;
+      const b = e.composedPath().find((n) => n && n.matches && n.matches('button, input[type=submit], input[type=button], [role=button]'));
+      if (b) sent();
+    }, { capture: true, passive: true });
+    G.addEventListener('keydown', (e) => { if (used && e.key === 'Enter' && e.composedPath()[0] === used.field) sent(); }, { capture: true, passive: true });
   }
   const consider = (el) => {
     if (!on || !isPw(el) || field === el || G.__pluma) return;   // (__pluma: Pluma's light pages, lite.cpp)

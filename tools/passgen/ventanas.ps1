@@ -40,6 +40,8 @@ public static class W {
 }
 "@
 if ($Stop) { [W]::StopWatch(); "ventanas del motor apartadas: $([W]::Moved)"; return }
+# (no root, no tree: with 0 the tree would take in every process started by a service, other tests' too)
+if ($Root -le 0 -or -not (Get-Process -Id $Root -ErrorAction SilentlyContinue)) { "sin raiz: nada"; return }
 $procs = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
 $tree = @{ $Root = $true }; $grew = $true
 while ($grew) { $grew = $false; foreach ($p in $procs) { if ($tree.ContainsKey([int]$p.ParentProcessId) -and -not $tree.ContainsKey([int]$p.ProcessId)) { $tree[[int]$p.ProcessId] = $true; $grew = $true } } }

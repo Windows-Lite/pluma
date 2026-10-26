@@ -245,6 +245,7 @@ int passwords_store_kind();          // 0 unknown, 10 writable (v10/DPAPI), 20 a
 void passwords_open_edge_export();   // opens edge://settings/passwords in Edge, for the user to export
 ImportResult passwords_import_pick();   // a file picker, then import the chosen CSV (passwords = how many; -1 cancelled)
 bool passwords_delete_csv();        // overwrites and deletes the CSV just imported (asked first on the page)
+int passwords_keep(const std::wstring &url, const std::wstring &user, const std::wstring &pass);   // one row for the next start (passgen.cpp)
 int passwords_apply_pending();       // at the next start, before the engine runs: writes the ready rows into Login Data
 
 // ---------------------------------------------------------------- sync / backup (sync.cpp)

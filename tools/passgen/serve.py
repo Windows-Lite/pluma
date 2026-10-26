@@ -15,6 +15,9 @@ class H(http.server.SimpleHTTPRequestHandler):
         # csp.html: as strict as accounts.google.com (Trusted Types, no inline styles): the suggestion must still work
         if self.path.startswith('/csp.html'):
             self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self'; require-trusted-types-for 'script'; trusted-types 'none'")
+        # noref.html: a page whose same-origin POSTs carry "Origin: null" (Pluma has to know them by Sec-Fetch-Site)
+        if self.path.startswith('/noref.html'):
+            self.send_header('Referrer-Policy', 'no-referrer')
         super().end_headers()
     def log_message(self, *a):
         pass
