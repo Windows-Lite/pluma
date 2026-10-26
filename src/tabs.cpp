@@ -834,7 +834,8 @@ void tab_activate(int i) {
         tabs_layout_views();
         t->ctrl->put_IsVisible(IsWindowVisible(g_win) || g_test ? TRUE : FALSE);
         if (t->crashed) { t->crashed = false; t->view->Reload(); }
-        if (old != t && GetForegroundWindow() == g_win && !t->url.empty()) t->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        // (another tab, or the window holds the focus: an address committed before this view came, address_done)
+        if ((old != t || GetFocus() == g_win) && GetForegroundWindow() == g_win && !t->url.empty()) t->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
     } else {
         ui_layout();
         ensure_view(t);
