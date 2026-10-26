@@ -42,7 +42,8 @@ public static class W {
 if ($Stop) { [W]::StopWatch(); "ventanas del motor apartadas: $([W]::Moved)"; return }
 # (no root, no tree: with 0 the tree would take in every process started by a service, other tests' too)
 if ($Root -le 0 -or -not (Get-Process -Id $Root -ErrorAction SilentlyContinue)) { "sin raiz: nada"; return }
-$procs = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
+# only the engine's processes: a reused process id once pulled the user's Task Manager into the tree
+$procs = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Select-Object ProcessId, ParentProcessId, Name
 $tree = @{ $Root = $true }; $grew = $true
 while ($grew) { $grew = $false; foreach ($p in $procs) { if ($tree.ContainsKey([int]$p.ParentProcessId) -and -not $tree.ContainsKey([int]$p.ProcessId)) { $tree[[int]$p.ProcessId] = $true; $grew = $true } } }
 if ($Watch) { $tree.Remove($Root); [W]::StartWatch([uint32[]]@($tree.Keys | ForEach-Object { [uint32]$_ })); return }

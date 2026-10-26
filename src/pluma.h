@@ -450,7 +450,16 @@ double tab_zoom_factor();
 void tab_find();
 void tab_print();
 void tab_devtools();
-void tab_downloads();
+void tab_downloads();                     // Pluma's downloads panel (Ctrl+J)
+// ---------------------------------------------------------------- downloads (downloads.cpp): Pluma's, not the engine's flyout
+struct DownloadRow { int id = 0; std::wstring name, status; float progress = -1; int state = 0; };   // state 0 on its way, 1 done, 2 failed, 3 done but the file is gone
+void downloads_watch(ICoreWebView2 *v);   // every view: its downloads are Pluma's
+std::vector<DownloadRow> downloads_rows(); // newest first
+bool downloads_any();
+void download_open(int id);               // a tab for what a tab shows (PDF, pages, pictures, text); Windows for the rest
+void download_show(int id);               // its folder, with it selected
+void download_cancel(int id);
+void downloads_open_folder();
 void session_save_soon();
 void session_save();
 void session_restore();
@@ -485,6 +494,8 @@ bool ui_translate_offer(Tab *t);          // the popup that offers to translate,
 void ui_open_translate_menu();            // ... and opened by the person (the address bar's icon)
 void ui_open_menu_quietly(bool translate); // tests: the main menu or the translate popup, without the focus
 void ui_open_profile_menu(bool quiet);      // the avatar's flyout (incognito: the badge's); quiet: tests, without the focus
+void ui_open_downloads(bool quiet);       // the downloads panel; quiet: opened by Pluma (a download started or ended), never takes the focus
+void ui_downloads_changed();              // ... shows what changed, if it is open
 void ui_bubble(RECT anchor, const std::wstring &title, const std::wstring &text, bool loading);   // under anchor (screen)
 void ui_bubble_text(const std::wstring &title, const std::wstring &text, bool loading);          // its words change
 void ui_blend_panels(BYTE *bits, int w, int h, POINT origin);   // tests: the open panels into a picture (video_debug_shot)

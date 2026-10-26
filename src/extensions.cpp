@@ -355,6 +355,7 @@ void ext_open_popup(size_t i, RECT anchor) {
             g_pop_ctrl = c;
             ComPtr<ICoreWebView2> v;
             c->get_CoreWebView2(&v);
+            downloads_watch(v.Get());   // (a download from the popup: Pluma's list, never the engine's flyout)
             EventRegistrationToken tok;
             // the popup asks for "the active tab": that is the page the person is on, not the popup itself
             std::wstring shim = L"(() => { const want = " + json_escape(page_url) + L"; const api = (globalThis.chrome && chrome.tabs) ? chrome.tabs : null;"
