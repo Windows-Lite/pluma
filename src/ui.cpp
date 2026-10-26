@@ -79,7 +79,7 @@ static D2D1_RENDER_TARGET_TYPE render_type() {
 }
 static ComPtr<ID2D1SolidColorBrush> &ui_g_br();
 #define g_br (ui_g_br())
-struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, chip, chip_b, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, title, card; };
+struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, chip, chip_b, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, avatar_ic, avatar_ic_lg, title, card; };
 static Formats &ui_g_f();
 #define g_f (ui_g_f())
 static HFONT &ui_g_edit_font();
@@ -123,6 +123,8 @@ static void make_formats() {
     g_f.notice = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.avatar = make_format(false, S(11.5f), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.avatar_lg = make_format(false, S(22), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_f.avatar_ic = make_format(true, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);   // (a built-in avatar)
+    g_f.avatar_ic_lg = make_format(true, S(24), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.title = make_format(false, S(16), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.card = make_format(false, S(15), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING);   // the translate card's title
     if (g_edit_font) DeleteObject(g_edit_font);
@@ -403,11 +405,76 @@ static std::wstring initial_of(const std::wstring &name) {
     CharUpperBuffW(one.data(), (DWORD)one.size());
     return one;
 }
-// a profile's avatar: its colour, its initial in white (big: the flyout's header)
-static void draw_avatar(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, float cx, float cy, float r, const Profile &p, bool big = false) {
+// a profile's picture at one size in pixels: avatar.png (128 px) scaled once with WIC and cut round (soft edge), so
+// every target draws it 1:1 (a bitmap shrunk by Direct2D's linear filter looks grainy). Read again when one changes.
+using BitmapCache = std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>>;
+struct AvatarPx { UINT n = 0; std::vector<BYTE> px; };
+static std::unordered_map<std::wstring, AvatarPx> g_avatar_px;
+static const AvatarPx &avatar_pixels(const std::wstring &id, UINT n) {
+    std::wstring key = id + L"@" + std::to_wstring(n);
+    auto it = g_avatar_px.find(key);
+    if (it != g_avatar_px.end()) return it->second;
+    AvatarPx a;
+    std::string png;
+    ComPtr<IStream> st;
+    ComPtr<IWICBitmapDecoder> dec;
+    ComPtr<IWICBitmapFrameDecode> fr;
+    ComPtr<IWICBitmapScaler> sc;
+    ComPtr<IWICFormatConverter> conv;
+    UINT w = 0, h = 0;
+    if (g_wic && n > 0 && n <= 512 && read_file(profile_picture_file(id), png) && png.size() < 4 * 1024 * 1024 &&
+        (st.Attach(SHCreateMemStream((const BYTE *)png.data(), (UINT)png.size())), st) &&
+        SUCCEEDED(g_wic->CreateDecoderFromStream(st.Get(), NULL, WICDecodeMetadataCacheOnDemand, &dec)) && SUCCEEDED(dec->GetFrame(0, &fr)) &&
+        SUCCEEDED(fr->GetSize(&w, &h)) && w == h && w > 0 && w <= 1024 &&
+        SUCCEEDED(g_wic->CreateBitmapScaler(&sc)) && SUCCEEDED(sc->Initialize(fr.Get(), n, n, WICBitmapInterpolationModeFant)) &&
+        SUCCEEDED(g_wic->CreateFormatConverter(&conv)) &&
+        SUCCEEDED(conv->Initialize(sc.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, NULL, 0, WICBitmapPaletteTypeMedianCut))) {
+        a.px.resize((size_t)n * n * 4);
+        if (SUCCEEDED(conv->CopyPixels(NULL, n * 4, (UINT)a.px.size(), a.px.data()))) {
+            a.n = n;
+            float c = n / 2.f;
+            for (UINT y = 0; y < n; y++)
+                for (UINT x = 0; x < n; x++) {
+                    float d = std::hypot(x + 0.5f - c, y + 0.5f - c), k = std::max(0.f, std::min(1.f, c - d + 0.5f));
+                    BYTE *q = &a.px[((size_t)y * n + x) * 4];
+                    if (k < 1) for (int i = 0; i < 4; i++) q[i] = (BYTE)lroundf(q[i] * k);   // (premultiplied: all four)
+                }
+        } else a.px.clear();
+    }
+    return g_avatar_px[key] = std::move(a);
+}
+static ComPtr<ID2D1Bitmap> avatar_bitmap(ID2D1RenderTarget *rt, const std::wstring &id, UINT n, BitmapCache *cache) {
+    std::wstring key = L"<avatar>:" + id + L"@" + std::to_wstring(n);   // (no host starts so: shares the icons' cache)
+    if (cache) { auto it = cache->find(key); if (it != cache->end()) return it->second; }
+    ComPtr<ID2D1Bitmap> b;
+    const AvatarPx &a = avatar_pixels(id, n);
+    if (a.n) rt->CreateBitmap(D2D1::SizeU(a.n, a.n), a.px.data(), a.n * 4,
+                              D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96), &b);
+    if (cache) (*cache)[key] = b;
+    return b;
+}
+// a profile's avatar, as Chrome's and Edge's: its picture, or a built-in one or its initial in white on its colour
+static void paint_avatar(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, float cx, float cy, float r, const Profile &p,
+                         IDWriteTextFormat *letter, IDWriteTextFormat *icon, BitmapCache *cache) {
+    D2D1_RECT_F box = R(cx - r, cy - r, cx + r, cy + r);
+    if (p.avatar == L"img") {
+        UINT n = (UINT)lroundf(2 * r);
+        ComPtr<ID2D1Bitmap> bm = avatar_bitmap(rt, p.id, n, cache);
+        if (bm) {
+            float l = floorf(cx - n / 2.f + 0.5f), t = floorf(cy - n / 2.f + 0.5f);   // (on whole pixels: drawn 1:1)
+            rt->DrawBitmap(bm.Get(), R(l, t, l + n, t + n), 1.f, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+            return;
+        }
+    }
     b->SetColor(rgb_of(p.color));
     rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), b);
-    text(rt, b, (big ? g_f.avatar_lg : g_f.avatar).Get(), initial_of(profile_shown_name(p)), R(cx - r, cy - r, cx + r, cy + r), hex(0xffffff));
+    int g = profile_glyph_of(p);
+    if (g >= 0) glyph(rt, b, icon, profile_glyphs()[g], box, hex(0xffffff));
+    else text(rt, b, letter, initial_of(profile_shown_name(p)), box, hex(0xffffff));
+}
+// (big: the flyout's header)
+static void draw_avatar(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, float cx, float cy, float r, const Profile &p, BitmapCache *cache, bool big = false) {
+    paint_avatar(rt, b, cx, cy, r, p, (big ? g_f.avatar_lg : g_f.avatar).Get(), (big ? g_f.avatar_ic_lg : g_f.avatar_ic).Get(), cache);
 }
 static D2D1_RECT_F cap_rect(int i) { return R(g_geo.cap_l + S(kCapW) * i, 0, g_geo.cap_l + S(kCapW) * (i + 1), S(kTabRowH)); }
 static float tool_y() { return S(kTabRowH); }
@@ -828,7 +895,7 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
             text(rt, g_br.Get(), g_f.hint.Get(), T(L"Incógnito"), R(pr.left + S(28), pr.top, pr.right - S(8), pr.bottom), p.accent);
         } else {
             if (ah > 0 || down) fill(rt, g_br.Get(), ar, S(8), down ? p.press : alpha(p.hover, ah * 1.3f));
-            draw_avatar(rt, g_br.Get(), (ar.left + ar.right) / 2, cy, S(11), profile_current());
+            draw_avatar(rt, g_br.Get(), (ar.left + ar.right) / 2, cy, S(11), profile_current(), &g_host_icons);
         }
     }
     size_t k = 0;
@@ -1693,7 +1760,7 @@ static void menu_draw(Panel &p, double now) {
         if (m.kind == 8) {
             // as Edge's flyout: the profile big, its avatar and its name (incognito: its sign on the accent)
             float cx = r.left + S(36), cy = (r.top + r.bottom) / 2, rad = S(24);
-            if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), cx, cy, rad, m.prof, true);
+            if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), cx, cy, rad, m.prof, &p.icons, true);
             else {
                 p.br->SetColor(c.accent_soft);
                 p.rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), rad, rad), p.br.Get());
@@ -1760,7 +1827,7 @@ static void menu_draw(Panel &p, double now) {
         if (m.kind == 3 && !own_icon) ig = m.on ? G_CHECK : 0;
         if (m.kind == 4) ig = m.on ? G_CHECK : 0;
         if (m.kind == 7) ig = G_CHEV_L;
-        if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), ix, cy, S(11), m.prof);
+        if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), ix, cy, S(11), m.prof, &p.icons);
         else if (ig) glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), m.kind >= 3 && m.kind <= 4 && !own_icon ? c.accent : (m.danger ? c.error : c.sub));
         float tr = r.right - S(12);
         if (own_icon) {
@@ -2587,50 +2654,51 @@ static void copy_to_clipboard(const std::wstring &s) {
     }
     CloseClipboard();
 }
+static std::string glyph_png(wchar_t g, UINT px, D2D1_COLOR_F ink) {
+    // a glyph drawn once into a PNG, px wide, on transparent
+    std::string png;
+    ComPtr<IWICBitmap> bmp;
+    ComPtr<ID2D1RenderTarget> rt;
+    ComPtr<IDWriteTextFormat> f;
+    ComPtr<ID2D1SolidColorBrush> br;
+    D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+    if (g_wic && g_d2d && g_dw && SUCCEEDED(g_wic->CreateBitmap(px, px, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) &&
+        SUCCEEDED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt)) &&
+        SUCCEEDED(g_dw->CreateTextFormat(g_icon_family.c_str(), NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * 0.75f, L"", &f)) &&
+        SUCCEEDED(rt->CreateSolidColorBrush(ink, &br))) {
+        f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        rt->BeginDraw();
+        rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+        rt->DrawText(&g, 1, f.Get(), D2D1::RectF(0, 0, (float)px, (float)px), br.Get());
+        if (SUCCEEDED(rt->EndDraw())) {
+            IStream *s = SHCreateMemStream(NULL, 0);
+            ComPtr<IWICBitmapEncoder> enc;
+            ComPtr<IWICBitmapFrameEncode> fr;
+            if (s && SUCCEEDED(g_wic->CreateEncoder(GUID_ContainerFormatPng, NULL, &enc)) && SUCCEEDED(enc->Initialize(s, WICBitmapEncoderNoCache)) &&
+                SUCCEEDED(enc->CreateNewFrame(&fr, NULL)) && SUCCEEDED(fr->Initialize(NULL)) && SUCCEEDED(fr->SetSize(px, px)) &&
+                SUCCEEDED(fr->WriteSource(bmp.Get(), NULL)) && SUCCEEDED(fr->Commit()) && SUCCEEDED(enc->Commit())) {
+                STATSTG st{};
+                LARGE_INTEGER zero{};
+                if (SUCCEEDED(s->Stat(&st, STATFLAG_NONAME)) && SUCCEEDED(s->Seek(zero, STREAM_SEEK_SET, NULL))) {
+                    png.resize((size_t)st.cbSize.QuadPart);
+                    ULONG got = 0;
+                    if (FAILED(s->Read(&png[0], (ULONG)png.size(), &got)) || got != png.size()) png.clear();
+                }
+            }
+            if (s) s->Release();
+        }
+    }
+    return png;
+}
 IStream *ui_glyph_png(wchar_t g) {
     // the page's context menu takes its icons as images: the glyph drawn once, in the menu's ink (it follows the theme)
     static std::unordered_map<int, std::string> cache;
     bool dark = dark_theme();
     int key = (int)g * 2 + (dark ? 1 : 0);
     auto it = cache.find(key);
-    if (it == cache.end()) {
-        std::string png;
-        const UINT px = 32;
-        ComPtr<IWICBitmap> bmp;
-        ComPtr<ID2D1RenderTarget> rt;
-        ComPtr<IDWriteTextFormat> f;
-        ComPtr<ID2D1SolidColorBrush> br;
-        D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
-        if (g_wic && g_d2d && g_dw && SUCCEEDED(g_wic->CreateBitmap(px, px, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) &&
-            SUCCEEDED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt)) &&
-            SUCCEEDED(g_dw->CreateTextFormat(g_icon_family.c_str(), NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 24.0f, L"", &f)) &&
-            SUCCEEDED(rt->CreateSolidColorBrush(dark ? hex(0xe7eaee) : hex(0x1d2733), &br))) {
-            f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-            rt->BeginDraw();
-            rt->Clear(D2D1::ColorF(0, 0, 0, 0));
-            rt->DrawText(&g, 1, f.Get(), D2D1::RectF(0, 0, (float)px, (float)px), br.Get());
-            if (SUCCEEDED(rt->EndDraw())) {
-                IStream *s = SHCreateMemStream(NULL, 0);
-                ComPtr<IWICBitmapEncoder> enc;
-                ComPtr<IWICBitmapFrameEncode> fr;
-                if (s && SUCCEEDED(g_wic->CreateEncoder(GUID_ContainerFormatPng, NULL, &enc)) && SUCCEEDED(enc->Initialize(s, WICBitmapEncoderNoCache)) &&
-                    SUCCEEDED(enc->CreateNewFrame(&fr, NULL)) && SUCCEEDED(fr->Initialize(NULL)) && SUCCEEDED(fr->SetSize(px, px)) &&
-                    SUCCEEDED(fr->WriteSource(bmp.Get(), NULL)) && SUCCEEDED(fr->Commit()) && SUCCEEDED(enc->Commit())) {
-                    STATSTG st{};
-                    LARGE_INTEGER zero{};
-                    if (SUCCEEDED(s->Stat(&st, STATFLAG_NONAME)) && SUCCEEDED(s->Seek(zero, STREAM_SEEK_SET, NULL))) {
-                        png.resize((size_t)st.cbSize.QuadPart);
-                        ULONG got = 0;
-                        if (FAILED(s->Read(&png[0], (ULONG)png.size(), &got)) || got != png.size()) png.clear();
-                    }
-                }
-                if (s) s->Release();
-            }
-        }
-        it = cache.emplace(key, png).first;
-    }
+    if (it == cache.end()) it = cache.emplace(key, glyph_png(g, 32, dark ? hex(0xe7eaee) : hex(0x1d2733))).first;
     if (it->second.empty()) return nullptr;
     return SHCreateMemStream((const BYTE *)it->second.data(), (UINT)it->second.size());
 }
@@ -3404,7 +3472,60 @@ void ui_tab_closing(Tab *t, bool from_mouse) {
 void ui_tab_icon_changed(Tab *t) { g_icons.erase(t->id); ui_invalidate(); }
 void ui_release_icon(Tab *t) { g_icons.erase(t->id); }
 
+std::string ui_avatar_glyph_png(int n) {
+    // the settings page's built-in avatars: white, its colour behind them in the page
+    static std::unordered_map<int, std::string> cache;
+    auto &g = profile_glyphs();
+    if (n < 0 || n >= (int)g.size()) return "";
+    auto it = cache.find(n);
+    if (it == cache.end()) it = cache.emplace(n, glyph_png(g[n], 48, hex(0xffffff))).first;
+    return it->second;
+}
+void ui_avatars_changed() {
+    // a picture changed (same file name): out of every cache, read again at the next paint
+    g_avatar_px.clear();
+    auto purge = [](BitmapCache &c) { for (auto it = c.begin(); it != c.end();) it = it->first.compare(0, 9, L"<avatar>:") == 0 ? c.erase(it) : std::next(it); };
+    for (auto &w : g_windows) { WinScope ws(w.get()); purge(g_host_icons); }
+    for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble, &g_tip }) purge(p->icons);
+    for (auto &w : g_windows) { WinScope ws(w.get()); ui_invalidate(); }
+    if (g_menu.h && !g_menu.closing) panel_render(g_menu);
+}
+
 // ---------------------------------------------------------------- the taskbar: which profile a window is (as Edge's badge)
+static ComPtr<IWICBitmap> badge_bitmap() {
+    // its avatar, drawn once into a 32 px picture with a thin white ring (over any icon)
+    const int n = 32;
+    Profile p = profile_current();
+    ComPtr<IWICBitmap> bmp;
+    ComPtr<ID2D1RenderTarget> rt;
+    D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+    if (!g_wic || FAILED(g_wic->CreateBitmap(n, n, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) ||
+        FAILED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt))) return nullptr;
+    ComPtr<ID2D1SolidColorBrush> br;
+    rt->CreateSolidColorBrush(hex(0), &br);
+    auto f = make_format(false, 18, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+    auto fi = make_format(true, 17, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
+    rt->BeginDraw();
+    rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+    br->SetColor(hex(0xffffff));
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(n / 2.f, n / 2.f), n / 2.f, n / 2.f), br.Get());
+    paint_avatar(rt.Get(), br.Get(), n / 2.f, n / 2.f, n / 2.f - 1.5f, p, f.Get(), fi.Get(), nullptr);
+    if (FAILED(rt->EndDraw())) return nullptr;
+    return bmp;
+}
+bool ui_taskbar_badge_png(const std::wstring &file) {
+    // tests: the badge as the taskbar gets it, into a file (never a picture of the real taskbar)
+    ComPtr<IWICBitmap> bmp = badge_bitmap();
+    ComPtr<IWICStream> st;
+    ComPtr<IWICBitmapEncoder> enc;
+    ComPtr<IWICBitmapFrameEncode> fe;
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
+    return bmp && SUCCEEDED(g_wic->CreateStream(&st)) && SUCCEEDED(st->InitializeFromFilename(file.c_str(), GENERIC_WRITE)) &&
+           SUCCEEDED(g_wic->CreateEncoder(GUID_ContainerFormatPng, NULL, &enc)) && SUCCEEDED(enc->Initialize(st.Get(), WICBitmapEncoderNoCache)) &&
+           SUCCEEDED(enc->CreateNewFrame(&fe, NULL)) && SUCCEEDED(fe->Initialize(NULL)) && SUCCEEDED(fe->SetSize(32, 32)) &&
+           SUCCEEDED(fe->SetPixelFormat(&fmt)) && SUCCEEDED(fe->WriteSource(bmp.Get(), NULL)) && SUCCEEDED(fe->Commit()) && SUCCEEDED(enc->Commit());
+}
 void ui_taskbar_badge() {
     static ComPtr<ITaskbarList3> tb;
     if (!tb) {
@@ -3413,28 +3534,11 @@ void ui_taskbar_badge() {
     }
     static HICON badge;
     if (g_incognito || profiles_list().size() < 2) { for (auto &w : g_windows) tb->SetOverlayIcon(w->hwnd, NULL, NULL); return; }
-    // its avatar, drawn once into an icon
     const int n = 32;
     Profile p = profile_current();
-    ComPtr<IWICBitmap> bmp;
-    ComPtr<ID2D1RenderTarget> rt;
-    D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
-    if (!g_wic || FAILED(g_wic->CreateBitmap(n, n, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) ||
-        FAILED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt))) return;
-    ComPtr<ID2D1SolidColorBrush> br;
-    rt->CreateSolidColorBrush(hex(0), &br);
-    auto f = make_format(false, 18, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
-    rt->BeginDraw();
-    rt->Clear(D2D1::ColorF(0, 0, 0, 0));
-    br->SetColor(hex(0xffffff));
-    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(n / 2.f, n / 2.f), n / 2.f, n / 2.f), br.Get());   // (a thin ring, over any icon)
-    br->SetColor(rgb_of(p.color));
-    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(n / 2.f, n / 2.f), n / 2.f - 1.5f, n / 2.f - 1.5f), br.Get());
-    text(rt.Get(), br.Get(), f.Get(), initial_of(profile_shown_name(p)), R(0, 0, (float)n, (float)n), hex(0xffffff));
-    rt->EndDraw();
+    ComPtr<IWICBitmap> bmp = badge_bitmap();
     std::vector<BYTE> px(n * n * 4);
-    if (FAILED(bmp->CopyPixels(NULL, n * 4, (UINT)px.size(), px.data()))) return;
+    if (!bmp || FAILED(bmp->CopyPixels(NULL, n * 4, (UINT)px.size(), px.data()))) return;
     for (size_t i = 0; i < px.size(); i += 4) {   // icons take straight alpha
         BYTE a = px[i + 3];
         if (a && a < 255) for (int k = 0; k < 3; k++) px[i + k] = (BYTE)std::min(255, px[i + k] * 255 / a);

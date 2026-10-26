@@ -805,6 +805,7 @@ static void test_command(const std::wstring &what) {
     else if (what == L"menu-pestana") ui_open_tab_menu_quietly();
     else if (what == L"sonido") ui_open_sound_panel();   // ⋯ > Sonido
     else if (what == L"perfil") ui_open_profile_menu(true);
+    else if (starts_with(what, L"avatar-") || starts_with(what, L"elegir-imagen=") || starts_with(what, L"insignia=")) profiles_test(what);
     else if (what == L"oferta") ui_translate_offer(t);
     else if (starts_with(what, L"tarjeta=")) ui_translate_card_test(what.substr(8));
     else if (starts_with(what, L"automatica=")) { g_set.tr_offer = what.substr(11) == L"1"; settings_save(); ui_invalidate(); }
