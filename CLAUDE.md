@@ -52,7 +52,8 @@ código y commits en inglés; nada de em dashes.
   `%LOCALAPPDATA%\Pluma\extensiones`), instalar desde la Chrome Web Store o Edge Add-ons con «Añadir a Pluma»,
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
 - `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
-- `src/lite.cpp` + `src/youtube.html`, `src/music.html`, `src/lite.html`: webs ligeras, YouTube y YouTube Music (apartados de abajo).
+- `src/lite.cpp` + `src/youtube.html`, `src/music.html`, `src/reddit.html`, `src/lite.html`: webs ligeras, YouTube, YouTube Music y Reddit
+  (apartados de abajo).
 - `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
@@ -204,7 +205,7 @@ ya tenga esa funcionalidad»).
   «la versión normal en esta pestaña». La marca `pluma_normal=1|2`, la caída a la página normal y el aviso son los mismos
   para todas. Lo que comparten las páginas (colores de los dos temas, la barra con el botón de la versión normal, `t()`,
   `fallback`) va en `lite.html` (RCDATA 206) y Pluma lo pone en el sitio de `<!--PLUMA_COMUN-->` al servirlas; la de
-  YouTube lleva lo suyo. Configuración > Webs ligeras: un interruptor por web (`youtube_ligero`, `music_ligero`).
+  YouTube lleva lo suyo. Configuración > Webs ligeras: un interruptor por web (`youtube_ligero`, `music_ligero`, `reddit_ligero`).
 
 ## YouTube ligero (`src/lite.cpp`, `src/youtube.html`)
 Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos memoria, sin perder la cuenta.
@@ -233,6 +234,31 @@ Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos me
   `cver`, `cpn` como YouTube.js: `playback` al empezar y `watchtime` cada 30 s y al salir.
 - Pruebas de los lectores: `node tools\youtube-test.js` (respuestas reales recortadas en `tools\yt-respuestas`).
   Probar el flujo con sesión no se puede en la instancia de prueba: va sin cuenta.
+
+## Reddit ligero (`src/reddit.html`, RCDATA 205)
+Plan aprobado el 26/10. www.reddit.com y reddit.com (old.reddit.com no se toca): portada, subreddit y sus órdenes,
+publicación con comentarios, persona, búsqueda.
+- Reddit no da datos a una página sin su app (su `.json` da 403 sin sesión, desde aquí y desde el PC), pero su servidor
+  dibuja todo en HTML: la página pide ese HTML con las cookies (la misma dirección para una publicación; para las
+  listas, las piezas que carga su página: `/svc/shreddit/community-more-posts/<orden>/?name=`,
+  `feeds/home-feed?sort=` (sin sesión da la popular), `profiles/profile_overview-more-posts/new/?name=`,
+  `search/?q=`), lo lee con DOMParser (inerte) y pinta. La siguiente página es el `faceplate-partial` con `after=` o
+  `cursor=` del final. Sus partes llegan en `<template for=...>` (streaming): `unfold()` las pone en su sitio antes de
+  leer. Los comentarios se anidan por el DOM (el comentario más cercano), no por `depth`; «Más respuestas» y «Más
+  comentarios» son POST a `/svc/shreddit/more-comments/...` con sus campos ocultos y `csrf_token` de la cookie, como su
+  página. Votar, comentar y responder: la página normal de esa publicación (`pluma_normal=1`).
+- El HTML de los textos no es de fiar (la página corre en www.reddit.com con la sesión): `cleanBody()` deja una lista
+  corta de etiquetas y atributos, enlaces http(s) o del sitio, fotos solo de los servidores de Reddit.
+- Vídeos (v.redd.it, HLS) en el reproductor de Pluma, como en YouTube ligero (`__pluma.extract/tick`). Trampa (26/10):
+  la lista maestra va firmada para la página que la pidió (desde Pluma, 403 con cualquier cabecera); las listas de
+  cada calidad y los trozos son abiertos. Así que la página lee la maestra y se la da a Pluma (`master`), y Pluma solo
+  acepta calidades de v.redd.it. Si el vídeo no va, la publicación sigue ligera y el hueco ofrece el Reddit normal.
+- Trampas: un perfil sin cookies de Reddit puede recibir «Prove your humanity» (`blocked()`): la página normal, que la
+  resuelve, y la siguiente ya es ligera. Una vez en el Reddit normal, su app se queda con las navegaciones del mismo
+  origen (Navigation API) hasta una carga entera: Pluma no ve esos documentos. Su service worker no estorba (las
+  navegaciones llegan a Pluma igual, comprobado con uno registrado).
+- Pruebas: `node tools\reddit-test.js` (HTML real recortado en `tools\reddit-respuestas`; necesita linkedom fuera del
+  repo, en `%LOCALAPPDATA%\fp-tools\linkedom`); medidas con `node tools\lite-medir.js <puerto> <url> [cold]`.
 
 ## Modo lectura (`src/reader.cpp`, `src/reader.html`)
 Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como la vista de lectura de Firefox.

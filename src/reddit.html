@@ -1,0 +1,584 @@
+<!doctype html>
+<!-- Pluma's light Reddit page (lite.cpp serves it at Reddit's own addresses, inside the exe). Reddit gives no data to a
+     page without its app (its .json answers 403 without a session), but its server draws every page in HTML: this page
+     asks for that HTML (the same address, or the pieces Reddit's page loads after: /svc/shreddit/...) with the
+     person's cookies, reads the posts and comments out of it and draws them in a few KB, without Reddit's scripts.
+     Videos play in Pluma's player (video.cpp asks __pluma.extract(), as on the light YouTube page). Voting, commenting
+     and anything else that writes go to Reddit's own page. Written in Spanish, as the code: Pluma writes the texts in
+     the chosen language into CFG.t (t('...')). Anything that fails goes to Reddit's own page (pluma_normal=1). -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Reddit</title>
+<link rel="icon" href="https://www.redditstatic.com/shreddit/assets/favicon/64x64.png">
+<!--PLUMA_COMUN-->
+<style>
+main { max-width: 860px; }
+.sorts { display: flex; gap: 6px; margin: 0 0 14px; flex-wrap: wrap; }
+.sorts a { padding: 5px 12px; border-radius: 999px; background: var(--chip); font-size: 13px; }
+.sorts a.on { background: var(--text); color: var(--bg); }
+.sorts a::first-letter { text-transform: uppercase; }
+h1.pt { font-size: 24px; margin: 4px 0 14px; line-height: 1.25; }
+.post { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; margin-bottom: 12px; }
+.post .meta { color: var(--sub); font-size: 12.5px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.post .meta a:hover { text-decoration: underline; color: var(--text); }
+.post .meta b { color: var(--text); font-weight: 600; }
+.post h3 { margin: 4px 0 8px; font-size: 17px; line-height: 1.3; font-weight: 600; }
+.post h3 a:visited { color: var(--sub); }
+.post.full h3 { font-size: 22px; }
+.tag { font-size: 11px; border-radius: 6px; padding: 0 6px; background: var(--chip); color: var(--sub); }
+.tag.nsfw { background: #d93a00; color: #fff; }
+.media { margin: 6px 0 8px; border-radius: 10px; overflow: hidden; background: #000; display: flex; justify-content: center; position: relative; }
+.media img { max-width: 100%; max-height: 540px; object-fit: contain; }
+.post.full .media img { max-height: 80vh; }
+.gal { display: grid; grid-auto-flow: column; grid-auto-columns: 100%; overflow-x: auto; scroll-snap-type: x mandatory; background: #000; border-radius: 10px; margin: 6px 0 8px; }
+.gal > div { scroll-snap-align: center; display: flex; justify-content: center; align-items: center; position: relative; }
+.gal img { max-width: 100%; max-height: 80vh; object-fit: contain; }
+.gal .n { position: absolute; top: 8px; right: 10px; background: rgba(0,0,0,.6); color: #fff; border-radius: 8px; padding: 1px 8px; font-size: 12px; }
+.count { position: absolute; top: 8px; right: 10px; background: rgba(0,0,0,.6); color: #fff; border-radius: 8px; padding: 1px 8px; font-size: 12px; }
+.play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.play svg { width: 64px; height: 64px; filter: drop-shadow(0 2px 6px rgba(0,0,0,.5)); }
+.link { display: inline-flex; gap: 6px; align-items: center; color: var(--accent); font-size: 13px; margin: 2px 0 8px; word-break: break-all; }
+.md { overflow-wrap: anywhere; }
+.md p { margin: 0 0 8px; }
+.md blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--strong); color: var(--sub); }
+.md pre { background: var(--chip); padding: 8px 10px; border-radius: 8px; overflow-x: auto; }
+.md code { background: var(--chip); border-radius: 4px; padding: 0 3px; font-size: 13px; }
+.md a { color: var(--accent); }
+.md img { max-width: 100%; max-height: 300px; display: inline-block; vertical-align: middle; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { font-size: 1.1em; margin: 6px 0; }
+.md table { border-collapse: collapse; } .md td, .md th { border: 1px solid var(--line); padding: 3px 8px; }
+.post .prev { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.acts { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.acts a { display: inline-flex; gap: 5px; align-items: center; padding: 4px 10px; border-radius: 999px; background: var(--chip); font-size: 13px; }
+.acts a:hover { background: var(--press); }
+.acts svg { width: 16px; height: 16px; fill: currentColor; }
+#movie_player { position: sticky; top: 64px; z-index: 4; aspect-ratio: 16 / 9; max-height: 70vh; width: 100%; background: #000 center / contain no-repeat;
+  border-radius: 10px; margin: 6px 0 8px; overflow: hidden; }
+#movie_player .veil { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; color: #fff; text-align: center; padding: 20px; }
+#movie_player .veil .btn { color: var(--text); }
+/* comments: a thread line to collapse, as Reddit's */
+.cms { margin-top: 14px; }
+.cm { position: relative; padding: 6px 0 0 16px; }
+.cm > .ln { position: absolute; left: 4px; top: 30px; bottom: 0; width: 10px; cursor: pointer; }
+.cm > .ln::before { content: ''; position: absolute; left: 4px; top: 0; bottom: 0; width: 2px; background: var(--line); border-radius: 2px; }
+.cm > .ln:hover::before { background: var(--accent); }
+.cm > .hd { font-size: 12.5px; color: var(--sub); display: flex; gap: 6px; align-items: center; cursor: pointer; user-select: none; }
+.cm > .hd b { color: var(--text); font-weight: 600; }
+.cm > .hd .op { color: var(--accent); font-weight: 600; }
+.cm > .md { margin: 3px 0 2px; }
+.cm > .cacts { display: flex; gap: 12px; font-size: 12.5px; color: var(--sub); margin-bottom: 2px; }
+.cm > .cacts a:hover { color: var(--text); text-decoration: underline; }
+.cm.closed > .md, .cm.closed > .cacts, .cm.closed > .kids, .cm.closed > .ln { display: none; }
+.cm.closed > .hd::after { content: attr(data-n); }
+.more { display: inline-block; margin: 6px 0 4px 16px; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; }
+.more:hover { text-decoration: underline; }
+.load { display: block; margin: 16px auto; }
+.pc { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 16px; margin-bottom: 12px; }
+.pc .meta { color: var(--sub); font-size: 12.5px; margin-bottom: 4px; }
+.pc .meta a { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<header id="top">
+  <a class="logo" href="/"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#ff4500"/><ellipse cx="12" cy="14" rx="6.5" ry="4.4" fill="#fff"/><circle cx="9.6" cy="13.6" r="1" fill="#ff4500"/><circle cx="14.4" cy="13.6" r="1" fill="#ff4500"/><circle cx="17" cy="7.2" r="1.3" fill="#fff"/><path d="M12 9.6 13 6l4 1.2" stroke="#fff" stroke-width=".9" fill="none"/></svg>Reddit <small id="lite"></small></a>
+  <form class="sf" id="sf" action="/search/" autocomplete="off"><input id="q" name="q" spellcheck="false"></form>
+  <nav class="links" id="links"></nav>
+  <a class="btn" id="normal"></a>
+</header>
+<main id="rl"><div class="spin"></div></main>
+<script>
+// PARSER: reading Reddit's HTML (a Document from DOMParser: inert, nothing in it loads or runs). Only DOM calls, so
+// tools/reddit-test.js runs this same block on saved answers.
+const attr = (e, n) => (e && e.getAttribute(n)) || '';
+const text = (e) => (e ? e.textContent.replace(/\s+/g, ' ').trim() : '');
+function unfold(doc) {
+  // Reddit streams parts of its pages: <template for="x"> and later a <suspense-replace> that puts it where #x is.
+  // Here every template goes in its place (or where it is, if its place is not there), so plain queries find all
+  for (let i = 0; i < 400; i++) {
+    const tp = doc.querySelector('template');
+    if (!tp) break;
+    const id = attr(tp, 'for');
+    const at = id && doc.getElementById(id);
+    const frag = tp.content;
+    if (at && at !== tp) { at.replaceWith(frag); tp.remove(); } else tp.replaceWith(frag);
+  }
+  return doc;
+}
+function blocked(doc) {
+  // Reddit's "Prove your humanity" page (a fresh profile, too many requests): none of its own elements
+  if (/prove your humanity/i.test(text(doc.querySelector('title')))) return true;
+  return !doc.querySelector('shreddit-app, shreddit-post, shreddit-comment, shreddit-profile-comment, faceplate-partial, faceplate-tracker, [data-testid=sdui-post-unit]');
+}
+const redditMedia = (u) => /^https:\/\/(preview|i|external-preview|v)\.redd\.it\//.test(u || '');
+function imgSrc(i) { return attr(i, 'src') || attr(i, 'data-lazy-src'); }
+function own(p, sel) { return [...p.querySelectorAll(sel)].filter((x) => x.closest('shreddit-post') === p); }
+function postOf(p) {
+  const permalink = attr(p, 'permalink');
+  const x = {
+    kind: 'post', id: attr(p, 'id').replace(/^t3_/, ''), title: attr(p, 'post-title'), permalink, url: attr(p, 'content-href'),
+    type: attr(p, 'post-type'), score: +attr(p, 'score') || 0, comments: +attr(p, 'comment-count') || 0,
+    created: attr(p, 'created-timestamp'), sub: attr(p, 'subreddit-prefixed-name'), author: attr(p, 'author'), domain: attr(p, 'domain'),
+    nsfw: p.hasAttribute('nsfw'), spoiler: p.hasAttribute('spoiler'), promoted: p.hasAttribute('promoted') || p.hasAttribute('is-promoted'),
+    images: [], video: '', poster: '', body: null, flair: text(own(p, 'shreddit-post-flair')[0]).slice(0, 60),
+  };
+  const pl = own(p, 'shreddit-player, shreddit-player-2').find((e) => /^https:\/\/v\.redd\.it\/[\w-]+\/HLSPlaylist\.m3u8/.test(attr(e, 'src')));
+  if (pl) { x.video = attr(pl, 'src'); x.poster = attr(pl, 'poster'); }
+  const gal = own(p, 'gallery-carousel')[0];
+  if (gal) {
+    for (const li of gal.querySelectorAll('li')) {
+      const imgs = [...li.querySelectorAll('img')].filter((i) => !/post-background-image-filter/.test(attr(i, 'class')));
+      const prev = imgs.find((i) => /non-lightboxed-content/.test(attr(i, 'class'))) || imgs[0];
+      const full = imgs.find((i) => /^https:\/\/i\.redd\.it\//.test(attr(i, 'src')));
+      if (prev && redditMedia(imgSrc(prev))) x.images.push({ src: imgSrc(prev), full: full ? attr(full, 'src') : imgSrc(prev), w: +attr(prev, 'width') || 0, h: +attr(prev, 'height') || 0 });
+    }
+  } else if (!x.video) {
+    const prim = own(p, 'img[data-post-media-primary], img.preview-img').find((i) => redditMedia(imgSrc(i)));
+    if (prim) {
+      const full = own(p, 'img.media-lightbox-img').find((i) => /^https:\/\/i\.redd\.it\//.test(attr(i, 'src')));
+      x.images.push({ src: imgSrc(prim), full: full ? attr(full, 'src') : imgSrc(prim), w: +attr(prim, 'width') || 0, h: +attr(prim, 'height') || 0 });
+    }
+  }
+  x.body = own(p, '[slot=text-body] .md, shreddit-post-text-body .md')[0] || null;
+  return x;
+}
+function profileCommentOf(c) {
+  const row = c.querySelector('shreddit-comment-action-row');
+  const post = [...c.querySelectorAll('a[href*="/comments/"]')].find((a) => !/\/comment\//.test(attr(a, 'href')) && text(a));
+  const sub = [...c.querySelectorAll('a[href^="/r/"]')].find((a) => /^\/r\/[^/]+\/?$/.test(attr(a, 'href')));
+  return { kind: 'comment', id: attr(c, 'comment-id').replace(/^t1_/, ''), href: attr(c, 'href'), score: +attr(row, 'score') || 0,
+           created: attr(c.querySelector('faceplate-timeago'), 'ts'), body: c.querySelector('.md'),
+           postTitle: post ? text(post) : '', postHref: post ? attr(post, 'href') : '', sub: sub ? text(sub) : '' };
+}
+function nextOf(doc) {
+  // the next page: the partial Reddit's page would load at the end of the list
+  const p = [...doc.querySelectorAll('faceplate-partial')].map((e) => attr(e, 'src'))
+    .find((s) => /^\/svc\/shreddit\/(community-more-posts|feeds\/(home|popular|all)-feed|profiles\/[\w-]+-more-posts|search\/|user\/)/.test(s) && /after=|cursor=/.test(s));
+  return p || '';
+}
+function parseListing(doc) {
+  unfold(doc);
+  const items = [];
+  for (const e of doc.querySelectorAll('shreddit-post, shreddit-profile-comment')) {
+    if (e.localName === 'shreddit-post') { const p = postOf(e); if (p.id && p.title && !p.promoted) items.push(p); }
+    else { const c = profileCommentOf(e); if (c.id && c.body) items.push(c); }
+  }
+  const seen = new Set();
+  return { items: items.filter((x) => !seen.has(x.kind + x.id) && seen.add(x.kind + x.id)), next: nextOf(doc) };
+}
+function parseSearch(doc) {
+  unfold(doc);
+  const items = [];
+  for (const u of doc.querySelectorAll('[data-testid=sdui-post-unit]')) {
+    const a = u.querySelector('a[data-testid=post-title-text]');
+    if (!a) continue;
+    const href = attr(a, 'href');
+    const m = /\/comments\/(\w+)/.exec(href);
+    if (!m) continue;
+    const sub = [...u.querySelectorAll('a[href^="/r/"]')].find((x) => /^\/r\/[^/]+\/?$/.test(attr(x, 'href')));
+    const nums = [...u.querySelectorAll('faceplate-number')].map((n) => +attr(n, 'number') || 0);
+    const th = [...u.querySelectorAll('img')].find((i) => redditMedia(imgSrc(i)) && !/communityIcon|profileIcon/.test(imgSrc(i)));
+    items.push({ kind: 'post', id: m[1], title: text(a), permalink: href, sub: sub ? text(sub) : '', created: attr(u.querySelector('faceplate-timeago'), 'ts'),
+                 score: nums[0] || 0, comments: nums[1] || 0, images: th ? [{ src: imgSrc(th), full: imgSrc(th), w: 0, h: 0, thumb: true }] : [],
+                 video: '', author: '', type: 'search', url: '', body: null });
+  }
+  const seen = new Set();
+  return { items: items.filter((x) => !seen.has(x.id) && seen.add(x.id)), next: nextOf(doc) };
+}
+function formOf(p) {
+  // a "more comments" partial: Reddit's page sends its hidden fields (the cursor) by POST, with the session's csrf_token
+  return { src: attr(p, 'src'), fields: [...p.querySelectorAll('input[type=hidden]')].map((i) => [attr(i, 'name'), attr(i, 'value')]) };
+}
+function commentOf(c) {
+  // its replies: the comments (and "more" pieces) whose nearest comment around them is this one
+  const mine = (e) => e.parentElement && e.parentElement.closest('shreddit-comment') === c;
+  const kids = [...c.querySelectorAll('shreddit-comment')].filter(mine).map(commentOf);
+  const more = [...c.querySelectorAll('faceplate-partial')].filter((p) => mine(p) && /more-comments/.test(attr(p, 'src')) && !/top-level=1/.test(attr(p, 'src'))).map(formOf);
+  // a thread too deep: Reddit links to it (its own page)
+  const deep = [...c.querySelectorAll('a[href*="/comment/"]')].find((a) => a.closest('shreddit-comment') === c && /more_replies|deep_thread/.test(a.innerHTML) && !a.closest('[slot=comment]'));
+  const pid = /\/comment\/(\w+)/.exec(attr(c, 'permalink'));
+  return { id: attr(c, 'thingid').replace(/^t1_/, '') || (pid ? pid[1] : ''), author: attr(c, 'author'), score: +attr(c, 'score') || 0, created: attr(c, 'created'),
+           depth: +attr(c, 'depth') || 0, permalink: attr(c, 'permalink'), deleted: !attr(c, 'author') || attr(c, 'is-comment-deleted') === 'true',
+           body: [...c.querySelectorAll('[slot=comment]')].find((b) => b.closest('shreddit-comment') === c) || null,
+           kids, more, thread: deep ? attr(deep, 'href') : '' };
+}
+function parseComments(doc) {
+  // the tree as it is nested (not by its depth numbers): roots are the comments with no comment around them
+  unfold(doc);
+  const roots = [...doc.querySelectorAll('shreddit-comment')].filter((c) => !c.parentElement || !c.parentElement.closest('shreddit-comment'));
+  const top = [...doc.querySelectorAll('faceplate-partial')].find((p) => /more-comments/.test(attr(p, 'src')) && /top-level=1/.test(attr(p, 'src')));
+  return { comments: roots.map(commentOf), more: top ? formOf(top) : null };
+}
+function parsePost(doc) {
+  unfold(doc);
+  const p = [...doc.querySelectorAll('shreddit-post')].find((e) => !e.closest('shreddit-comments-page-ad, shreddit-ad-post') && attr(e, 'view-context') !== 'AdPost');
+  if (!p) return null;
+  const post = postOf(p);
+  const tree = parseComments(doc);
+  return { post, ...tree };
+}
+// what of a post's or a comment's text goes into the page: a short list of tags and attributes, links http(s) or the
+// site's own, pictures only from Reddit's servers. Nothing else (no handlers, styles, ids, forms, frames)
+const KEEP = { p: [], br: [], a: ['href'], strong: [], b: [], em: [], i: [], del: [], s: [], sup: [], sub: [], code: [], pre: [], blockquote: [],
+               ul: [], ol: ['start'], li: [], h1: [], h2: [], h3: [], h4: [], h5: [], h6: [], hr: [], table: [], thead: [], tbody: [], tr: [],
+               th: ['align'], td: ['align'], span: [], div: [], img: ['src', 'alt', 'width', 'height'] };
+const DROP = new Set(['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'svg', 'math', 'template', 'noscript', 'link', 'meta', 'base', 'frame', 'frameset']);
+function cleanNode(parent) {
+  for (const n of [...parent.childNodes]) {
+    if (n.nodeType === 3) continue;
+    if (n.nodeType !== 1) { n.remove(); continue; }
+    const tag = n.localName;
+    if (DROP.has(tag)) { n.remove(); continue; }
+    cleanNode(n);
+    if (!Object.prototype.hasOwnProperty.call(KEEP, tag)) { n.replaceWith(...n.childNodes); continue; }
+    for (const at of [...n.attributes]) {
+      const name = at.name.toLowerCase();
+      if (!KEEP[tag].includes(name)) { n.removeAttribute(at.name); continue; }
+      let v = at.value;
+      if (name === 'href') v = /^(https?:\/\/|\/(?!\/))/i.test(v.trim()) ? v.trim() : null;
+      else if (name === 'src') v = /^https:\/\/([\w-]+\.)*(redd\.it|redditmedia\.com|redditstatic\.com|giphy\.com)\//i.test(v.trim()) ? v.trim() : null;
+      else if (v.length > 200) v = null;
+      if (v === null) n.removeAttribute(at.name); else if (v !== at.value) n.setAttribute(at.name, v);
+    }
+    if (tag === 'a') { if (!n.hasAttribute('href')) { n.replaceWith(...n.childNodes); continue; } n.setAttribute('rel', 'noopener noreferrer'); }
+    if (tag === 'img') { if (!n.hasAttribute('src')) { n.remove(); continue; } n.setAttribute('loading', 'lazy'); }
+  }
+}
+function cleanBody(e, doc) {
+  // a copy of the text, cleaned in Reddit's parsed document (inert: nothing loads there) and only then brought into
+  // the page's own (doc)
+  const from = (e && e.ownerDocument) || doc;
+  const d = from.createElement('div');
+  d.className = 'md';
+  if (e) for (const k of [...e.childNodes]) d.append(k.cloneNode(true));
+  cleanNode(d);
+  return from === doc ? d : doc.importNode(d, true);
+}
+// PARSER_FIN
+
+// ---------------------------------------------------------------- talking to Reddit
+const L = location.pathname.replace(/\/+$/, '') || '/';
+const S = new URLSearchParams(location.search);
+const parts = L.split('/').filter(Boolean);
+async function getDoc(url, opts) {
+  // Reddit's HTML for this page or a piece of it, as its own page asks for it. Anything unexpected: Reddit's own page
+  let r;
+  try { r = await fetch(url, { credentials: 'include', ...(opts || {}) }); } catch (e) { throw new Error('sin red'); }
+  if (r.status === 429) throw new Error('429: demasiadas peticiones');
+  if (r.status !== 200) throw new Error('estado ' + r.status);
+  if (!/^text\/(html|vnd\.reddit\.partial\+html)/.test(r.headers.get('content-type') || '')) throw new Error('no es HTML');
+  const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+  if (blocked(doc)) throw new Error('Reddit pide comprobar que no es un robot');
+  return doc;
+}
+function csrf() { return cookies().csrf_token || ''; }
+
+// ---------------------------------------------------------------- drawing
+const NF = new Intl.NumberFormat(HL, { notation: 'compact', maximumFractionDigits: 1 });
+const RT = new Intl.RelativeTimeFormat(HL, { numeric: 'auto', style: 'short' });
+function ago(ts) {
+  // (Reddit writes microseconds and +0000)
+  const s = (Date.parse(String(ts || '').replace(/(\.\d{3})\d+/, '$1').replace(/\+0000$/, 'Z')) - Date.now()) / 1000;
+  if (!isFinite(s)) return '';
+  for (const [u, n] of [['year', 31536000], ['month', 2592000], ['day', 86400], ['hour', 3600], ['minute', 60]])
+    if (Math.abs(s) >= n) return RT.format(Math.round(s / n), u);
+  return RT.format(0, 'minute');
+}
+const ICON = {
+  up: '<svg viewBox="0 0 20 20"><path d="M10 3 3 11h4v6h6v-6h4z"/></svg>',
+  cm: '<svg viewBox="0 0 20 20"><path d="M3 4h14v9H8l-4 3v-3H3z"/></svg>',
+  ext: '<svg viewBox="0 0 20 20" width="14" height="14" fill="currentColor"><path d="M11 3h6v6h-2V6.4l-6.3 6.3-1.4-1.4L13.6 5H11zM4 5h5v2H5v8h8v-4h2v6H3V5z"/></svg>',
+};
+const playIcon = '<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="rgba(0,0,0,.55)"/><path d="M26 20v24l19-12z" fill="#fff"/></svg>';
+function metaHtml(x) {
+  const bits = [];
+  if (x.sub) bits.push(`<b><a href="/${esc(x.sub)}/">${esc(x.sub)}</a></b>`);
+  if (x.author) bits.push(`<a href="/user/${encodeURIComponent(x.author)}/">u/${esc(x.author)}</a>`);
+  if (x.created) bits.push(esc(ago(x.created)));
+  if (x.flair) bits.push(`<span class="tag">${esc(x.flair)}</span>`);
+  if (x.nsfw) bits.push('<span class="tag nsfw">NSFW</span>');
+  if (x.spoiler) bits.push('<span class="tag">spoiler</span>');
+  return `<div class="meta">${bits.join(' · ')}</div>`;
+}
+function actsHtml(x) {
+  // voting and commenting are Reddit's: its own page for this post
+  const href = esc(normalUrl(1, x.permalink));
+  return `<div class="acts"><a href="${href}" title="${esc(t('Votar en el Reddit normal'))}">${ICON.up}${esc(NF.format(x.score))}</a>` +
+         `<a href="${esc(safeHref(x.permalink))}">${ICON.cm}${esc(NF.format(x.comments))} ${esc(t('comentarios'))}</a></div>`;
+}
+function mediaHtml(x, full) {
+  if (x.video && !full) {
+    return `<a class="media" href="${esc(safeHref(x.permalink))}" style="aspect-ratio:16/9">${x.poster ? `<img src="${esc(x.poster)}" alt="" loading="lazy">` : ''}<span class="play">${playIcon}</span></a>`;
+  }
+  if (!x.images.length) return '';
+  if (x.images.length > 1 && full) {
+    return `<div class="gal">${x.images.map((m, i) => `<div><a href="${esc(m.full)}" target="_blank" rel="noopener"><img src="${esc(m.src)}" alt="" loading="lazy"></a><span class="n">${i + 1}/${x.images.length}</span></div>`).join('')}</div>`;
+  }
+  const m = x.images[0];
+  if (m.thumb) return '';
+  const ratio = m.w && m.h ? ` style="aspect-ratio:${m.w}/${m.h}"` : '';
+  const inner = `<img src="${esc(m.src)}" alt=""${ratio} loading="lazy">${x.images.length > 1 ? `<span class="count">1/${x.images.length}</span>` : ''}`;
+  return full ? `<a class="media" href="${esc(m.full)}" target="_blank" rel="noopener">${inner}</a>` : `<a class="media" href="${esc(safeHref(x.permalink))}">${inner}</a>`;
+}
+function linkHtml(x) {
+  if (!x.url || /^https:\/\/(www\.)?reddit\.com\//.test(x.url) || redditMedia(x.url) || x.video || x.images.length && x.type !== 'link') return '';
+  if (!/^https?:\/\//.test(x.url)) return '';
+  const host = (() => { try { return new URL(x.url).host.replace(/^www\./, ''); } catch (e) { return ''; } })();
+  return `<a class="link" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${ICON.ext}${esc(host)}</a>`;
+}
+function postCard(x) {
+  const d = el(`<article class="post row-lazy">${metaHtml(x)}<h3><a href="${esc(safeHref(x.permalink))}">${esc(x.title)}</a></h3>${linkHtml(x)}${mediaHtml(x, false)}</article>`);
+  if (x.body && !x.images.length && !x.video) { const b = cleanBody(x.body, document); b.classList.add('prev'); d.append(b); }
+  d.insertAdjacentHTML('beforeend', actsHtml(x));
+  return d;
+}
+function commentCard(x) {
+  const d = el(`<article class="pc row-lazy"><div class="meta">${x.sub ? esc(x.sub) + ' · ' : ''}<a href="${esc(safeHref(x.postHref))}">${esc(x.postTitle)}</a> · ${esc(ago(x.created))}</div></article>`);
+  d.append(cleanBody(x.body, document));
+  d.insertAdjacentHTML('beforeend', `<div class="acts"><a href="${esc(normalUrl(1, x.href))}">${ICON.up}${esc(NF.format(x.score))}</a><a href="${esc(safeHref(x.href))}">${ICON.cm}${esc(t('Ver el hilo'))}</a></div>`);
+  return d;
+}
+function note(title, sub) { return `<div class="note"><b>${esc(title)}</b>${esc(sub || '')}</div>`; }
+
+// ---------------------------------------------------------------- lists: front page, subreddit, person, search
+let pendingNext = '', loadingMore = false;
+function sortsHtml(base, cur, top) {
+  const list = [['best', t('Mejores')], ['hot', t('Populares')], ['new', t('Nuevos')], ['top', t('Top')], ['rising', t('En alza')]];
+  return `<nav class="sorts">${list.map(([k, n]) => `<a class="${k === cur ? 'on' : ''}" href="${esc(base + (base.endsWith('/') ? '' : '/') + k + '/')}">${esc(n)}</a>`).join('')}</nav>`;
+}
+async function list(firstUrl, kind, head) {
+  const m = $('rl');
+  const doc = await getDoc(firstUrl);
+  const r = kind === 'search' ? parseSearch(doc) : parseListing(doc);
+  m.innerHTML = head || '';
+  const box = el('<div id="items"></div>');
+  m.append(box);
+  if (!r.items.length && !r.next) {
+    if (kind === 'search' || kind === 'user') { m.insertAdjacentHTML('beforeend', note(t('No hay nada aquí.'))); return; }
+    throw new Error('lista vacía');
+  }
+  add(box, r.items);
+  pendingNext = r.next;
+  const btn = el(`<a class="btn load" id="more"></a>`);
+  btn.textContent = t('Cargar más');
+  m.append(btn);
+  const more = async () => {
+    if (loadingMore || !pendingNext) return;
+    loadingMore = true;
+    btn.innerHTML = '<span class="spin" style="width:18px;height:18px;border-width:3px;margin:0"></span>';
+    try {
+      const d = await getDoc(pendingNext);
+      const n = kind === 'search' ? parseSearch(d) : parseListing(d);
+      add(box, n.items);
+      pendingNext = n.next && n.next !== pendingNext ? n.next : '';
+    } catch (e) { pendingNext = ''; console.warn('Pluma ligero:', e.message); }
+    loadingMore = false;
+    btn.textContent = t('Cargar más');
+    btn.hidden = !pendingNext;
+    if (pendingNext && box.children.length < 12) more();   // (Reddit's first answer has 3 posts: a screen's worth now)
+  };
+  btn.addEventListener('click', more);
+  btn.hidden = !pendingNext;
+  new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) more(); }, { rootMargin: '1200px' }).observe(btn);
+  if (box.children.length < 12) more();
+}
+const shown = new Set();
+function add(box, items) {
+  for (const x of items) {
+    if (shown.has(x.kind + x.id)) continue;
+    shown.add(x.kind + x.id);
+    box.append(x.kind === 'comment' ? commentCard(x) : postCard(x));
+  }
+}
+function feed() {
+  // the front page: the person's (signed in) or Reddit's popular one, as its page asks for it
+  const sort = (parts[0] || 'best').toLowerCase();
+  document.title = 'Reddit';
+  return list('/svc/shreddit/feeds/home-feed?sort=' + sort.toUpperCase() + (S.get('t') ? '&t=' + encodeURIComponent(S.get('t').toUpperCase()) : ''), 'feed', sortsHtml('/', sort));
+}
+function subreddit() {
+  const name = parts[1], sort = (parts[2] || 'best').toLowerCase();
+  document.title = 'r/' + name;
+  const t0 = sort === 'top' ? (S.get('t') || 'day').toUpperCase() : 'DAY';
+  return list(`/svc/shreddit/community-more-posts/${sort}/?name=${encodeURIComponent(name)}&t=${t0}`, 'sub',
+              `<h1 class="pt"><a href="/r/${esc(encodeURIComponent(name))}/">r/${esc(name)}</a></h1>` + sortsHtml('/r/' + name, sort));
+}
+function user() {
+  const name = parts[1], tab = parts[2] || '';
+  document.title = 'u/' + name;
+  const url = tab ? L + '/' : `/svc/shreddit/profiles/profile_overview-more-posts/new/?name=${encodeURIComponent(name)}`;
+  const tabs = [['', t('Publicaciones') + ' + ' + t('comentarios')], ['submitted', t('Publicaciones')], ['comments', t('comentarios')]];
+  return list(url, 'user', `<h1 class="pt">u/${esc(name)}</h1><nav class="sorts">${tabs.map(([k, n]) => `<a class="${k === tab ? 'on' : ''}" href="/user/${esc(encodeURIComponent(name))}/${k ? k + '/' : ''}">${esc(n)}</a>`).join('')}</nav>`);
+}
+function search() {
+  const q = S.get('q') || '';
+  $('q').value = q;
+  document.title = q + ' - Reddit';
+  const inSub = parts[0] === 'r' ? parts[1] : '';
+  // all of Reddit: the piece its page loads; within a subreddit, the page itself
+  const url = inSub ? location.pathname + location.search : '/svc/shreddit/search/?q=' + encodeURIComponent(q) + (S.get('sort') ? '&sort=' + encodeURIComponent(S.get('sort')) : '');
+  return list(url, 'search', `<h1 class="pt">${esc(t('Resultados para'))} «${esc(q)}»${inSub ? ' · r/' + esc(inSub) : ''}</h1>`);
+}
+
+// ---------------------------------------------------------------- a post and its comments
+const W = { id: '', video: '', poster: '', title: '', state: 'none', extracted: 0, data: null, seek: -1 };
+let opName = '';
+function commentEl(c) {
+  const d = el(`<div class="cm" data-id="${esc(c.id)}"><div class="ln"></div><div class="hd"></div><div class="cacts"></div><div class="kids"></div></div>`);
+  const hd = d.querySelector('.hd');
+  hd.innerHTML = c.deleted ? `<b>[${esc(t('borrado'))}]</b>` :
+    `<b>${esc(c.author)}</b>${c.author === opName ? '<span class="op">OP</span>' : ''}<span>· ${esc(ago(c.created))}</span><span>· ${ICON.up.replace('<svg', '<svg width="12" height="12" fill="currentColor"')} ${esc(NF.format(c.score))}</span>`;
+  const count = (x) => 1 + x.kids.reduce((a, k) => a + count(k), 0);
+  hd.dataset.n = ' [+' + count(c) + ']';
+  hd.after(cleanBody(c.body, document));
+  d.querySelector('.cacts').innerHTML = `<a href="${esc(normalUrl(1, c.permalink))}">${esc(t('Responder'))}</a><a href="${esc(safeHref(c.permalink))}">${esc(t('Enlace'))}</a>`;
+  const toggle = () => d.classList.toggle('closed');
+  hd.addEventListener('click', (e) => { if (!e.target.closest('a')) toggle(); });
+  d.querySelector('.ln').addEventListener('click', toggle);
+  const kids = d.querySelector('.kids');
+  for (const k of c.kids) kids.append(commentEl(k));
+  for (const f of c.more) kids.append(moreEl(f, kids, c.permalink));
+  if (c.thread && !c.more.length && !c.kids.length) kids.insertAdjacentHTML('beforeend', `<a class="more" href="${esc(safeHref(c.thread))}">${esc(t('Seguir el hilo'))}</a>`);
+  return d;
+}
+function moreEl(f, into, permalink) {
+  // more replies (or more comments at the end): Reddit's own piece for them, by POST as its page does
+  const a = el(`<a class="more"></a>`);
+  a.textContent = into.id === 'cms' ? t('Más comentarios') : t('Más respuestas');
+  a.addEventListener('click', async () => {
+    const token = csrf();
+    if (!token || !/^\/svc\/shreddit\/more-comments\//.test(f.src)) { location.href = normalUrl(1, permalink || location.pathname); return; }
+    a.innerHTML = '<span class="spin" style="width:16px;height:16px;border-width:3px;margin:0;display:inline-block"></span>';
+    try {
+      const body = new URLSearchParams([...f.fields, ['csrf_token', token]]);
+      const d = await getDoc(f.src, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+      const r = parseComments(d);
+      const frag = document.createDocumentFragment();
+      for (const c of r.comments) frag.append(commentEl(c));
+      if (r.more) frag.append(moreEl(r.more, into, permalink));
+      a.replaceWith(frag);
+    } catch (e) {
+      console.warn('Pluma ligero:', e.message);
+      location.href = normalUrl(1, permalink || location.pathname);
+    }
+  });
+  return a;
+}
+async function post() {
+  W.id = parts[parts.indexOf('comments') + 1] || '';
+  W.data = getDoc(location.pathname + location.search).then(parsePost);
+  let r;
+  try { r = await W.data; } catch (e) { fallback(e.message); return; }
+  if (!r || !r.post.title) { fallback('sin publicación'); return; }
+  const x = r.post;
+  opName = x.author;
+  document.title = x.title + ' : ' + x.sub;
+  const m = $('rl');
+  m.innerHTML = '';
+  const card = el(`<article class="post full">${metaHtml(x)}<h3>${esc(x.title)}</h3>${linkHtml(x)}</article>`);
+  if (x.video) {
+    W.video = x.video; W.poster = x.poster; W.title = x.title; W.state = 'wait';
+    const p = el('<div id="movie_player"></div>');
+    if (x.poster) p.style.backgroundImage = `url("${x.poster.replace(/["\\]/g, '')}")`;
+    card.append(p);
+    veil('<div class="spin"></div>');
+    // Pluma's player answers within seconds; if it never comes (it is off), Reddit's own page has the video
+    setTimeout(() => { if (W.state === 'wait') noPlayer(); }, 15000);
+  } else card.insertAdjacentHTML('beforeend', mediaHtml(x, true));
+  if (x.body) card.append(cleanBody(x.body, document));
+  card.insertAdjacentHTML('beforeend', actsHtml(x).replace('<div class="acts">', `<div class="acts"><a href="${esc(normalUrl(1))}">${esc(t('Comentar'))}</a>`));
+  m.append(card);
+  const cms = el('<section class="cms" id="cms"></section>');
+  for (const c of r.comments) cms.append(commentEl(c));
+  if (r.more) cms.append(moreEl(r.more, cms, location.pathname));
+  if (!r.comments.length && x.comments > 0) cms.insertAdjacentHTML('beforeend', `<a class="more" href="${esc(normalUrl(1))}">${esc(t('Ver los comentarios en el Reddit normal'))}</a>`);
+  m.append(cms);
+  if (parts.includes('comment') || parts.length > 5) cms.insertAdjacentHTML('afterbegin', `<a class="more" href="${esc(x.permalink)}">${esc(t('Ver todos los comentarios'))}</a>`);
+}
+function veil(html) {
+  const p = $('movie_player');
+  if (!p) return;
+  let v = p.querySelector('.veil');
+  if (!html) { if (v) v.remove(); return; }
+  if (!v) { v = el('<div class="veil"></div>'); p.append(v); }
+  v.innerHTML = html;
+}
+window.__pluma = {
+  state: () => ({ state: W.state, id: W.id, video: !!W.video }),   // (tests)
+  async extract() {
+    // video.cpp asks as soon as the page has loaded: the post's video (its HLS list on v.redd.it), or nothing to do
+    try { await W.data; } catch (e) {}
+    if (W.state !== 'wait' || !W.video) return { quiet: true };
+    W.state = 'asked';
+    W.extracted = Date.now();
+    // its master list is signed for this page: read here, given to Pluma (the lists it names are open)
+    let master = '';
+    try { const r = await fetch(W.video, { credentials: 'omit' }); if (r.ok) master = await r.text(); } catch (e) {}
+    if (!master.startsWith('#EXTM3U')) return { error: 'sin la lista de Reddit' };
+    const b = $('movie_player').getBoundingClientRect();
+    return { id: W.id, title: W.title, author: '', length: 0, hls: W.video, master, tracks: [], time: 0, state: 1,
+             volume: +(store.get('volume') || 100), muted: store.get('muted') === '1', gain: 1, speed: 1, cc: '',
+             box: [b.left, b.top, b.width, b.height], dpr: devicePixelRatio };
+  },
+  tick(pos, dur, paused, vol, muted) {
+    if (W.state !== 'on') { W.state = 'on'; veil(''); $('movie_player').style.backgroundImage = 'none'; }
+    store.set('volume', String(vol)); store.set('muted', muted ? '1' : '0');
+    const b = $('movie_player').getBoundingClientRect();
+    const s = W.seek;
+    W.seek = -1;
+    return [b.left, b.top, b.width, b.height, devicePixelRatio, s, 0];
+  },
+  ended() {
+    W.state = 'ended';
+    if (W.poster) $('movie_player').style.backgroundImage = `url("${W.poster.replace(/["\\]/g, '')}")`;
+    veil(`<a class="btn" href="${esc(location.pathname)}">${esc(t('Volver a ver'))}</a>`);
+  },
+  normal(pos, failed) {
+    // "Página de Reddit" in Pluma's player (or the player failed): Reddit's own page for this post
+    if (leaving) return;
+    leaving = true;
+    location.replace(normalUrl(1));
+  },
+  fail(why) {
+    // Pluma's player cannot play it: the rest of the post stays light; its video, on Reddit's own page
+    console.warn('Pluma ligero:', why);
+    W.state = 'failed';
+    noPlayer();
+  },
+};
+function noPlayer() {
+  veil(`<div>${esc(t('Este vídeo se abre en el Reddit normal.'))}</div><a class="btn" href="${esc(normalUrl(1))}">${esc(t('Abrir en Reddit normal'))}</a>`);
+}
+setInterval(() => { if (W.state === 'asked' && Date.now() - W.extracted > 25000) { W.state = 'failed'; noPlayer(); } }, 5000);
+
+// ---------------------------------------------------------------- the page
+function bar() {
+  $('lite').textContent = t('ligero');
+  $('q').placeholder = t('Buscar en Reddit');
+  normalButton($('normal'), t('Reddit normal'), t('Abre esta página en el Reddit de siempre, en esta pestaña'));
+  $('links').innerHTML = `<a href="/">${esc(t('Inicio'))}</a>`;
+  const inSub = parts[0] === 'r' && parts[1] ? parts[1] : '';
+  $('sf').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = $('q').value.trim();
+    if (q) location.href = (inSub && parts[2] === 'search' ? `/r/${encodeURIComponent(inSub)}/search/` : '/search/') + '?q=' + encodeURIComponent(q);
+  });
+}
+async function route() {
+  const ORD = /^(best|hot|new|top|rising)$/;
+  try {
+    if (parts.length === 0 || (parts.length === 1 && ORD.test(parts[0]))) await feed();
+    else if (parts[0] === 'search' || (parts[0] === 'r' && parts[2] === 'search')) await search();
+    else if (parts.includes('comments')) await post();
+    else if (parts[0] === 'r') await subreddit();
+    else if (parts[0] === 'user' || parts[0] === 'u') await user();
+    else fallback('dirección que esta página no hace');
+  } catch (e) { fallback(e.message); }
+}
+bar();
+route();
+</script>
+</body>
+</html>

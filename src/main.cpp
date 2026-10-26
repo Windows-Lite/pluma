@@ -172,6 +172,7 @@ void settings_load() {
     g_set.native_video = ini_get(L"video_propio", L"1") != L"0";
     g_set.youtube_lite = ini_get(L"youtube_ligero", L"1") != L"0";
     g_set.music_lite = ini_get(L"music_ligero", L"1") != L"0";
+    g_set.reddit_lite = ini_get(L"reddit_ligero", L"1") != L"0";
     g_set.suggest_top = ini_get(L"sugerir_visitadas", L"1") != L"0";
     g_set.sound.preset = ini_get(L"efecto", L"no");
     sound_eq_parse(ini_get(L"eq", L""), g_set.sound.custom.eq);
@@ -209,6 +210,7 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"video_propio", g_set.native_video ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"youtube_ligero", g_set.youtube_lite ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"music_ligero", g_set.music_lite ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"reddit_ligero", g_set.reddit_lite ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"sugerir_visitadas", g_set.suggest_top ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"lectura_letra", std::to_wstring(g_set.reader_size).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"efecto", g_set.sound.preset.c_str(), f.c_str());

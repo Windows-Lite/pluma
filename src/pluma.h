@@ -87,6 +87,7 @@ struct Settings {
     bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
     bool youtube_lite = true;          // YouTube answered with Pluma's own light page (lite.cpp)
     bool music_lite = true;            // ... YouTube Music
+    bool reddit_lite = true;           // ... Reddit
     SoundSettings sound;               // the player's sound effects (sound.cpp): efecto, eq, graves, reverb, tono
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
@@ -115,9 +116,9 @@ void ui_ntp_changed();               // the new tab page's rows are read again
 void ui_open_menu_page(const std::wstring &which);   // the menu, open at "ext" or "scripts"
 std::wstring lang_name(const wchar_t *code);         // a language by its own name ("" = Windows's)             // Pluma closes for good: a waiting update goes in for the next start
 
-// ---------------------------------------------------------------- light pages: YouTube, YouTube Music (lite.cpp)
+// ---------------------------------------------------------------- light pages: YouTube, YouTube Music, Reddit (lite.cpp)
 struct Tab;
-enum { LITE_NONE, LITE_YOUTUBE, LITE_MUSIC };
+enum { LITE_NONE, LITE_YOUTUBE, LITE_MUSIC, LITE_REDDIT };
 void lite_attach(Tab *t);                 // every view: those sites' pages answered with Pluma's light ones
 void lite_settings_changed();             // a site's setting went off: its light pages go back to the site's own
 

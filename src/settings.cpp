@@ -91,6 +91,7 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"video\":" + std::wstring(b(g_set.native_video));
     o += L",\"ytlite\":" + std::wstring(b(g_set.youtube_lite));
     o += L",\"musiclite\":" + std::wstring(b(g_set.music_lite));
+    o += L",\"redditlite\":" + std::wstring(b(g_set.reddit_lite));
     o += L",\"videoAvailable\":" + std::wstring(b(video_available()));
     // the sound effects: what is chosen, the person's own values, and what each preset does (the sliders show it)
     auto fx_json = [](const SoundFx &f) {
@@ -165,6 +166,7 @@ static void apply(const std::wstring &key, const Json &val) {
     else if (key == L"video") { g_set.native_video = val.b; settings_save(); video_settings_changed(); }
     else if (key == L"ytlite") { g_set.youtube_lite = val.b; settings_save(); lite_settings_changed(); }
     else if (key == L"musiclite") { g_set.music_lite = val.b; settings_save(); lite_settings_changed(); }
+    else if (key == L"redditlite") { g_set.reddit_lite = val.b; settings_save(); lite_settings_changed(); }
     else if (key == L"resident") { g_set.resident = val.b; settings_save(); }
     else if (key == L"spare") { g_set.spare = val.b; settings_save(); }
     else if (key == L"sleep") { g_set.sleep_s = std::max(10, (int)val.n); settings_save(); }

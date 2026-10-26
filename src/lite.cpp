@@ -1,9 +1,10 @@
-// Pluma: light pages. When a tab goes to one of the pages of a site Pluma knows (YouTube, YouTube Music),
+// Pluma: light pages. When a tab goes to one of the pages of a site Pluma knows (YouTube, YouTube Music, Reddit),
 // Pluma answers that document itself with its own light page (inside the exe, as RCDATA) at the same address. Same
-// origin: the person's cookies and session go on working. The page asks the site's own API (as its page does) and
-// draws the answer in a few KB instead of megabytes of code.
+// origin: the person's cookies and session go on working. The page asks the site's own data (YouTube's API, as its
+// page does; Reddit's own server-drawn pieces) and draws the answer in a few KB instead of megabytes of code.
 // YouTube: a video goes straight into Pluma's player (video.cpp), without YouTube's watch page loading first.
 // YouTube Music: the music plays in Pluma's player, sound only, and goes on while the page moves (it never reloads).
+// Reddit: lists, posts and comments; its videos in Pluma's player.
 // Whatever a light page does not do is the site's own page, and so is a page whose call or parsing failed: it goes to
 // the same address with pluma_normal=1 (the site's page for that address, in this tab) or pluma_normal=2 (its
 // "normal" button: all of that site in this tab, until the tab leaves it). Pluma takes the mark off before anything
@@ -77,6 +78,26 @@ static bool music_url(const std::wstring &url) {
     std::vector<std::wstring> parts = path_parts(path);
     return parts.size() == 2 && (parts[0] == L"browse" || parts[0] == L"channel");
 }
+// Reddit (www.reddit.com; reddit.com goes there by itself, and old.reddit.com is not touched): the front page, a
+// subreddit and its orders, a post with its comments, a person's page, search
+static bool reddit_host(const std::wstring &host) { return host == L"www.reddit.com" || host == L"reddit.com"; }
+static bool reddit_url(const std::wstring &url) {
+    std::wstring path, query;
+    split_url(url, wcslen(L"https://www.reddit.com"), path, query);
+    std::vector<std::wstring> p = path_parts(path);
+    auto order = [](const std::wstring &s) { return s == L"hot" || s == L"new" || s == L"top" || s == L"rising" || s == L"best"; };
+    if (p.empty()) return true;
+    if (p.size() == 1) return order(p[0]) || (p[0] == L"search" && has_param(query, L"q"));
+    if (p[0] == L"r" && p[1].find(L'+') == std::wstring::npos) {
+        if (p.size() == 2) return true;
+        if (p.size() == 3) return order(p[2]) || (p[2] == L"search" && has_param(query, L"q"));
+        return p[2] == L"comments" && p.size() <= 6;   // /r/x/comments/id[/slug[/comment]]
+    }
+    if (p[0] == L"comments") return p.size() <= 3;
+    if (p[0] == L"user" || p[0] == L"u") return p.size() == 2 || (p.size() == 3 && (p[2] == L"submitted" || p[2] == L"comments" || p[2] == L"overview"));
+    return false;
+}
+
 struct Site {
     int id;
     const wchar_t *origin;   // what Pluma answers (one origin: the light page lives there)
@@ -92,6 +113,8 @@ static const Site kSites[] = {
       L"Esta pestaña muestra el YouTube normal.", L"Volver a YouTube ligero" },
     { LITE_MUSIC, L"https://music.youtube.com", 204, &g_set.music_lite, music_host, music_url, L"YouTube Music",
       L"Esta pestaña muestra el YouTube Music normal.", L"Volver a YouTube Music ligero" },
+    { LITE_REDDIT, L"https://www.reddit.com", 205, &g_set.reddit_lite, reddit_host, reddit_url, L"Reddit",
+      L"Esta pestaña muestra el Reddit normal.", L"Volver a Reddit ligero" },
 };
 static const Site *site_of(const std::wstring &url) {
     // the site whose light page answers this address (its origin exactly)
@@ -219,7 +242,7 @@ void lite_attach(Tab *t) {
             a->get_Uri(&uri);
             std::wstring u = uri ? uri : L"";
             CoTaskMemFree(uri);
-            if (t->video && t->yt_lite) video_back_to_page(t, VIDEO_LEAVE);   // (the light page's player goes with it)
+            if (t->video && (t->yt_lite || t->lite == LITE_REDDIT)) video_back_to_page(t, VIDEO_LEAVE);   // (the light page's player goes with it)
             if (t->lite == LITE_MUSIC) audio_stop(t);   // (a new document: the light Music page goes, and its music)
             int kind = 0;
             std::wstring clean = take_mark(u, kind);
