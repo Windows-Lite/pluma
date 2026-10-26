@@ -107,6 +107,8 @@ try {
   $env:PLUMA_SYNC_FICHERO = $file
   & "$src\tools\prueba.ps1" -Nombre t213b -Puerto $pb -Url 'pluma://settings'
   [void](WaitFor { (Eval $pb 'pluma.local' "typeof sync") -eq 'function' } 30000)
+  # three older restores: only the newest two asides stay
+  foreach ($i in 1..3) { New-Item -ItemType Directory -Force "$db\antes-de-restaurar-20000101-00000$i" | Out-Null; Set-Content "$db\antes-de-restaurar-20000101-00000$i\x" 'x' }
   $f = $file -replace '\\', '\\'
   [void](Eval $pb 'pluma.local' "sync({ cmd: 'restore', path: '$f', password: '$PW' }); 'ok'")
   $ok = WaitFor { (Test-Path "$db\pluma.log") -and (Select-String -Path "$db\pluma.log" -Pattern 'restauraci.n aplicada' -Quiet) } 60000
@@ -114,7 +116,12 @@ try {
   Get-Content "$db\pluma.log" | Select-String 'restauraci' | ForEach-Object { "   " + ($_.Line -replace ' en [A-Z]:\\.*$', '') }
   Check 'sin fallos' (Select-String -Path "$db\pluma.log" -Pattern 'restauraci.n aplicada \(0 fallos\)' -Quiet)
   Check 'restore-pending borrado' (-not (Test-Path "$db\restore-pending"))
-  Check 'lo de antes, aparte' (@(Get-ChildItem "$db\antes-de-restaurar-*" -Directory -ErrorAction SilentlyContinue).Count -ge 1)
+  $asides = @(Get-ChildItem "$db\antes-de-restaurar-*" -Directory -ErrorAction SilentlyContinue | Sort-Object Name)
+  Check "solo quedan las 2 ultimas veces de antes ($($asides.Count))" ($asides.Count -eq 2 -and $asides[0].Name -like '*-20000101-000003' -and $asides[1].Name -notlike '*-2000*')
+  $aside = $asides[-1].FullName
+  Check 'lo de antes, aparte (su perfil del motor)' (Test-Path "$aside\webview2\EBWebView\Default\Preferences")
+  $caches = @(Get-ChildItem -LiteralPath $aside -Recurse -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -in 'Cache', 'Code Cache', 'GPUCache', 'blob_storage' })
+  Check "lo de antes, sin la cache ($($caches.Count) carpetas)" ($caches.Count -eq 0)
   [void](WaitFor { (Eval $pb 'pluma.local' "1") -ne $null -or (Eval $pb 'about:' "1") -ne $null } 30000)
   Start-Sleep 3
   Open t213b $site
@@ -129,6 +136,21 @@ try {
   $v = $null
   [void](WaitFor { $script:v = Eval $pb $ext "chrome.storage.local.get('t213').then((r) => r.t213 || '')"; $script:v -ne $null } 20000)
   Check 'la extension conserva su valor' ($v -eq "ext$M")
+
+  "-- una restauracion que no se puede aplicar no deja nada en claro"
+  Quit t213b $pb
+  $rp = "$db\restore-pending"
+  New-Item -ItemType Directory -Force $rp | Out-Null
+  Set-Content "$rp\APLICAR" '2' -NoNewline
+  [IO.File]::WriteAllBytes("$rp\copia.plumabk", [byte[]](1..4096 | ForEach-Object { Get-Random -Maximum 256 }))
+  [IO.File]::WriteAllBytes("$rp\llave.bin", [byte[]](1..200 | ForEach-Object { Get-Random -Maximum 256 }))
+  & "$src\tools\prueba.ps1" -Nombre t213b -Puerto $pb -Url $site
+  $ok = WaitFor { Select-String -Path "$db\pluma.log" -Pattern 'no se pudo aplicar' -Quiet } 30000
+  Check 'el registro dice que no se pudo' $ok
+  Check 'restore-pending borrado' (-not (Test-Path $rp))
+  $e = $null
+  [void](WaitFor { $script:e = Eval $pb $site 'window.__estado || null'; $script:e -ne $null } 30000)
+  Check 'y el perfil sigue como estaba (sesion iniciada)' ($e -and $e.cookie -and $e.ls -and $e.idb)
   $done = $true
 } finally {
   foreach ($n in @(@('t213a', $pa), @('t213b', $pb))) { & "$src\tools\prueba.ps1" -Nombre $n[0] -Puerto $n[1] -Salir }
