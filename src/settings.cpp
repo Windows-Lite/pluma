@@ -35,10 +35,18 @@ static int page_resource(const std::wstring &u) {
     if (path.empty() || path == L"settings") return 200;
     return 0;
 }
-void settings_open() {
+void settings_open(const std::wstring &section) {
+    std::wstring u = std::wstring(kPage) + (section.empty() ? L"" : L"#" + section);
     for (size_t i = 0; i < g_tabs.size(); i++)
-        if (settings_page_url(g_tabs[i]->url) && page_resource(g_tabs[i]->url) == 200) { tab_activate((int)i); return; }
-    tab_new(kPage, true);
+        if (settings_page_url(g_tabs[i]->url) && page_resource(g_tabs[i]->url) == 200) {
+            tab_activate((int)i);
+            if (!section.empty() && g_tabs[i]->view) {
+                std::wstring js = L"location.hash=" + json_escape(L"#" + section) + L";var s=document.getElementById(" + json_escape(section) + L");if(s)s.scrollIntoView();";
+                g_tabs[i]->view->ExecuteScript(js.c_str(), nullptr);
+            }
+            return;
+        }
+    tab_new(u, true);
 }
 
 static std::string page_html(int id) {
@@ -104,6 +112,7 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"readerSites\":[";
     { bool f = true; for (auto &s : reader_sites()) { o += (f ? L"" : L",") + json_escape(s); f = false; } }
     o += L"]";
+    o += L",\"profiles\":" + profiles_state_json();
     size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
     size_t son = 0; for (auto &s : g_scripts) if (s.enabled) son++;
     o += L",\"extensions\":" + std::to_wstring(on) + L",\"scripts\":" + std::to_wstring(son);
@@ -238,6 +247,7 @@ void settings_attach(ICoreWebView2 *v) {
             if (op == L"get") { post_state(v, j[L"texts"]); return S_OK; }
             if (op == L"set") { apply(j[L"key"].s, j[L"value"]); if (j[L"key"].s == L"startup") settings_page_refresh(); }
             else if (op == L"do") act(j[L"what"].s);
+            else if (op == L"profile") profiles_page_do(j);
             return S_OK;
         }).Get(), &tok);
 }

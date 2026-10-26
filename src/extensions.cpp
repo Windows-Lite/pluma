@@ -8,14 +8,14 @@
 
 std::vector<Extension> g_exts;
 std::wstring extensions_folder() {
-    std::wstring f = g_state + L"\\extensiones";
+    std::wstring f = g_data + L"\\extensiones";
     CreateDirectoryW(f.c_str(), NULL);
     return f;
 }
 // which folder became which extension id (WebView2 does not say), and the bundled ones the user removed
 struct Known { std::wstring folder, id; bool removed = false; };
 static std::vector<Known> g_known;
-static std::wstring known_file() { return g_state + L"\\extensiones.tsv"; }
+static std::wstring known_file() { return g_data + L"\\extensiones.tsv"; }
 static void known_load() {
     g_known.clear();
     std::string d;
@@ -349,7 +349,7 @@ void ext_open_popup(size_t i, RECT anchor) {
     HWND me = g_pop;
     Tab *t = active_tab();
     std::wstring page_url = t ? t->url : L"";
-    g_env->CreateCoreWebView2Controller(g_pop, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+    create_controller(g_pop, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
         [me, e, page_url](HRESULT hr, ICoreWebView2Controller *c) -> HRESULT {
             if (FAILED(hr) || !c || me != g_pop) { if (c) c->Close(); return S_OK; }
             g_pop_ctrl = c;
@@ -439,7 +439,7 @@ static bool unpack_crx(const std::wstring &crx, const std::wstring &dest) {
 void store_install(const std::wstring &id, bool edge) {
     ui_toast(T(L"Descargando la extensión..."));
     std::wstring dest = extensions_folder() + L"\\" + id;
-    std::wstring tmp = g_state + L"\\" + id + L".crx";
+    std::wstring tmp = g_data + L"\\" + id + L".crx";
     std::wstring url = edge
         ? L"https://edge.microsoft.com/extensionwebstorebase/v1/crx?response=redirect&x=id%3D" + id + L"%26installsource%3Dondemand%26uc"
         : L"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=155.0.0.0&acceptformat=crx2,crx3&x=id%3D" + id + L"%26uc";

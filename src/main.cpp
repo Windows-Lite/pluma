@@ -7,7 +7,7 @@
 
 HINSTANCE g_inst;
 HWND g_win, g_bar, g_edit;
-std::wstring g_root, g_state;
+std::wstring g_root, g_state, g_data, g_profile_id;
 bool g_incognito, g_test, g_test_visible, g_dev, g_quitting, g_fullscreen, g_motion = true;
 double g_open_asked = 0;
 ComPtr<ICoreWebView2Environment> g_env;
@@ -17,6 +17,8 @@ std::vector<HistoryEntry> g_history;
 static std::wstring g_class = L"PlumaVentana", g_mutex = L"PlumaNavegadorUnico";
 static const UINT WM_APP_SHOW = WM_APP + 1, WM_APP_QUIT = WM_APP + 2, WM_APP_OPEN = WM_APP + 3;
 static const ULONG_PTR kCopyOpen = 0x504C55;   // WM_COPYDATA from a second Pluma.exe: urls, one per line
+static const ULONG_PTR kCopyProfile = 0x504C56;   // ... from another profile's window: "open this profile" (id, then urls)
+static const ULONG_PTR kCopyOpenHere = 0x504C57;  // ... urls for this window itself (not routed to the last used profile)
 static const UINT_PTR kTimerQuit = 1, kTimerHistory = 2, kTimerTabs = 3, kTimerSession = 4, kTimerBurst = 5, kTimerTransitions = 6;
 static int g_burst_left, g_burst_n;   // tests: a burst of pictures
 static double g_burst_t0;
@@ -44,7 +46,8 @@ std::wstring wide(const std::string &s) {
     return w;
 }
 void log_line(const std::wstring &s) {
-    HANDLE f = CreateFileW((g_state + L"\\pluma.log").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, 0, NULL);
+    // (shared: every profile's window writes here too)
+    HANDLE f = CreateFileW((g_state + L"\\pluma.log").c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_ALWAYS, 0, NULL);
     if (f == INVALID_HANDLE_VALUE) return;
     LARGE_INTEGER size;
     if (GetFileSizeEx(f, &size)) {
@@ -54,7 +57,7 @@ void log_line(const std::wstring &s) {
     SYSTEMTIME st; GetLocalTime(&st);
     wchar_t head[64];
     swprintf_s(head, L"%04d-%02d-%02d %02d:%02d:%02d.%03d ", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    std::string u = utf8(head + s + L"\r\n");
+    std::string u = utf8(head + (g_profile_id.empty() ? L"" : L"[" + g_profile_id + L"] ") + s + L"\r\n");
     DWORD w; WriteFile(f, u.data(), (DWORD)u.size(), &w, NULL);
     CloseHandle(f);
 }
@@ -242,7 +245,7 @@ static std::wstring tsv_clean(const std::wstring &s) {
 }
 void history_load() {
     std::string data;
-    if (!read_file(g_state + L"\\historial.tsv", data)) return;
+    if (!read_file(g_data + L"\\historial.tsv", data)) return;
     std::wstring w = wide(data);
     size_t pos = 0;
     while (pos < w.size()) {
@@ -276,13 +279,29 @@ void history_flush() {
     out.reserve(g_history.size() * 120);
     for (auto &e : g_history)
         out += e.url + L"\t" + tsv_clean(e.title) + L"\t" + std::to_wstring(e.visits) + L"\t" + std::to_wstring(e.last) + L"\n";
-    write_file(g_state + L"\\historial.tsv", utf8(out));
+    write_file(g_data + L"\\historial.tsv", utf8(out));
 }
 void history_clear() {
     g_history.clear();
     g_hist_index.clear();
     g_hist_dirty = false;
-    DeleteFileW((g_state + L"\\historial.tsv").c_str());
+    DeleteFileW((g_data + L"\\historial.tsv").c_str());
+}
+void history_stash(bool push) {
+    // importing into another profile: its history in for a moment, this one's put aside untouched
+    static std::vector<HistoryEntry> saved; static bool saved_dirty;
+    if (push) { saved = std::move(g_history); saved_dirty = g_hist_dirty; g_history.clear(); g_hist_dirty = false; }
+    else { g_history = std::move(saved); saved.clear(); g_hist_dirty = saved_dirty; }
+    history_reindex();
+}
+void profile_reload_state() {
+    // another Pluma wrote this profile's history and bookmarks (an import from its window): read them again
+    g_history.clear(); g_hist_dirty = false; history_reindex();
+    history_load();
+    bookmarks_load();
+    ui_ntp_changed();
+    bm_pages_refresh();
+    ui_layout();
 }
 static bool history_worthy(const std::wstring &url) {
     return (starts_with(url, L"https://") || starts_with(url, L"http://")) && url.size() < 2048;
@@ -395,7 +414,7 @@ static std::vector<std::wstring> g_hidden_sites;
 std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file) {
     std::vector<std::vector<std::wstring>> rows;
     std::string data;
-    if (!read_file(g_state + L"\\" + file, data)) return rows;
+    if (!read_file(g_data + L"\\" + file, data)) return rows;
     std::wstring w = wide(data);
     size_t pos = 0;
     while (pos < w.size()) {
@@ -427,7 +446,7 @@ void history_hide_site(const std::wstring &url, bool hide) {
     else return;
     std::wstring out;
     for (auto &s : g_hidden_sites) out += s + L"\n";
-    write_file(g_state + L"\\ocultas.tsv", utf8(out));
+    write_file(g_data + L"\\ocultas.tsv", utf8(out));
 }
 std::vector<HistoryEntry> history_top(int n) {
     // the most visited sites, one entry per site (its front page if it was visited), but those the person took off
@@ -460,11 +479,11 @@ static void save_placement() {
     WINDOWPLACEMENT wp = { sizeof(wp) };
     if (g_fullscreen) wp = g_before_fs;
     else if (!GetWindowPlacement(g_win, &wp)) return;
-    write_file(g_state + L"\\ventana.bin", std::string((const char *)&wp, sizeof(wp)));
+    write_file(g_data + L"\\ventana.bin", std::string((const char *)&wp, sizeof(wp)));
 }
 static void restore_placement() {
     std::string s;
-    if (!read_file(g_state + L"\\ventana.bin", s) || s.size() != sizeof(WINDOWPLACEMENT)) {
+    if (!read_file(g_data + L"\\ventana.bin", s) || s.size() != sizeof(WINDOWPLACEMENT)) {
         RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
         int w = (wa.right - wa.left) * 86 / 100, h = (wa.bottom - wa.top) * 88 / 100;
         SetWindowPos(g_win, NULL, wa.left + (wa.right - wa.left - w) / 2, wa.top + (wa.bottom - wa.top - h) / 2, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -589,6 +608,8 @@ static int frame_x(HWND h) {
 static bool caption_code(int c) { return c == HTMINBUTTON || c == HTMAXBUTTON || c == HTCLOSE; }
 
 static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    static const UINT taskbar_created = RegisterWindowMessageW(L"TaskbarButtonCreated");
+    if (msg == taskbar_created && msg) { ui_taskbar_badge(); return 0; }
     switch (msg) {
     case WM_NCCALCSIZE:
         if (wp) {
@@ -659,6 +680,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ACTIVATE:
         ui_window_activated(LOWORD(wp) != WA_INACTIVE);
+        if (LOWORD(wp) != WA_INACTIVE && !g_incognito) profile_touch();
         break;
     case WM_SETFOCUS: {
         Tab *t = active_tab();
@@ -690,12 +712,13 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE:
         if (g_quitting) break;
-        if (g_set.resident && !g_incognito) { hide_window(); return 0; }   // (the incognito window goes for good)
+        // (the incognito window and other profiles' windows go for good: only the default one stays warm)
+        if (g_set.resident && !g_incognito && g_profile_id.empty()) { hide_window(); return 0; }
         quit_now();
         return 0;
     case WM_COPYDATA: {
         auto cds = (COPYDATASTRUCT *)lp;
-        if (cds->dwData != kCopyOpen || cds->cbData > (1 << 20)) return FALSE;
+        if ((cds->dwData != kCopyOpen && cds->dwData != kCopyProfile && cds->dwData != kCopyOpenHere) || cds->cbData > (1 << 20)) return FALSE;
         std::wstring all((const wchar_t *)cds->lpData, cds->cbData / sizeof(wchar_t));
         std::vector<std::wstring> urls;
         size_t pos = 0;
@@ -706,11 +729,25 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (nl == std::wstring::npos) break;
             pos = nl + 1;
         }
+        if (cds->dwData == kCopyProfile) {
+            // another profile's window asks for a profile's window: started from here, so it groups with this one
+            if (urls.empty()) return TRUE;
+            std::wstring id = urls[0] == L"default" ? L"" : urls[0];
+            urls.erase(urls.begin());
+            if (profile_valid_id(id) || id.empty()) profile_open(id, urls);
+            return TRUE;
+        }
+        // links from other apps go to the profile used last (as in Edge)
+        std::wstring last = cds->dwData == kCopyOpen && !urls.empty() && g_profile_id.empty() && !g_incognito ? profile_last_used() : L"";
+        if (!last.empty()) { profile_open(last, urls); return TRUE; }
         open_urls(urls);
         return TRUE;
     }
     case WM_APP_SHOW: open_urls({}); return 0;
-    case WM_APP_QUIT: quit_now(); return 0;
+    case WM_APP_QUIT: if (g_profile_id.empty() && !g_incognito) profiles_quit_others(); quit_now(); return 0;
+    case WM_APP + 40: profile_reload_state(); return 0;   // another process wrote this profile's history and bookmarks
+    case WM_APP + 41: history_flush(); bookmarks_save(); return 1;   // ... is about to: what is in memory goes to disk first
+    case WM_APP + 42: profiles_changed(); return 0;       // the list of profiles changed (names, colours)
     case WM_APP + 30: zoom_message(wp, lp); return 0;   // the fullscreen zoom (zoom.cpp)
     case WM_APP + 90: if (g_test) video_debug_shot(g_state + L"\\foto.png"); return 0;   // tests: a picture with the player's controls
     case WM_APP + 91:
@@ -751,26 +788,23 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(h, msg, wp, lp);
 }
 void session_save_soon() { if (g_win) SetTimer(g_win, kTimerSession, 1500, NULL); }
-void app_quit() { quit_now(); }
+void app_quit() { if (g_profile_id.empty() && !g_incognito) profiles_quit_others(); quit_now(); }
 void app_close_window() { PostMessageW(g_win, WM_CLOSE, 0, 0); }
-std::wstring app_name() { return g_incognito ? std::wstring(L"Pluma (") + T(L"Incógnito") + L")" : L"Pluma"; }
+std::wstring app_name() {
+    if (g_incognito) return std::wstring(L"Pluma (") + T(L"Incógnito") + L")";
+    // with more than one profile, the window says which one it is (in the title and the taskbar)
+    if (profiles_list().size() > 1) return L"Pluma (" + profile_shown_name(profile_current()) + L")";
+    return L"Pluma";
+}
 void app_open_incognito(const std::wstring &url) {
     if (g_incognito) { tab_new(url, true); return; }
     // the incognito window is another Pluma.exe (--incognito); if it is already open, it takes the url
-    std::wstring cmd = L"\"" + g_root + L"\\Pluma.exe\" --incognito" + (url.empty() ? L"" : L" \"" + url + L"\"");
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi = {};
-    if (CreateProcessW(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, g_root.c_str(), &si, &pi)) {
-        AllowSetForegroundWindow(pi.dwProcessId);
-        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
-    }
+    spawn_pluma(L"--incognito" + (url.empty() ? std::wstring() : L" \"" + url + L"\""));
 }
 void app_restart(bool hidden) {
     // the new one waits for this one to go (the "saliendo" handover) and opens what there was: the session, or hidden
-    std::wstring cmd = L"\"" + g_root + L"\\Pluma.exe\"" + (hidden ? L" --oculto" : L"");
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi = {};
-    if (CreateProcessW(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, g_root.c_str(), &si, &pi)) { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); }
+    // (another profile's window comes back as that profile)
+    spawn_pluma(g_profile_id.empty() ? std::wstring(hidden ? L"--oculto" : L"") : L"--perfil=" + g_profile_id);
     quit_now();
 }
 
@@ -786,7 +820,7 @@ static std::wstring arg_to_url(const std::wstring &a) {
 int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_inst = inst;
     QueryPerformanceFrequency(&g_freq); QueryPerformanceCounter(&g_t0);
-    bool quit = false;
+    bool quit = false, explicit_profile = false;   // (--perfil=default: the default window itself, not the one used last)
     std::vector<std::wstring> urls;
     int argc = 0;
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -794,6 +828,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         if (!wcscmp(argv[i], L"--oculto")) g_start_hidden = true;
         else if (!wcscmp(argv[i], L"--salir")) quit = true;
         else if (!wcscmp(argv[i], L"--incognito")) g_incognito = true;
+        else if (!wcsncmp(argv[i], L"--perfil=", 9)) { explicit_profile = true; g_profile_id = lower(argv[i] + 9); if (g_profile_id == L"default" || !profile_valid_id(g_profile_id)) g_profile_id.clear(); }
         else if (argv[i][0] != L'-' || (argv[i][1] && argv[i][1] != L'-')) urls.push_back(arg_to_url(argv[i]));
     }
     LocalFree(argv);
@@ -805,7 +840,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     if (GetEnvironmentVariableW(L"PLUMA_INSTANCIA", inst_name, 64) > 0) { suffix = std::wstring(L".") + inst_name; g_test = true; }
     std::wstring state_suffix = suffix;
     // the incognito window: another Pluma of its own (own window, mutex and session), on the same engine and settings
-    if (g_incognito) { suffix += L".incognito"; g_start_hidden = false; }
+    if (g_incognito) { suffix += L".incognito"; g_start_hidden = false; g_profile_id.clear(); }
+    // another profile: a Pluma of its own too (window, mutex, files), on the same engine and settings; never hidden
+    if (!g_profile_id.empty()) { suffix += L".perfil." + g_profile_id; g_start_hidden = false; }
     g_class += suffix; g_mutex += suffix;
 
     HANDLE mutex = CreateMutexW(NULL, FALSE, g_mutex.c_str());
@@ -831,7 +868,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             else if (!urls.empty()) {
                 std::wstring all;
                 for (auto &u : urls) all += u + L"\n";
-                COPYDATASTRUCT cds = { kCopyOpen, (DWORD)(all.size() * sizeof(wchar_t)), (PVOID)all.c_str() };
+                COPYDATASTRUCT cds = { explicit_profile ? kCopyOpenHere : kCopyOpen, (DWORD)(all.size() * sizeof(wchar_t)), (PVOID)all.c_str() };
                 DWORD_PTR res = 0;
                 SendMessageTimeoutW(other, WM_COPYDATA, 0, (LPARAM)&cds, SMTO_ABORTIFHUNG, 3000, &res);
             } else if (!g_start_hidden) PostMessageW(other, WM_APP_SHOW, 0, 0);
@@ -850,12 +887,26 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_state = std::wstring(local ? local : L".") + L"\\Pluma" + (state_suffix.empty() ? L"" : L"\\prueba" + state_suffix);
     CoTaskMemFree(local);
     SHCreateDirectoryExW(NULL, g_state.c_str(), NULL);
+    if (!g_profile_id.empty()) {
+        bool known = false;
+        for (auto &p : profiles_list()) if (p.id == g_profile_id) known = true;
+        if (!known) return 0;   // (removed meanwhile, or never made: nothing is created for it)
+    }
+    g_data = profile_data_dir(g_profile_id);
+    SHCreateDirectoryExW(NULL, g_data.c_str(), NULL);
     wchar_t port[16] = L"";
     if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) g_dev = true;
     BOOL anim = TRUE;
     SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0);
     g_motion = anim != FALSE;
     settings_load();
+    // a link from another app, with nothing in memory: it goes to the profile used last (as in Edge)
+    std::vector<std::wstring> for_profile;
+    std::wstring last = !urls.empty() && !explicit_profile && g_profile_id.empty() && !g_incognito ? profile_last_used() : L"";
+    if (!last.empty()) {
+        if (!g_set.resident) { profile_launch_child(last, urls); return 0; }
+        for_profile = urls; urls.clear(); g_start_hidden = true;   // this one waits in memory, as with --oculto
+    }
 
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.style = CS_DBLCLKS;
@@ -881,7 +932,8 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         if (active_tab() && active_tab()->url.empty()) ui_focus_address(false);
         log_line(L"ventana a la vista en " + std::to_wstring((int)now_ms()) + L" ms");
     }
-    update_finish();
+    if (g_profile_id.empty() && !g_incognito) update_finish();   // (only the default one updates)
+    if (!for_profile.empty()) profile_launch_child(last, for_profile);
     history_load();
     hidden_load();
     bookmarks_load();

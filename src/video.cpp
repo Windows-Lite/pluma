@@ -632,7 +632,7 @@ static void fetch_playlists(Video *v, std::vector<int> which, std::function<void
             f.fetched++;
         }
     int id = v->tab, serial = v->serial, from = break_from();
-    std::wstring dir = g_state + L"\\cache-video";
+    std::wstring dir = g_data + L"\\cache-video";
     std::wstring vid = v->id;
     std::thread([todo, id, serial, dir, vid, from, then] {
         // (the folder too: on a fresh profile the first video's lists could not be saved, and mpv read them from the
@@ -701,7 +701,7 @@ static bool start_player(Video *v, double start) {
     if (!v->mpv) return false;
     char wid[32]; sprintf_s(wid, "%lld", (long long)(INT_PTR)v->wnd);
     std::string fonts = utf8(g_root + L"\\fuentes");
-    std::wstring cache = g_state + L"\\cache-video";
+    std::wstring cache = g_data + L"\\cache-video";
     SHCreateDirectoryExW(NULL, cache.c_str(), NULL);
     std::string shaders = utf8(cache);
     struct { const char *k; std::string v; } opts[] = {
@@ -735,7 +735,7 @@ static bool start_player(Video *v, double start) {
     if (g_test && GetEnvironmentVariableW(L"PLUMA_SIN_SONIDO", NULL, 0) > 0) M.set_option_string(v->mpv, "ao", "null");   // tests: silent
     // tests: mpv.log with everything (PLUMA_SIN_MPV_LOG=1: as everyone's, only its warnings in pluma.log)
     if (g_dev && !GetEnvironmentVariableW(L"PLUMA_SIN_MPV_LOG", NULL, 0)) {
-        M.set_option_string(v->mpv, "log-file", utf8(g_state + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v");
+        M.set_option_string(v->mpv, "log-file", utf8(g_data + L"\\mpv.log").c_str()); M.set_option_string(v->mpv, "msg-level", "all=v");
     }
     if (M.initialize(v->mpv) < 0) { M.terminate_destroy(v->mpv); v->mpv = nullptr; return false; }
     // its warnings and errors go to pluma.log (a picture that stopped at 2:07 left nothing there, 25/10)
@@ -1305,7 +1305,7 @@ static void add_sub(Video *v) {
     if (f != std::string::npos) { size_t e = url.find('&', f + 1); url = url.substr(0, f) + (e == std::string::npos ? "" : url.substr(e)); }
     url += "&fmt=vtt";
     int id = v->tab, serial = v->serial, which = v->sub;
-    std::wstring path = g_state + L"\\cache-video\\" + v->id + L"-sub" + std::to_wstring(which) + L".vtt";
+    std::wstring path = g_data + L"\\cache-video\\" + v->id + L"-sub" + std::to_wstring(which) + L".vtt";
     std::thread([url, id, serial, which, path] {
         std::string text;
         bool ok = http_get(wide(url), text) && write_file(path, text);
@@ -2490,7 +2490,7 @@ void video_destroy(Tab *t) {
     if (was_on) t->audible = false;
     // incognito: its lists and captions (named after the video) go from the disk too, once mpv has let go of them
     if (t->incognito) {
-        std::wstring dir = g_state + L"\\cache-video\\", id = v->id;
+        std::wstring dir = g_data + L"\\cache-video\\", id = v->id;
         std::thread([dir, id] {
             Sleep(4000);
             for (const std::wstring &pat : { id + L"-*.m3u8", id + L"-sub*.vtt" }) {
@@ -2750,7 +2750,7 @@ void video_init() {
     else g_family = L"Segoe UI";
     for (int i = 0; i < I_COUNT; i++) g_icons[i] = svg(kIcons[i].d);
     // the playlists and captions of earlier videos (their addresses expire within hours)
-    std::wstring dir = g_state + L"\\cache-video\\";
+    std::wstring dir = g_data + L"\\cache-video\\";
     for (const wchar_t *pat : { L"*.m3u8", L"*.vtt" }) {
         WIN32_FIND_DATAW fd;
         HANDLE fh = FindFirstFileW((dir + pat).c_str(), &fd);

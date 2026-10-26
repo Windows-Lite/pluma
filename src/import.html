@@ -41,6 +41,15 @@ button:disabled { opacity:.5; }
 .done { background:var(--accent-soft); border:1px solid var(--accent); border-radius:10px; padding:18px 20px; margin-top:20px; }
 .done h3 { margin:0 0 6px; }
 .hidden { display:none; }
+.prof.all .n::after { content:''; }
+.bar { height:6px; border-radius:3px; background:var(--line); overflow:hidden; margin-top:14px; }
+.bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+.res { display:flex; align-items:center; gap:12px; padding:10px 0; }
+.res + .res { border-top:1px solid var(--line); }
+.res .dot { width:26px; height:26px; border-radius:50%; color:#fff; font-weight:600; font-size:13px; display:flex; align-items:center; justify-content:center; flex:none; }
+.res .t { flex:1; min-width:0; }
+.res .d { color:var(--sub); font-size:12.5px; }
+.res button { height:30px; padding:0 14px; }
 .spin { width:18px; height:18px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:s 0.8s linear infinite; }
 @keyframes s { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
@@ -63,6 +72,7 @@ button:disabled { opacity:.5; }
     </div>
 
     <div class="actions"><button class="primary" id="go" disabled data-t="Importar">Importar</button><div class="spin hidden" id="spin"></div><span id="status" class="note" style="margin:0"></span></div>
+    <div class="bar hidden" id="bar"><i id="barfill"></i></div>
 
     <h2 data-t="Contraseñas">Contraseñas</h2>
     <div class="card">
@@ -78,6 +88,8 @@ button:disabled { opacity:.5; }
       <h3 data-t="Listo">Listo</h3>
       <div id="summary"></div>
     </div>
+    <div class="card hidden" id="allres" style="margin-top:14px;padding:4px 16px"></div>
+    <div class="note hidden" id="allnote" data-t="Las contraseñas van por perfil: exporta un CSV desde cada perfil de Edge e impórtalo en la ventana de ese perfil en Pluma.">Las contraseñas van por perfil: exporta un CSV desde cada perfil de Edge e impórtalo en la ventana de ese perfil en Pluma.</div>
     <div class="actions"><button class="primary" id="bookmarks" data-t="Ver marcadores">Ver marcadores</button><button id="again" data-t="Importar de otro">Importar de otro</button></div>
   </div>
 </div>
@@ -96,12 +108,24 @@ function render() {
   document.documentElement.classList.toggle('dark', S.dark);
   document.documentElement.lang = S.lang;
   const box = $('profiles'); box.textContent = '';
+  const edge = (S.profiles || []).filter(p => p.browser === 'Edge');
+  if (edge.length > 1) {
+    // every Edge profile at once, each into a Pluma profile of the same name
+    const l = document.createElement('label'); l.className = 'prof all';
+    const r = document.createElement('input'); r.type = 'radio'; r.name = 'prof'; r.value = 'all';
+    r.onchange = () => { chosen = 'all'; $('go').disabled = false; };
+    const t = document.createElement('div'); t.className = 't';
+    const n = document.createElement('div'); n.className = 'n'; n.textContent = tr('Todos los perfiles de Edge') + ' (' + edge.length + ')';
+    const d = document.createElement('div'); d.className = 'd'; d.textContent = tr('Un perfil de Pluma por cada uno, con su nombre');
+    t.append(n, d); l.append(r, t); box.append(l);
+  }
   (S.profiles || []).forEach(p => {
     const l = document.createElement('label'); l.className = 'prof';
     const r = document.createElement('input'); r.type = 'radio'; r.name = 'prof'; r.value = p.i;
     r.onchange = () => { chosen = p.i; $('go').disabled = false; };
     const t = document.createElement('div'); t.className = 't';
     const n = document.createElement('div'); n.className = 'n'; n.textContent = p.browser + ' (' + p.name + ')';
+    if (p.account && p.account !== p.name) n.textContent += ' · ' + p.account;
     const d = document.createElement('div'); d.className = 'd';
     const bits = [];
     if (p.bookmarks >= 0) bits.push(p.bookmarks + ' ' + tr('marcadores'));
@@ -115,21 +139,24 @@ function render() {
   $('none').classList.toggle('hidden', (S.profiles || []).length > 0);
 }
 $('go').onclick = () => {
-  if (chosen < 0) return;
+  if (chosen === -1) return;
   $('go').disabled = true; $('spin').classList.remove('hidden'); $('status').textContent = tr('Importando...');
+  if (chosen === 'all') { $('bar').classList.remove('hidden'); $('barfill').style.width = '0'; send({ op: 'importAll', bookmarks: $('bm').checked, history: $('hi').checked }); return; }
   send({ op: 'import', profile: chosen, bookmarks: $('bm').checked, history: $('hi').checked });
 };
+const COLORS = ['#2f6fed', '#0f9d58', '#e8710a', '#d93025', '#9334e6', '#00897b', '#c2185b', '#5f6368'];
 $('edge').onclick = () => send({ op: 'openEdgePasswords' });
 $('delcsv').onclick = () => send({ op: 'deleteCsv' });
 $('csv').onclick = () => { $('pwspin').classList.remove('hidden'); $('pwstatus').textContent = tr('Importando...'); send({ op: 'importPasswords' }); };
 $('restart').onclick = () => send({ op: 'restart' });
 $('bookmarks').onclick = () => send({ op: 'open', url: 'https://pluma.local/bookmarks', background: false });
-$('again').onclick = () => { $('step2').classList.add('hidden'); $('step1').classList.remove('hidden'); chosen = -1; $('go').disabled = true; ask(); };
+$('again').onclick = () => { $('step2').classList.add('hidden'); $('step1').classList.remove('hidden'); $('allres').classList.add('hidden'); $('allnote').classList.add('hidden'); $('summary').classList.remove('hidden'); chosen = -1; $('go').disabled = true; ask(); };
 function ask() {
   const all = new Set();
   document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
   ['marcadores', 'con historial', 'abierto', 'Importando...', 'contraseñas importadas', 'contraseña importada', 'CSV borrado', 'No se pudo borrar el CSV',
-   'marcadores añadidos', 'páginas al historial', 'Importar'].forEach(s => all.add(s));
+   'marcadores añadidos', 'páginas al historial', 'Importar', 'Todos los perfiles de Edge', 'Un perfil de Pluma por cada uno, con su nombre',
+   'Importando %1 de %2: %3', 'perfil nuevo', 'Abrir', '%1 perfiles importados', 'marcadores', 'páginas'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {
@@ -146,6 +173,28 @@ if (W) W.addEventListener('message', e => {
   else if (m.op === 'csvDeleted') {
     $('pwcsvd').textContent = tr(m.ok ? 'CSV borrado' : 'No se pudo borrar el CSV');
     if (m.ok) $('delcsv').classList.add('hidden');
+  }
+  else if (m.op === 'progress') {
+    $('status').textContent = tr('Importando %1 de %2: %3').replace('%1', m.i + 1).replace('%2', m.n).replace('%3', m.name);
+    $('barfill').style.width = (100 * m.i / m.n) + '%';
+  }
+  else if (m.op === 'allDone') {
+    $('spin').classList.add('hidden'); $('status').textContent = ''; $('bar').classList.add('hidden');
+    $('summary').textContent = tr('%1 perfiles importados').replace('%1', m.items.length);
+    const box = $('allres'); box.textContent = '';
+    m.items.forEach((it, k) => {
+      const row = document.createElement('div'); row.className = 'res';
+      const dot = document.createElement('div'); dot.className = 'dot'; dot.style.background = it.color || COLORS[(k + 1) % COLORS.length];
+      dot.textContent = (it.name.trim()[0] || '?').toUpperCase();
+      const t = document.createElement('div'); t.className = 't';
+      const n = document.createElement('div'); n.className = 'n'; n.textContent = it.name + (it.made ? ' · ' + tr('perfil nuevo') : '');
+      const d = document.createElement('div'); d.className = 'd'; d.textContent = it.bookmarks + ' ' + tr('marcadores') + ' · ' + it.history + ' ' + tr('páginas');
+      t.append(n, d);
+      const b = document.createElement('button'); b.textContent = tr('Abrir'); b.onclick = () => send({ op: 'openProfile', id: it.id });
+      row.append(dot, t, b); box.append(row);
+    });
+    box.classList.remove('hidden'); $('allnote').classList.remove('hidden');
+    $('step1').classList.add('hidden'); $('step2').classList.remove('hidden');
   }
   else if (m.op === 'done') {
     $('spin').classList.add('hidden'); $('status').textContent = '';

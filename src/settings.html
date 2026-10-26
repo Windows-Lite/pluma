@@ -76,6 +76,15 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
 .eq .band { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .eq .band span { color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
 .eq input { writing-mode: vertical-lr; direction: rtl; height: 120px; width: 22px; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center; flex: none; }
+.pname { font: inherit; font-weight: 500; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; margin-left: -7px; width: 100%; max-width: 320px; }
+.pname:hover { border-color: var(--line); }
+.pname:focus { outline: none; border-color: var(--accent); background: var(--field); }
+.colors { display: flex; gap: 6px; margin-top: 6px; }
+.colors i { width: 16px; height: 16px; border-radius: 50%; cursor: default; box-sizing: border-box; }
+.colors i.on { outline: 2px solid var(--text); outline-offset: 2px; }
+.confirm { background: var(--hover); }
+.confirm .desc { color: var(--text); }
 @media (max-width: 760px) { nav { display: none; } main { padding: 20px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -88,6 +97,7 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
       <svg viewBox="0 0 16 16"><path d="M6.5 1a5.5 5.5 0 0 1 4.38 8.83l3.65 3.64a.75.75 0 0 1-1.06 1.06l-3.64-3.65A5.5 5.5 0 1 1 6.5 1Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/></svg>
       <input id="q" type="search" data-tp="Buscar en la configuración" placeholder="Buscar en la configuración" autocomplete="off">
     </div>
+    <a href="#perfiles"><svg viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.5"/><path d="M3.5 17a6.5 6.5 0 0 1 13 0"/></svg><span data-t="Perfiles">Perfiles</span></a>
     <a href="#apariencia"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M10 2.5v15M10 2.5a7.5 7.5 0 0 1 0 15"/></svg><span data-t="Apariencia">Apariencia</span></a>
     <a href="#buscador"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 5 5"/></svg><span data-t="Buscador">Buscador</span></a>
     <a href="#nueva"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14"/></svg><span data-t="Página de nueva pestaña">Página de nueva pestaña</span></a>
@@ -105,6 +115,17 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
     <a href="#acerca"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.5v.01"/></svg><span data-t="Acerca de Pluma">Acerca de Pluma</span></a>
   </nav>
   <main>
+    <section id="perfiles">
+      <h2 data-t="Perfiles">Perfiles</h2>
+      <div class="card" id="proflist"></div>
+      <div class="card" style="margin-top:12px">
+        <div class="row" data-k="perfil nuevo cuenta">
+          <div class="txt"><div class="name" data-t="Nuevo perfil">Nuevo perfil</div><div class="desc" data-t="Cada perfil tiene sus sesiones, marcadores, historial, extensiones y contraseñas, en su propia ventana">Cada perfil tiene sus sesiones, marcadores, historial, extensiones y contraseñas, en su propia ventana</div></div>
+          <button class="primary" id="profnew" data-t="Añadir">Añadir</button>
+        </div>
+      </div>
+    </section>
+
     <section id="apariencia">
       <h2 data-t="Apariencia">Apariencia</h2>
       <div class="card">
@@ -339,7 +360,53 @@ function fill(sel, items, value) {
   for (const [v, name] of items) { const o = document.createElement('option'); o.value = v; o.textContent = name; sel.append(o); }
   sel.value = value;
 }
+let confirming = null;   // the profile whose removal waits for a yes (the default one has id '')
+function renderProfiles() {
+  const P = S.profiles; if (!P) return;
+  const box = $('proflist');
+  if (box.contains(document.activeElement) && document.activeElement.classList.contains('pname')) return;   // (typing a name)
+  box.textContent = '';
+  P.list.forEach(p => {
+    const row = document.createElement('div'); row.className = 'row'; row.dataset.k = 'perfil ' + p.name;
+    const av = document.createElement('div'); av.className = 'avatar'; av.style.background = p.color; av.textContent = (p.name.trim()[0] || '?').toUpperCase();
+    const txt = document.createElement('div'); txt.className = 'txt';
+    const name = document.createElement('input'); name.className = 'pname'; name.value = p.name; name.maxLength = 60;
+    name.onchange = () => { if (name.value.trim()) send({ op: 'profile', what: 'rename', id: p.id, name: name.value.trim() }); };
+    name.onkeydown = e => { if (e.key === 'Enter') name.blur(); };
+    const cols = document.createElement('div'); cols.className = 'colors';
+    P.colors.forEach(c => {
+      const i = document.createElement('i'); i.style.background = c; if (c === p.color) i.className = 'on';
+      i.title = c; i.onclick = () => send({ op: 'profile', what: 'color', id: p.id, color: c });
+      cols.append(i);
+    });
+    txt.append(name, cols);
+    const badge = document.createElement('span'); badge.className = 'badge';
+    badge.textContent = p.id === P.current ? tr('Esta ventana') : p.open ? tr('Abierto') : '';
+    row.append(av, txt, badge);
+    if (p.id !== P.current) {
+      const ob = document.createElement('button'); ob.textContent = tr('Abrir'); ob.onclick = () => send({ op: 'profile', what: 'open', id: p.id });
+      row.append(ob);
+    }
+    if (p.id && p.id !== P.current) {
+      const rb = document.createElement('button'); rb.className = 'danger'; rb.textContent = tr('Quitar');
+      rb.onclick = () => { confirming = confirming === p.id ? null : p.id; renderProfiles(); };
+      row.append(rb);
+    }
+    box.append(row);
+    if (p.id && confirming === p.id) {
+      const c = document.createElement('div'); c.className = 'row confirm';
+      const t = document.createElement('div'); t.className = 'txt';
+      const d = document.createElement('div'); d.className = 'desc'; d.textContent = tr('Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.');
+      t.append(d);
+      const no = document.createElement('button'); no.textContent = tr('Cancelar'); no.onclick = () => { confirming = null; renderProfiles(); };
+      const yes = document.createElement('button'); yes.className = 'primary'; yes.style.background = 'var(--danger)'; yes.style.borderColor = 'var(--danger)';
+      yes.textContent = tr('Quitar el perfil'); yes.onclick = () => { confirming = null; send({ op: 'profile', what: 'remove', id: p.id }); };
+      c.append(t, no, yes); box.append(c);
+    }
+  });
+}
 function render() {
+  renderProfiles();
   document.documentElement.classList.toggle('dark', S.dark);
   document.documentElement.lang = S.lang;
   document.querySelectorAll('#themes label').forEach(l => l.classList.toggle('on', +l.dataset.v === S.theme));
@@ -445,6 +512,7 @@ $('update').onchange = e => set('update', +e.target.value);
 $('sleep').onchange = e => set('sleep', +e.target.value);
 for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
   $(id).onchange = e => set(key, e.target.checked);
+$('profnew').onclick = () => send({ op: 'profile', what: 'new' });
 document.querySelectorAll('[data-do]').forEach(b => b.addEventListener('click', () => send({ op: 'do', what: b.dataset.do })));
 // the side list: where each section is, and the one in view
 document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', e => {
@@ -464,7 +532,8 @@ function ask() {
   document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
   document.querySelectorAll('[data-tp]').forEach(e => all.add(e.dataset.tp));
   ['La de Windows', '1 activa', ' activas', '1 activo', ' activos', 'Pluma es tu navegador predeterminado', 'Pluma no es tu navegador predeterminado',
-   'Falta el motor de vídeo de Pluma (motor-video)', 'Quitar', 'Normal'].forEach(s => all.add(s));
+   'Falta el motor de vídeo de Pluma (motor-video)', 'Esta ventana', 'Abierto', 'Abrir', 'Quitar', 'Cancelar', 'Quitar el perfil', 'Normal',
+   'Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {

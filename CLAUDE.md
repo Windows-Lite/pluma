@@ -11,7 +11,7 @@ código y commits en inglés; nada de em dashes.
 ## Piezas
 - `Pluma.exe` (C++ + WebView2, el motor de Edge que trae Windows y que Microsoft parchea solo). Una sola instancia que
   se queda en memoria al cerrar la ventana (como Zas): `Pluma.exe [url]`, `--oculto` (arranque con Windows),
-  `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
+  `--salir`, `--perfil=<id>` (otro perfil, apartado de abajo); Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
   actualizar (auto | avisar | no),
   dormir_s, descargar_s, recientes, descargar_min, reserva, residente, protocolos, `motor` = argumentos extra para el
   motor, efecto, eq, graves, reverb, tono = efectos de sonido del reproductor), sesión en `sesion.tsv`,
@@ -277,6 +277,33 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   nunca se descargan (se perderían sus sesiones), sus enlaces y ventanas siguen en incógnito, y se cierran al cerrar la
   ventana. El perfil de incógnito recibe las mismas extensiones activas (uBlock). Comprobado el 25/10 con un perfil
   limpio: marca.com en incógnito no quedó en ningún archivo; sus cookies, aparte de las de las pestañas normales.
+
+## Perfiles (`src/profiles.cpp`)
+Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. Plan aprobado: ventana propia por perfil.
+- Cada perfil, su perfil de WebView2 (`put_ProfileName`, `pluma-<id>`) en la misma carpeta y el mismo motor que los
+  demás: cookies, caché, extensiones y contraseñas aparte. Y sus archivos de Pluma en `g_data` = `perfiles\<id>\`
+  (historial, marcadores, sesión, pestaña nueva, extensiones.tsv, `lectura.tsv`, `cache-video`, contraseñas pendientes). Ajustes,
+  iconos de webs, scripts y `pluma.log` son de todos (`g_state`).
+- El de siempre es «Personal»: sus archivos y el perfil `Default` del motor siguen donde estaban (no se mueve nada).
+  `perfiles.tsv` (id, nombre, color); un id no se reutiliza nunca (el motor borra la carpeta de uno quitado al cerrarse).
+- Cada perfil que no es el de siempre es otro Pluma.exe (`--perfil=<id>`, ventana y mutex `.perfil.<id>`), como el
+  incógnito; no se queda en memoria al cerrarlo y no se actualiza (solo el de siempre, y no mientras haya otros abiertos).
+  Lo arranca el de siempre (`CreateProcess`, también si lo pide otro perfil por WM_COPYDATA) para que el Administrador
+  de tareas los agrupe. El motor rechaza una ventana con otras opciones que la primera: los hijos reciben las del padre
+  (`PLUMA_MOTOR_IDIOMA`, `PLUMA_MOTOR_ARGS`).
+- Botón de perfil a la izquierda de las pestañas (círculo con inicial y color): lista (abre su ventana o la trae
+  delante), «Nuevo perfil», «Administrar perfiles» (Configuración > Perfiles: nombre, color, quitar con confirmación,
+  que cierra su ventana, borra sus archivos y marca su perfil del motor para borrar con `ICoreWebView2Profile8::Delete`).
+  Con más de un perfil, el título dice cuál es y el botón de la barra de tareas lleva su círculo (`SetOverlayIcon`).
+- Los enlaces de otros programas van al último perfil usado (`perfil-ultimo.txt`, al activar una ventana); abrir Pluma
+  sin enlace abre el de siempre.
+- Recortar memoria: solo las páginas de la propia ventana (el motor es compartido; nunca la página que otro perfil tiene
+  a la vista).
+- Importar: «Todos los perfiles de Edge» crea (o reutiliza por nombre) un perfil de Pluma por cada uno de Edge (su
+  nombre, o el correo si Edge le dejó el nombre de serie) y le pone sus marcadores e historial, uno detrás de otro con
+  progreso. A un perfil cerrado se le escriben sus archivos cambiando `g_data` un momento; uno abierto guarda lo suyo
+  antes (WM_APP+41) y lo vuelve a leer después (WM_APP+40). Contraseñas: un CSV por perfil, en la ventana de ese perfil.
+  Pruebas: `PLUMA_EDGE_DIR=<copia de User Data>` (solo en instancias de prueba).
 
 ## Extensiones
 - La ventanita de una extensión (su popup) se crea a la vista antes de meterle su página: hecha en una ventana oculta,
