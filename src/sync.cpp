@@ -28,10 +28,20 @@
 static const int kLoopbackPort = 47615;
 static std::wstring loopback_uri() { return L"http://127.0.0.1:" + std::to_wstring(kLoopbackPort) + L"/"; }
 
-// App identifiers. Diego registers the apps and fills these (constants here, or [sync] in ajustes.ini); empty = the
-// cloud destinations stay off with a clear error. The folder destination never needs them.
-static const wchar_t *kGoogleClientId = L"";
-static const wchar_t *kGoogleClientSecret = L"";   // a Google "Desktop app" client still has a secret at token time
+// App identifiers: from secrets.h, which release.yml writes from the repo's secrets (not in git), or [sync] in
+// ajustes.ini; empty = the cloud destinations stay off with a clear error. The folder destination never needs them.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef PLUMA_GOOGLE_CLIENT_ID
+#define PLUMA_GOOGLE_CLIENT_ID L""
+#endif
+#ifndef PLUMA_GOOGLE_CLIENT_SECRET
+#define PLUMA_GOOGLE_CLIENT_SECRET L""
+#endif
+static const wchar_t *kGoogleClientId = PLUMA_GOOGLE_CLIENT_ID;
+// a Google "Desktop app" client still sends its secret at token time; Google treats it as public for installed apps
+static const wchar_t *kGoogleClientSecret = PLUMA_GOOGLE_CLIENT_SECRET;
 static const wchar_t *kOneDriveClientId = L"";
 static const wchar_t *kDropboxClientId = L"";
 

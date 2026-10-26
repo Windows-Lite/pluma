@@ -29,6 +29,16 @@ jobs:
           else IFS=. read -r a b c <<< "${last#v}"; v="v$a.$b.$((c+1))"; range="$last..HEAD"; fi
           echo "tag=$v" >> "$GITHUB_OUTPUT"
           { echo "notes<<EOF"; git log --pretty='- %s' $range; echo EOF; } >> "$GITHUB_OUTPUT"
+      - name: App identifiers
+        # the Google Drive client (sync.cpp) from the repo's secrets, into a header that is never committed
+        shell: pwsh
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          if ($env:GOOGLE_CLIENT_ID) {
+            "#define PLUMA_GOOGLE_CLIENT_ID L`"$env:GOOGLE_CLIENT_ID`"`n#define PLUMA_GOOGLE_CLIENT_SECRET L`"$env:GOOGLE_CLIENT_SECRET`"" | Set-Content -Encoding ascii src\secrets.h
+          }
       - name: Build
         # the version goes into the exe, for its updates (update.cpp)
         shell: cmd

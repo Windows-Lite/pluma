@@ -408,8 +408,10 @@ elegido: «google drive mismo de la propia cuenta ... o onedrive o dropbox».
   últimas. Restaurar: se prepara en `restore-pending\`, Pluma se reinicia y lo aplica antes de abrir el motor; lo que
   había va a `antes-de-restaurar-<fecha>`. Contraseña mal: no se toca nada.
 - Destinos: una carpeta (funciona), Google Drive appData, OneDrive App Folder, Dropbox App folder (OAuth con PKCE y
-  `state`, vuelta a `http://127.0.0.1:47615/`; los client ID, vacíos hasta registrar las apps, en `sync.cpp` o en
-  `ajustes.ini` `[sync]`).
+  `state`, vuelta a `http://127.0.0.1:47615/`). Google Drive: cliente «App de escritorio» del proyecto «Pluma» de la
+  cuenta del usuario (solo `drive.appdata`); su ID y secreto en los secretos del repo (`GOOGLE_CLIENT_ID`,
+  `GOOGLE_CLIENT_SECRET`) y release.yml los escribe en `src/secrets.h` (fuera de git) antes de compilar; una build
+  local va sin ellos salvo que se cree ese fichero o se pongan en `ajustes.ini` `[sync]`. OneDrive y Dropbox, vacíos.
 - Pruebas: `tools\sync-test.cpp` (vector de Argon2id, ida y vuelta, contraseña mal, copia alterada, nombres no
   permitidos). Instancias de prueba: `PLUMA_SYNC_CARPETA` y `PLUMA_SYNC_FICHERO` saltan los diálogos,
   `PLUMA_SYNC_PRIMERA=1` enseña la oferta de restaurar.
