@@ -385,6 +385,7 @@ static const Text kTexts[] = {
     { L"Traducir «%1»", L"Translate \x201c%1\x201d", L"Traduzir \x201c%1\x201d", L"Traduire « %1 »", L"\x201e%1\x201c übersetzen", L"Traduci «%1»" },
     { L"Traducir siempre las páginas en %1", L"Always translate %1", L"Sempre traduzir páginas em %1", L"Toujours traduire les pages en %1", L"Seiten auf %1 immer übersetzen", L"Traduci sempre le pagine in %1" },
     { L"No traducir nunca las páginas en %1", L"Never translate %1", L"Nunca traduzir páginas em %1", L"Ne jamais traduire les pages en %1", L"Seiten auf %1 nie übersetzen", L"Non tradurre mai le pagine in %1" },
+    { L"No seguro", L"Not secure", L"Não seguro", L"Non sécurisé", L"Nicht sicher", L"Non sicuro" },
     { L"No traducir nunca este sitio", L"Never translate this site", L"Nunca traduzir este site", L"Ne jamais traduire ce site", L"Diese Website nie übersetzen", L"Non tradurre mai questo sito" },
     { L"Ahora no", L"Not now", L"Agora não", L"Pas maintenant", L"Nicht jetzt", L"Non ora" },
     { L"Configuración de traducción", L"Translation settings", L"Configurações de tradução", L"Paramètres de traduction", L"Übersetzungseinstellungen", L"Impostazioni di traduzione" },
