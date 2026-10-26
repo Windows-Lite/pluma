@@ -11,7 +11,7 @@
 
 // ---------------------------------------------------------------- metrics (DIP; multiplied by the screen's scale)
 static const float kTabRowH = 38, kToolRowH = 44, kNoticeH = 44, kCapW = 46, kTabMax = 236, kTabMin = 40, kTabGap = 2,
-                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30;
+                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30, kBmRowH = 32, kBmBtnH = 24;
 static const double kHoverMs = 120, kTabMs = 180, kPanelMs = 140;
 static float g_s = 1;
 float ui_scale() { return g_s; }
@@ -27,7 +27,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
-                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7 };
+                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -41,7 +41,8 @@ static D2D1_COLOR_F mix(D2D1_COLOR_F a, D2D1_COLOR_F b, float k) {
     return { a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k, a.a + (b.a - a.a) * k };
 }
 static D2D1_COLOR_F alpha(D2D1_COLOR_F c, float a) { c.a *= a; return c; }
-bool dark_theme() {
+bool dark_theme() { return g_incognito || user_dark_theme(); }   // (incognito: dark, bar and pages)
+bool user_dark_theme() {
     if (g_set.theme == 1) return true;
     if (g_set.theme == 0) return false;
     DWORD v = 1, sz = sizeof(v);
@@ -97,19 +98,20 @@ static ComPtr<IDWriteTextFormat> make_format(bool icons, float px, DWRITE_FONT_W
 }
 static void make_formats() {
     g_widths.clear();
+    // Edge's sizes (with its same Segoe UI Variable): tab titles 12, address bar and menus 14, shortcuts 12
     g_f.tab = make_format(false, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
-    g_f.addr = make_format(false, S(13), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.addr = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.icon = make_format(true, S(16), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.icon_sm = make_format(true, S(10), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.icon_lg = make_format(true, S(20), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
-    g_f.menu = make_format(false, S(12.5f), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
-    g_f.hint = make_format(false, S(11.5f), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
+    g_f.menu = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.hint = make_format(false, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_f.word = make_format(false, S(30), DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.ntp = make_format(false, S(13), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.ntp_sub = make_format(false, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
-    g_f.notice = make_format(false, S(12.5f), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.notice = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     if (g_edit_font) DeleteObject(g_edit_font);
-    g_edit_font = CreateFontW(-(int)lroundf(S(13)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
+    g_edit_font = CreateFontW(-(int)lroundf(S(14)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, g_ui_family.c_str());
 }
 static bool has_family(IDWriteFontCollection *c, const std::wstring &name) {
@@ -213,7 +215,7 @@ static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
 static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
 static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo g_hover, g_press;
 static std::unordered_map<int, Anim> g_btn_hover;  // per control
@@ -246,9 +248,12 @@ static bool page_on_screen() {
     return t && !t->url.empty() && (t->view || t->creating || !t->pending.empty());
 }
 static bool ntp_on_screen() { Tab *t = active_tab(); return !g_fullscreen && (!t || t->url.empty()); }
+static bool bm_bar_shown() { return g_set.bookmarks_bar && !g_fullscreen; }
+static float bm_bar_h() { return bm_bar_shown() ? S(kBmRowH) : 0; }
 float ui_band_height() {
     if (g_fullscreen) return 0;
-    return S(kTabRowH + kToolRowH) + S(kNoticeH) * g_notice_h.at(now_ms());
+    // the note's room is taken at once (the page is laid out once, not every frame); the card slides into it
+    return S(kTabRowH + kToolRowH) + bm_bar_h() + S(kNoticeH) * g_notice_h.to;
 }
 
 // ---------------------------------------------------------------- layout of the tab row
@@ -350,15 +355,43 @@ static D2D1_RECT_F star_rect() {
     D2D1_RECT_F a = addr_rect();
     return R(a.right - S(34), a.top + S(4), a.right - S(6), a.bottom - S(4));
 }
+// the book before it: the page is an article, and the reader view is a click (or F9) away (reader.cpp)
+static bool reader_shown() { Tab *t = active_tab(); return star_shown() && (t->readerable || t->reader); }
+static D2D1_RECT_F reader_rect() {
+    D2D1_RECT_F s = star_rect();
+    return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
+}
 static D2D1_RECT_F zoom_rect() {
     D2D1_RECT_F a = addr_rect();
-    float r = star_shown() ? star_rect().left - S(4) : a.right - S(6);
+    float r = reader_shown() ? reader_rect().left - S(4) : star_shown() ? star_rect().left - S(4) : a.right - S(6);
     return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
+// the optional bookmarks bar: a row under the toolbar with the "Barra de marcadores" folder's top-level items
+struct BmBtn { int id; bool folder; float x, w; std::wstring title; };
+static std::vector<BmBtn> bm_bar_items() {
+    std::vector<BmBtn> out;
+    if (!bm_bar_shown()) return out;
+    BmNode *f = bm_find(bm_bar_folder());
+    if (!f) return out;
+    float x = S(10);
+    for (auto &k : f->kids) {
+        std::wstring t = k.title.empty() ? (k.folder ? T(L"Carpeta") : url_host(k.url)) : k.title;
+        if (t.size() > 28) t = t.substr(0, 27) + L"…";
+        float w = text_w(g_f.menu.Get(), t) + S(28);
+        if (x + w > g_geo.W - S(10) && !out.empty()) break;   // no overflow menu yet: what fits
+        out.push_back({ k.id, k.folder, x, w, t });
+        x += w + S(4);
+    }
+    return out;
+}
+static D2D1_RECT_F bm_btn_rect(const BmBtn &b) {
+    float y = S(kTabRowH + kToolRowH) + (bm_bar_h() - S(kBmBtnH)) / 2;
+    return R(b.x, y, b.x + b.w, y + S(kBmBtnH));
+}
 static D2D1_RECT_F notice_rect() {
-    float y = S(kTabRowH + kToolRowH);
-    return R(0, y, g_geo.W, y + S(kNoticeH) * g_notice_h.at(now_ms()));
+    float y = S(kTabRowH + kToolRowH) + bm_bar_h();
+    return R(0, y, g_geo.W, y + S(kNoticeH) * g_notice_h.to);
 }
 static D2D1_RECT_F notice_btn_rect() {
     D2D1_RECT_F n = notice_rect();
@@ -427,11 +460,16 @@ static HitInfo hit_test(float x, float y) {
             k++;
         }
         if (star_shown() && inside(star_rect(), x, y)) { h.what = H_STAR; return h; }
+        if (reader_shown() && inside(reader_rect(), x, y)) { h.what = H_READER; return h; }
         if (zoom_shown() && inside(zoom_rect(), x, y)) { h.what = H_ZOOM; return h; }
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
     }
-    if (g_notice.on && y < S(kTabRowH + kToolRowH + kNoticeH)) {
+    if (bm_bar_shown() && y < S(kTabRowH + kToolRowH) + bm_bar_h()) {
+        for (auto &b : bm_bar_items()) if (inside(bm_btn_rect(b), x, y)) { h.what = H_BM; h.id = b.id; return h; }
+        return h;
+    }
+    if (g_notice.on && y < S(kTabRowH + kToolRowH) + bm_bar_h() + S(kNoticeH)) {
         if (inside(notice_btn_rect(), x, y)) h.what = H_NOTICE_BTN;
         else if (inside(notice_x_rect(), x, y)) h.what = H_NOTICE_X;
         return h;
@@ -502,9 +540,14 @@ static void draw_spinner(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, float c
 static D2D1_RECT_F lerp_rect(D2D1_RECT_F a, D2D1_RECT_F b, float k) {
     return R(a.left + (b.left - a.left) * k, a.top + (b.top - a.top) * k, a.right + (b.right - a.right) * k, a.bottom + (b.bottom - a.bottom) * k);
 }
+static D2D1_COLOR_F strip_color(const Palette &p) {
+    // the tabs' row, a step darker than the bar (as Edge's): the tab you are on stands out from the rest
+    return mix(p.bg, dark_theme() ? hex(0x000000) : hex(0x1d2733), dark_theme() ? 0.32f : 0.075f);
+}
 static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
     const Palette &p = pal();
     bool busy = false;
+    fill(rt, g_br.Get(), R(0, 0, g_geo.W, S(kTabRowH)), 0, strip_color(p));
     auto slots = tab_slots(now);
     Tab *act = active_tab();
     // the sheet under the active tab, sliding from the previous one
@@ -523,6 +566,14 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         stroke(rt, g_br.Get(), r, S(9), alpha(p.text, dark_theme() ? 0.08f : 0.06f), S(1));
     }
     for (auto &g : g_ghosts) busy |= g.k.running(now);
+    for (size_t i = 0; i + 1 < slots.size(); i++) {
+        // a thin line between two tabs, unless one of them is the active one or under the mouse
+        Tab *a = slots[i].t, *b = slots[i + 1].t;
+        if (a == act || b == act || a->hover.at(now) > 0 || b->hover.at(now) > 0) continue;
+        D2D1_RECT_F r = tab_rect(slots[i]);
+        float x = r.right + S(kTabGap) / 2;
+        fill(rt, g_br.Get(), R(x - S(0.5f), r.top + S(8), x + S(0.5f), r.bottom - S(8)), 0, alpha(p.text, dark_theme() ? 0.18f : 0.16f));
+    }
     for (auto &s : slots) {
         Tab *t = s.t;
         D2D1_RECT_F r = tab_rect(s);
@@ -536,8 +587,9 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         float cy = (r.top + r.bottom) / 2;
         float ix = compact && !active ? (r.left + r.right) / 2 : r.left + S(18);
         if (t->loading && t->view) { draw_spinner(rt, g_br.Get(), ix, cy, S(6.5f), now, p.accent); busy = true; }
-        else if (t->incognito) {
-            // incognito: Edge's InPrivate sign instead of the site's icon, in the accent
+        else if (settings_page_url(t->url)) glyph(rt, g_br.Get(), g_f.icon.Get(), G_GEAR, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.text);
+        else if (t->incognito && t->url.empty()) {
+            // incognito's new tab: Edge's InPrivate sign, in the accent (pages keep their icon, as in Edge)
             glyph(rt, g_br.Get(), g_f.icon.Get(), G_INPRIVATE, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), p.accent);
         } else {
             auto b = tab_icon(t);
@@ -558,7 +610,7 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
         }
         if (!compact || active) {
             float ch = t->close_hover.at(now);
-            float vis = active ? 1 : std::max(hv, ch);
+            float vis = 1;   // (on every tab, as in Edge: closing one you are not on takes one click)
             if (vis > 0) {
                 D2D1_RECT_F c = tab_close_rect(s);
                 if (ch > 0) fill(rt, g_br.Get(), c, S(10), alpha(p.press, ch));
@@ -581,7 +633,7 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
     D2D1_RECT_F pr = plus_rect(now);
     float ph = hov(H_PLUS, 0);
     if (ph > 0) fill(rt, g_br.Get(), pr, S(9), alpha(p.hover, ph * 1.4f));
-    glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_ADD, pr, p.sub);
+    glyph(rt, g_br.Get(), g_f.icon.Get(), G_ADD, pr, p.text);
     return busy;
 }
 static bool paint_caption(ID2D1RenderTarget *rt, double now) {
@@ -692,7 +744,7 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     }
     bool focused = ui_address_focused();
     float ix = a.left + S(20), cy = (a.top + a.bottom) / 2;
-    std::wstring u = t ? t->url : L"";
+    std::wstring u = t ? settings_page_display(t->url) : L"";
     wchar_t ig = G_SEARCH;
     D2D1_COLOR_F ic = p.sub;
     if (!focused && !u.empty()) {
@@ -714,6 +766,17 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         bool on = pins_has(t->url);
         glyph(rt, g_br.Get(), g_f.icon_sm.Get(), on ? G_STAR_FILL : G_STAR, s, on ? p.accent : mix(p.sub, p.text, sh));
         right = s.left - S(4);
+    }
+    if (reader_shown()) {
+        // the book: in the accent while the reader view is on screen
+        D2D1_RECT_F r = reader_rect();
+        auto &ra = g_btn_hover[hover_key(H_READER, 0)];
+        busy |= ra.running(now);
+        float rh = ra.at(now);
+        if (t->reader) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
+        else if (rh > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, rh * 1.3f));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_READER, r, t->reader ? p.accent : mix(p.sub, p.text, rh));
+        right = r.left - S(4);
     }
     if (zoom_shown()) {
         D2D1_RECT_F z = zoom_rect();
@@ -753,6 +816,34 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
                 if (tr.left + sw < tr.right) text(rt, g_br.Get(), g_f.addr.Get(), rest, R(tr.left + sw, tr.top, tr.right, tr.bottom), p.sub);
             }
         }
+    }
+    return busy;
+}
+static bool paint_bm_bar(ID2D1RenderTarget *rt, double now) {
+    if (!bm_bar_shown()) return false;
+    const Palette &p = pal();
+    bool busy = false;
+    float y0 = S(kTabRowH + kToolRowH);
+    fill(rt, g_br.Get(), R(0, y0, g_geo.W, y0 + bm_bar_h()), 0, p.bg);
+    fill(rt, g_br.Get(), R(0, y0 + bm_bar_h() - S(1), g_geo.W, y0 + bm_bar_h()), 0, p.line);
+    auto items = bm_bar_items();
+    if (items.empty()) {
+        text(rt, g_br.Get(), g_f.hint.Get(), T(L"Marca páginas con la estrella para verlas aquí."), R(S(12), y0, g_geo.W - S(12), y0 + bm_bar_h()), p.sub);
+        return false;
+    }
+    for (auto &b : items) {
+        D2D1_RECT_F r = bm_btn_rect(b);
+        auto &a = g_btn_hover[hover_key(H_BM, b.id)];
+        busy |= a.running(now);
+        if (a.at(now) > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, a.at(now) * 1.3f));
+        float cy = (r.top + r.bottom) / 2;
+        if (b.folder) glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_FOLDER, R(r.left + S(4), cy - S(9), r.left + S(22), cy + S(9)), p.sub);
+        else {
+            auto ic = host_icon(rt, g_host_icons, bm_find(b.id) ? bm_find(b.id)->url : L"");
+            if (ic) draw_icon_bitmap(rt, ic.Get(), r.left + S(14), cy, S(16), 1);
+            else glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_GLOBE, R(r.left + S(4), cy - S(9), r.left + S(22), cy + S(9)), p.sub);
+        }
+        text(rt, g_br.Get(), g_f.menu.Get(), b.title, R(r.left + S(24), r.top, r.right - S(4), r.bottom), p.text);
     }
     return busy;
 }
@@ -902,6 +993,7 @@ static void paint() {
         busy |= paint_tabs(g_rt.Get(), now);
         busy |= paint_caption(g_rt.Get(), now);
         busy |= paint_toolbar(g_rt.Get(), now);
+        busy |= paint_bm_bar(g_rt.Get(), now);
         busy |= paint_notice(g_rt.Get(), now);
         if (ntp_on_screen()) busy |= paint_ntp(g_rt.Get(), now);
         // where the page starts, a hairline
@@ -931,7 +1023,8 @@ static void place_edit() {
     SetWindowPos(g_edit, NULL, (int)(a.left + S(36)), (int)((a.top + a.bottom) / 2 - h / 2.0f), (int)(right - a.left - S(36)), h,
                  SWP_NOZORDER | SWP_NOACTIVATE);
 }
-void ui_set_address_text(const std::wstring &s) {
+void ui_set_address_text(const std::wstring &url) {
+    std::wstring s = settings_page_display(url);   // (Pluma's own pages: pluma://...)
     g_addr_text = s;
     if (!ui_address_focused()) { g_in_change = true; SetWindowTextW(g_edit, s.c_str()); g_in_change = false; }
     ui_invalidate();
@@ -1002,7 +1095,7 @@ static LRESULT CALLBACK edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (ctrl && wp == VK_BACK) { delete_word_left(); return 0; }
         if (wp == VK_TAB) return 0;
         // the browser's own keys still work while typing (not the edit's: copy, paste, undo, arrows)
-        if ((ctrl && wcschr(L"TWNJQ1234567890\x09\x21\x22", (wchar_t)wp)) || wp == VK_F5 || wp == VK_F6 || wp == VK_F11 || wp == VK_F12 ||
+        if ((ctrl && wcschr(L"TWNJQ1234567890\x09\x21\x22", (wchar_t)wp)) || wp == VK_F5 || wp == VK_F6 || wp == VK_F9 || wp == VK_F11 || wp == VK_F12 ||
             (alt && (wp == VK_LEFT || wp == VK_RIGHT)))
             if (handle_shortcut((UINT)wp, ctrl, shift, alt)) return 0;
         break;
@@ -1238,13 +1331,13 @@ static bool sug_commit(bool new_tab) {
 
 // ---------------------------------------------------------------- the menu
 // each language by its own name; "" is Windows's
-static std::wstring lang_name(const wchar_t *code) {
+std::wstring lang_name(const wchar_t *code) {
     static const struct { const wchar_t *code, *name; } names[] = { { L"es", L"Español" }, { L"en", L"English" }, { L"pt", L"Português" },
                                                                     { L"fr", L"Français" }, { L"de", L"Deutsch" }, { L"it", L"Italiano" } };
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_LANG, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1373,6 +1466,25 @@ void ui_open_menu() {
     ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
     open_menu_page(PAGE_MAIN, { a.x, a.y, b.x, b.y });
 }
+void data_clear_all() {
+    ComPtr<ICoreWebView2_13> v13; ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Profile2> p2;
+    Tab *t = nullptr;
+    for (auto &x : g_tabs) if (x->view && !x->incognito) { t = x.get(); break; }
+    history_clear();
+    if (t && SUCCEEDED(t->view.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && SUCCEEDED(pr.As(&p2)))
+        p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE |
+                              COREWEBVIEW2_BROWSING_DATA_KINDS_DOWNLOAD_HISTORY | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY),
+                              Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>([](HRESULT) -> HRESULT { ui_toast(T(L"Datos borrados: cookies, caché e historial")); return S_OK; }).Get());
+    else ui_toast(T(L"Historial borrado"));
+}
+void ui_ntp_changed() { g_ntp_filled = false; ui_invalidate(); }
+void ui_open_menu_page(const std::wstring &which) {
+    // the settings page's "Extensiones" and "Scripts": the menu, open at that page
+    D2D1_RECT_F m = menu_rect();
+    POINT a = { (LONG)m.left, (LONG)m.top }, b = { (LONG)m.right, (LONG)m.bottom };
+    ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+    open_menu_page(which == L"scripts" ? PAGE_SCRIPTS : PAGE_EXT, { a.x, a.y, b.x, b.y });
+}
 static MItem item(const std::wstring &text, wchar_t icon, const std::wstring &hint, std::function<void()> act) {
     MItem m; m.text = text; m.icon = icon; m.hint = hint; m.act = act; return m;
 }
@@ -1386,35 +1498,26 @@ static std::vector<MItem> build_page(int page) {
     std::vector<MItem> v;
     if (page == PAGE_MAIN) {
         v.push_back(item(T(L"Pestaña nueva"), G_NEWTAB, T(L"Ctrl+T"), [] { after_menu([] { tab_new(L"", true); }); }));
-        v.push_back(item(T(L"Pestaña de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { tab_new(L"", true, -1, true); }); }));
+        v.push_back(item(T(L"Nueva ventana de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { app_open_incognito(); }); }));
         MItem re = item(T(L"Reabrir pestaña cerrada"), G_UNDO, T(L"Ctrl+Mayús+T"), [] { after_menu([] { tab_reopen_closed(); }); });
         v.push_back(re);
         v.push_back(sep());
         MItem z; z.kind = 5; z.text = L"Zoom"; z.icon = G_ZOOM; v.push_back(z);
-        v.push_back(item(T(L"Buscar en la página"), G_SEARCH, T(L"Ctrl+F"), [] { after_menu([] { tab_find(); }); }));
-        v.push_back(item(T(L"Imprimir"), G_PRINT, T(L"Ctrl+P"), [] { after_menu([] { tab_print(); }); }));
         v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { after_menu([] { tab_downloads(); }); }));
         v.push_back(sep());
         size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
         v.push_back(sub(T(L"Extensiones"), G_PUZZLE, on == 1 ? T(L"1 activa") : on ? std::to_wstring(on) + T(L" activas") : L"", PAGE_EXT));
         size_t son = 0; for (auto &s : g_scripts) if (s.enabled) son++;
         v.push_back(sub(T(L"Scripts de usuario"), G_CODE, son == 1 ? T(L"1 activo") : son ? std::to_wstring(son) + T(L" activos") : L"", PAGE_SCRIPTS));
+        v.push_back(sub(T(L"Marcadores"), G_STAR, L"", PAGE_BOOKMARKS));
         v.push_back(sub(T(L"Buscador"), G_GLOBE, engine_name(g_set.engine), PAGE_ENGINE));
         v.push_back(sub(T(L"Tema"), G_COLOR, g_set.theme == 1 ? T(L"Oscuro") : g_set.theme == 2 ? T(L"Como Windows") : T(L"Claro"), PAGE_THEME));
         v.push_back(sub(T(L"Fuente"), G_FONT, g_set.font.empty() ? T(L"La de Windows") : g_set.font, PAGE_FONT));
-        v.push_back(sub(T(L"Idioma"), G_LANG, lang_name(g_set.lang.empty() ? L"" : lang_code()), PAGE_LANG));
-        if (video_available()) {
-            // YouTube in Pluma's own player (a fraction of the page's memory)
-            MItem yt; yt.kind = 3; yt.text = T(L"YouTube en el reproductor de Pluma"); yt.on = g_set.native_video;
-            yt.act = [] { g_set.native_video = !g_set.native_video; settings_save(); video_settings_changed(); };
-            v.push_back(yt);
-        }
-        // the new tab page: the sites visited most, while the person has no pages of their own there
-        MItem st; st.kind = 3; st.text = T(L"Sugerir lo que más visito"); st.on = g_set.suggest_top;
-        st.act = [] { g_set.suggest_top = !g_set.suggest_top; settings_save(); g_ntp_filled = false; };
-        v.push_back(st);
         v.push_back(sub(T(L"Borrar datos"), G_ERASE, L"", PAGE_CLEAR));
+        v.push_back(item(T(L"Configuración"), G_GEAR, L"", [] { after_menu([] { settings_open(); }); }));
         v.push_back(item(T(L"Herramientas de desarrollo"), G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
+        if (!g_incognito)
+            v.push_back(item(T(L"Buscar actualizaciones"), G_UPDATE, update_version(), [] { after_menu([] { update_check_now(); }); }));
         v.push_back(sep());
         v.push_back(note(T(L"Pluma usa ahora ") + std::to_wstring(engine_memory_mb()) + T(L" MB de memoria")));
         v.push_back(item(T(L"Salir de Pluma"), G_POWER, T(L"Ctrl+Mayús+Q"), [] { after_menu([] { app_quit(); }); }));
@@ -1478,29 +1581,10 @@ static std::vector<MItem> build_page(int page) {
         if (std::find(std::begin(fams), std::end(fams), g_set.font) == std::end(fams)) {
             MItem m; m.kind = 4; m.text = g_set.font; m.on = true; v.push_back(m);
         }
-    } else if (page == PAGE_LANG) {
-        v.push_back(back(T(L"Idioma")));
-        for (const wchar_t *c : { L"", L"es", L"en", L"pt", L"fr", L"de", L"it" }) {
-            MItem m; m.kind = 4; m.text = lang_name(c); m.on = g_set.lang == c;
-            std::wstring code = c;
-            m.act = [code] { g_set.lang = code; settings_save(); ui_invalidate(); menu_rebuild(); panel_render(g_menu); };
-            v.push_back(m);
-        }
     } else if (page == PAGE_CLEAR) {
         v.push_back(back(T(L"Borrar datos")));
         v.push_back(item(T(L"El historial de Pluma"), G_CLOCK, L"", [] { history_clear(); menu_close(); ui_toast(T(L"Historial borrado")); }));
-        MItem all = item(T(L"Todo menos las contraseñas"), G_ERASE, L"", [] {
-            ComPtr<ICoreWebView2_13> v13; ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Profile2> p2;
-            Tab *t = nullptr;
-            for (auto &x : g_tabs) if (x->view) { t = x.get(); break; }
-            history_clear();
-            if (t && SUCCEEDED(t->view.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && SUCCEEDED(pr.As(&p2)))
-                p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE |
-                                      COREWEBVIEW2_BROWSING_DATA_KINDS_DOWNLOAD_HISTORY | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY),
-                                      Callback<ICoreWebView2ClearBrowsingDataCompletedHandler>([](HRESULT) -> HRESULT { ui_toast(T(L"Datos borrados: cookies, caché e historial")); return S_OK; }).Get());
-            else ui_toast(T(L"Historial borrado"));
-            menu_close();
-        });
+        MItem all = item(T(L"Todo menos las contraseñas"), G_ERASE, L"", [] { data_clear_all(); menu_close(); });
         all.danger = true;
         v.push_back(all);
         v.push_back(note(T(L"Las cookies cierran tus sesiones en las webs.")));
@@ -1515,6 +1599,45 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(item(T(L"Cerrar las de la derecha"), G_X, L"", [id] { after_menu([id] { int i = tab_index(id); while (i >= 0 && (int)g_tabs.size() > i + 1) tab_close((int)g_tabs.size() - 1); }); }));
         v.push_back(item(T(L"Cerrar las demás"), G_X, L"", [id] { after_menu([id] { for (int k = (int)g_tabs.size() - 1; k >= 0; k--) if (g_tabs[k]->id != id) tab_close(k); }); }));
         v.push_back(item(T(L"Cerrar"), G_X, T(L"Ctrl+W"), [id] { after_menu([id] { tab_close(tab_index(id)); }); }));
+    } else if (page == PAGE_BOOKMARKS) {
+        v.push_back(back(T(L"Marcadores")));
+        v.push_back(item(T(L"Administrador de marcadores"), G_STAR, T(L"Ctrl+Mayús+O"), [] { after_menu([] { bookmarks_open(); }); }));
+        MItem bar; bar.kind = 3; bar.text = T(L"Mostrar barra de marcadores"); bar.on = g_set.bookmarks_bar; bar.hint = T(L"Ctrl+Mayús+B");
+        bar.act = [] { g_set.bookmarks_bar = !g_set.bookmarks_bar; settings_save(); ui_layout(); };
+        v.push_back(bar);
+        v.push_back(sep());
+        v.push_back(item(T(L"Importar de otro navegador"), G_DOWNLOAD, L"", [] { after_menu([] { import_open(); }); }));
+    } else if (page == PAGE_STAR) {
+        // right click on the star: which folder the page on screen goes in
+        v.push_back(note(T(L"Guardar en")));
+        Tab *t = active_tab();
+        std::wstring url = t ? t->url : L"", title = t ? (t->title.empty() ? url_host(t->url) : t->title) : L"";
+        std::function<void(const BmNode &, int)> add = [&](const BmNode &n, int depth) {
+            for (auto &k : n.kids) {
+                if (!k.folder) continue;
+                MItem m; m.kind = 4; m.on = bm_url_in(k.id, url);
+                m.text = std::wstring(depth * 2, L' ') + bm_shown_title(k);
+                int id = k.id;
+                m.act = [id, url, title] { bm_toggle_in(id, url, title); menu_rebuild(); panel_render(g_menu); ui_layout(); };
+                v.push_back(m);
+                add(k, depth + 1);
+            }
+        };
+        add(bm_root(), 0);
+        v.push_back(sep());
+        v.push_back(item(T(L"Administrador de marcadores"), G_STAR, L"", [] { after_menu([] { bookmarks_open(); }); }));
+    } else if (page == PAGE_BM_OPEN) {
+        // a folder on the bookmarks bar: open its bookmarks
+        BmNode *f = bm_find(g_menu_tab);
+        if (!f) return v;
+        bool any = false;
+        for (auto &k : f->kids) {
+            if (k.folder) continue;
+            any = true;
+            std::wstring u = k.url, t = k.title.empty() ? url_host(k.url) : k.title;
+            v.push_back(item(t, G_GLOBE, L"", [u] { after_menu([u] { Tab *a = active_tab(); if (a && a->url.empty()) tab_navigate(a, u); else tab_new(u, true); }); }));
+        }
+        if (!any) v.push_back(note(T(L"Carpeta vacía")));
     } else if (page == PAGE_ONE_EXT) {
         // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
         size_t i = (size_t)g_menu_tab;
@@ -1758,6 +1881,21 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_ROW: if (h.id < (int)g_ntp_rows.size()) { Tab *t = active_tab(); std::wstring u = g_ntp_rows[h.id].url; if (t) tab_navigate(t, u); else tab_new(u, true); } break;
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
+    case H_READER: reader_toggle(active_tab()); break;
+    case H_BM: {
+        BmNode *n = bm_find(h.id);
+        if (!n) break;
+        if (n->folder) {
+            for (auto &b : bm_bar_items()) if (b.id == h.id) {
+                D2D1_RECT_F r = bm_btn_rect(b);
+                POINT a = { (LONG)r.left, (LONG)r.top }, bb = { (LONG)r.right, (LONG)r.bottom };
+                ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &bb);
+                open_menu_page(PAGE_BM_OPEN, { a.x, a.y, bb.x, bb.y }, h.id);
+                break;
+            }
+        } else { std::wstring u = n->url; Tab *t = active_tab(); if (t && t->url.empty()) tab_navigate(t, u); else tab_new(u, true); }
+        break;
+    }
     default: break;
     }
 }
@@ -1848,7 +1986,13 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_RBUTTONUP: {
         HitInfo hi = hit_test((float)GET_X_LPARAM(lp), (float)GET_Y_LPARAM(lp));
-        if (hi.what == H_TAB || hi.what == H_TAB_CLOSE || hi.what == H_EXT) {
+        if (hi.what == H_STAR) {
+            // right click on the star: choose which folder the page goes in
+            D2D1_RECT_F s = star_rect();
+            POINT a = { (LONG)s.left, (LONG)s.top }, b = { (LONG)s.right, (LONG)s.bottom };
+            ClientToScreen(h, &a); ClientToScreen(h, &b);
+            open_menu_page(PAGE_STAR, { a.x, a.y, b.x, b.y });
+        } else if (hi.what == H_TAB || hi.what == H_TAB_CLOSE || hi.what == H_EXT) {
             POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
             ClientToScreen(h, &pt);
             open_menu_page(hi.what == H_EXT ? PAGE_ONE_EXT : PAGE_TAB, { pt.x, pt.y, pt.x, pt.y }, hi.id);
@@ -1914,7 +2058,7 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
     if (ctrl && !alt) {
         if (vk == 'T' && shift) { tab_reopen_closed(); return true; }
-        if (vk == 'N' && shift) { tab_new(L"", true, -1, true); return true; }   // incognito, as in Chrome
+        if (vk == 'N' && shift) { app_open_incognito(); return true; }   // the incognito window, as in Chrome
         if (vk == 'T' || vk == 'N') { tab_new(L"", true); return true; }
         if (vk == 'W' || vk == VK_F4) { tab_close(g_active); return true; }
         if (vk == VK_TAB || vk == VK_PRIOR || vk == VK_NEXT) {
@@ -1934,6 +2078,8 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
         if (vk == 'L' || vk == 'E' || vk == 'K') { ui_focus_address(true); return true; }
         if (vk == 'J') { tab_downloads(); return true; }
         if (vk == 'D' && !shift) { ui_toggle_pin(); return true; }
+        if (vk == 'O' && shift) { bookmarks_open(); return true; }
+        if (vk == 'B' && shift) { g_set.bookmarks_bar = !g_set.bookmarks_bar; settings_save(); ui_layout(); return true; }
         if (vk == 'Q' && shift) { app_quit(); return true; }
         if (vk == 'R' && !shift) { tab_reload(false); return true; }
         if ((vk == 'R' && shift) || vk == VK_F5) { tab_reload(true); return true; }
@@ -1954,6 +2100,7 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
     if (!ctrl && !alt) {
         if (vk == VK_F5) { tab_reload(false); return true; }
         if (vk == VK_F6) { ui_focus_address(true); return true; }
+        if (vk == VK_F9) { reader_toggle(active_tab()); return true; }
         if (vk == VK_F11) { set_fullscreen(!g_fullscreen); return true; }
         if (vk == VK_F12) { tab_devtools(); return true; }
         if (vk == VK_ESCAPE && g_fullscreen) {

@@ -18,6 +18,7 @@ static bool g_spare_making;
 static std::vector<std::function<void(ComPtr<ICoreWebView2Controller>)>> g_view_waiters, g_incognito_waiters;
 static ComPtr<ICoreWebView2Profile> g_profile, g_incognito_profile;   // (the second: incognito tabs' InPrivate one)
 void ext_add_all_to(ICoreWebView2Profile *pr);
+void ext_when_ready(std::function<void()> f);
 static std::vector<std::function<void(ICoreWebView2Profile *)>> g_profile_waiters;
 void with_profile(std::function<void(ICoreWebView2Profile *)> f) {
     if (g_profile) { f(g_profile.Get()); return; }
@@ -45,6 +46,8 @@ std::wstring fixup_input(const std::wstring &typed) {
     std::wstring s = trim(typed);
     if (s.empty()) return L"";
     std::wstring l = lower(s);
+    std::wstring own = settings_page_from_typed(s);   // pluma://settings (and edge://settings by habit)
+    if (!own.empty()) return own;
     static const wchar_t *kSchemes[] = { L"http://", L"https://", L"file:", L"about:", L"edge:", L"chrome-extension:",
                                          L"view-source:", L"data:", L"blob:", L"mailto:" };
     for (auto p : kSchemes) if (starts_with(l, p)) return s;
@@ -79,6 +82,8 @@ static std::wstring browser_args() {
     a += L" --force-gpu-mem-discardable-limit-mb=32";
     wchar_t port[16] = L"";
     if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) a += L" --remote-debugging-port=" + std::wstring(port);
+    // tests: PLUMA_SIN_SONIDO=1 keeps a test instance silent from its first page (mpv too, video.cpp)
+    if (g_test && GetEnvironmentVariableW(L"PLUMA_SIN_SONIDO", NULL, 0) > 0) a += L" --mute-audio";
     wchar_t extra[1024] = L"";
     GetPrivateProfileStringW(L"pluma", L"motor", L"", extra, 1024, (g_state + L"\\ajustes.ini").c_str());
     if (*extra) a += L" " + std::wstring(extra);
@@ -155,9 +160,10 @@ static RECT page_rect() {
 void tabs_apply_theme() {
     if (!g_profile) return;
     COREWEBVIEW2_PREFERRED_COLOR_SCHEME s = g_set.theme == 2 ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_AUTO
-                                          : dark_theme() ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT;
+                                          : user_dark_theme() ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT;
     g_profile->put_PreferredColorScheme(s);
-    if (g_incognito_profile) g_incognito_profile->put_PreferredColorScheme(s);
+    // the incognito window is dark all over: its pages too
+    if (g_incognito_profile) g_incognito_profile->put_PreferredColorScheme(g_incognito ? COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK : s);
 }
 static void setup_view(ICoreWebView2Controller *c, bool incognito) {
     ComPtr<ICoreWebView2> v; c->get_CoreWebView2(&v);
@@ -193,7 +199,7 @@ static void setup_view(ICoreWebView2Controller *c, bool incognito) {
         if (!g_incognito_profile && SUCCEEDED(v.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && pr) {
             g_incognito_profile = pr;
             tabs_apply_theme();
-            ext_add_all_to(pr.Get());
+            ext_when_ready([pr] { ext_add_all_to(pr.Get()); });   // (once the list of extensions is read)
         }
         return;
     }
@@ -233,6 +239,7 @@ static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done,
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done) { make_view(done, false); }
 static void CALLBACK spare_timer(HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); spare_prepare(); }
 void spare_prepare() {
+    if (g_incognito) return;   // (a spare view is an ordinary one)
     if (!g_set.spare && !g_profile_waiters.empty() && !g_profile && !g_spare_making) {
         // no spare views, but something waits for the profile: a view only for that, let go at once
         g_spare_making = true;
@@ -301,6 +308,9 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     t->suspended = false;
     EventRegistrationToken tok;
     ICoreWebView2 *v = t->view.Get();
+    settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
+    youtube_attach(t);    // and its light YouTube
+    reader_attach(t);     // and the reader view
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
@@ -361,8 +371,8 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             LPWSTR s = NULL; v->get_DocumentTitle(&s);
             t->title = s ? s : L"";
             CoTaskMemFree(s);
-            if (t == active_tab()) SetWindowTextW(g_win, (t->title.empty() ? std::wstring(L"Pluma") : t->title + L" - Pluma").c_str());
-            if (!t->incognito) history_title(t->url, t->title);
+            if (t == active_tab()) SetWindowTextW(g_win, (t->title.empty() ? app_name() : t->title + L" - " + app_name()).c_str());
+            if (!t->incognito && !settings_page_url(t->url)) history_title(t->url, t->title);
             session_save_soon();
             ui_invalidate();
             return S_OK;
@@ -376,7 +386,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             t->progress = 1;
             t->load_done = now_ms();
             t->crashed = false;
-            if (ok && tab_index(t->id) >= 0 && !t->incognito) history_add(t->url, t->title);   // (incognito: no history)
+            if (ok && tab_index(t->id) >= 0 && !t->incognito && !settings_page_url(t->url)) history_add(t->url, t->title);   // (incognito: no history)
             if (ok && t == active_tab()) trim_after_load();
             // a reload keeps the address (no SourceChanged): Pluma's player takes the video again (it stayed on the
             // page after reloading, in the user's recording, 25/10)
@@ -553,9 +563,9 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                     Tab *from = tab_by_id(id);
                     ComPtr<ICoreWebView2ContextMenuItem> ip;
                     if (from && !from->incognito &&
-                        SUCCEEDED(e9->CreateContextMenuItem(T(L"Abrir en una pestaña de incógnito"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
+                        SUCCEEDED(e9->CreateContextMenuItem(T(L"Abrir en una ventana de incógnito"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
                         ip->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
-                            [id, link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { open_link_in_tab(id, link, true, true); return S_OK; }).Get(), &tk);
+                            [link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { app_open_incognito(link); return S_OK; }).Get(), &tk);
                         items->InsertValueAtIndex(i + 1, ip.Get());
                     }
                     for (UINT32 k = 0; k < n + 1; k++) {
@@ -658,8 +668,8 @@ void tabs_layout_views() {
 Tab *tab_new(const std::wstring &url, bool activate, int at, bool incognito) {
     auto t = std::make_unique<Tab>();
     t->id = g_next_id++;
-    t->url = url;
-    t->incognito = incognito;
+    t->url = starts_with(url, L"pluma://") ? settings_page_from_typed(url) : url;   // (Pluma's own pages, from outside)
+    t->incognito = incognito || g_incognito;
     if (!url.empty()) t->icon_png = cached_icon(url);
     Tab *raw = t.get();
     if (at < 0 || at > (int)g_tabs.size()) at = (int)g_tabs.size();
@@ -715,7 +725,7 @@ static void hide_view(Tab *t) {
     t->hidden_since = now_ms();
     if (t->ctrl) t->ctrl->put_IsVisible(FALSE);
     // where it was: if it is let go later, it comes back to the same place (and a video to the same second)
-    if (t->video_mode) t->saved_media = video_position(t);   // (its page sleeps: Pluma's player knows)
+    if (t->video_mode || video_on(t)) t->saved_media = video_position(t);   // (its page sleeps, or has no video of its own: Pluma's player knows)
     else if (t->view && !t->loading) {
         int id = t->id;
         t->view->ExecuteScript(L"[scrollX, scrollY, ((document.querySelector('video') || {}).currentTime) || 0]",
@@ -734,7 +744,7 @@ void tab_activate(int i) {
     if (old && old != t) { hide_view(old); ui_notice_drop(old->id); }
     g_active = i;
     t->hidden_since = 0;
-    SetWindowTextW(g_win, (t->title.empty() ? std::wstring(L"Pluma") : t->title + L" - Pluma").c_str());
+    SetWindowTextW(g_win, (t->title.empty() ? app_name() : t->title + L" - " + app_name()).c_str());
     if (!ui_address_focused() || old != t) ui_set_address_text(t->url);
     if (t->video_mode) {
         // Pluma's player is on: the page stays asleep behind it
@@ -1100,6 +1110,7 @@ void tabs_on_hide() {
 
 // ---------------------------------------------------------------- session (sesion.tsv)
 void session_save() {
+    if (g_incognito) return;   // (the incognito window keeps nothing, and must not overwrite the ordinary session)
     // (incognito tabs are not kept: the active one counts among the others)
     int active = 0, n = 0;
     for (int i = 0; i < (int)g_tabs.size(); i++) { if (g_tabs[i]->incognito) continue; if (i <= g_active) active = n; n++; }
@@ -1137,7 +1148,7 @@ void session_restore() {
     g_active = std::min(std::max(active, 0), (int)g_tabs.size() - 1);
     g_tabs[g_active]->hidden_since = 0;
     for (auto &t : g_tabs) ui_tab_icon_changed(t.get());
-    SetWindowTextW(g_win, (g_tabs[g_active]->title.empty() ? std::wstring(L"Pluma") : g_tabs[g_active]->title + L" - Pluma").c_str());
+    SetWindowTextW(g_win, (g_tabs[g_active]->title.empty() ? app_name() : g_tabs[g_active]->title + L" - " + app_name()).c_str());
     ui_set_address_text(g_tabs[g_active]->url);
     ui_layout();
 }

@@ -12,6 +12,7 @@ código y commits en inglés; nada de em dashes.
 - `Pluma.exe` (C++ + WebView2, el motor de Edge que trae Windows y que Microsoft parchea solo). Una sola instancia que
   se queda en memoria al cerrar la ventana (como Zas): `Pluma.exe [url]`, `--oculto` (arranque con Windows),
   `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
+  actualizar (auto | avisar | no),
   dormir_s, descargar_s, recientes, descargar_min, reserva, residente, protocolos, `motor` = argumentos extra para el
   motor), sesión en `sesion.tsv`,
   historial en `historial.tsv`, iconos de webs en `iconos\`, registro con tiempos en `pluma.log`.
@@ -33,6 +34,17 @@ código y commits en inglés; nada de em dashes.
   tabla da el del idioma elegido (`idioma`, vacío = el de Windows; si no lo tenemos, inglés). Texto nuevo de la interfaz:
   `T()` y su fila en la tabla. Los registros (`log_line`) siguen en castellano. El motor recibe el mismo idioma al
   arrancar (sus menús y el Accept-Language).
+- `src/settings.cpp` + `src/settings.html`: la página de configuración (`pluma://settings`, ⋯ > Configuración), como la
+  de Edge: buscador arriba, secciones a la izquierda separadas por divisores. El HTML va dentro del exe (RCDATA 200) y se
+  sirve en `https://pluma.local/` (WebResourceRequested); habla con Pluma por `chrome.webview.postMessage`, encendido solo
+  en esa página (las demás lo tienen apagado) y con el origen comprobado. Sus textos van en castellano en `data-t` y Pluma
+  los traduce con `T()`. Idioma, actualizaciones, YouTube y «sugerir» salieron del menú ⋯ y viven aquí.
+- `src/update.cpp`: actualizaciones desde las releases del repo (público). La versión va dentro del exe
+  (`PLUMA_VERSION`, la pone release.yml); una build local es «dev» y nunca se actualiza. Busca 30 s después de arrancar y
+  cada 6 h; baja `pluma-vX.Y.Z.zip`, lo compara con su `.sha256` y lo deja en `actualizacion\`. Entra al cerrar la
+  ventana (si está residente, se reinicia oculto), al salir del todo o con «Reiniciar ahora»: Pluma.exe pasa a
+  Pluma.old.exe y el nuevo ocupa su sitio; el nuevo copia el resto al arrancar. Carpeta sin permiso de escritura: solo
+  avisa. Pruebas: `PLUMA_ACTUALIZAR_URL` apunta a una release falsa servida en 127.0.0.1.
   Animaciones: un hilo espera a cada refresco de la pantalla (DwmFlush) y pide un fotograma solo mientras algo se mueve.
 - `src/scripts.cpp`: scripts de usuario (.user.js) sin extensión, cada uno inyectado aparte; script base de Pluma
   (Ctrl+clic y clic central abren detrás; precarga al posar el ratón, con speculation rules).
@@ -40,6 +52,8 @@ código y commits en inglés; nada de em dashes.
   `%LOCALAPPDATA%\Pluma\extensiones`), instalar desde la Chrome Web Store o Edge Add-ons con «Añadir a Pluma»,
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
 - `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
+- `src/youtube.cpp` + `src/youtube.html`: YouTube ligero (apartado de abajo).
+- `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
 - `Pluma.exe` no va en git (25/10, el usuario: «no debería estar en el repo»): cada push a `main` lo compila una Action
@@ -171,6 +185,65 @@ ya tenga esa funcionalidad»).
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
   en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
 
+## YouTube ligero (`src/youtube.cpp`, `src/youtube.html`)
+Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos memoria, sin perder la cuenta.
+- Cuando la pestaña va a www.youtube.com (`/`, `/results`, `/feed/subscriptions`, `/feed/history`, `/playlist`,
+  `/watch` y la portada o los vídeos de un canal), Pluma contesta ese documento (WebResourceRequested, solo
+  documentos, solo la dirección que dio el NavigationStarting de la pestaña) con su página (RCDATA 203) en la misma
+  dirección: mismo origen, así que las cookies y la sesión siguen. La página llama a la API de YouTube
+  (`/youtubei/v1/browse|search|next|navigation/resolve_url|like|subscription`, cliente WEB, firmada con
+  SAPISIDHASH + SAPISID1PHASH/3PHASH si hay sesión, como YouTube.js y la propia web) y pinta. Sugerencias de
+  `suggestqueries-clients6.youtube.com` (`xhr=t&oe=utf-8`, CORS abierto a youtube.com).
+- Ninguna página habla con Pluma: tema, idioma y textos (`t('...')` en la página, traducidos con `T()`) se escriben en
+  el HTML al servirlo (`/*PLUMA_CFG*/`). Ajuste `youtube_ligero` (Configuración > YouTube y vídeo), encendido.
+- Lo que no hace (directos, Shorts, Studio, compras, music.youtube.com, otras pestañas del canal) es el YouTube de
+  siempre. Si una llamada o la lectura falla, la página va a la misma dirección con `pluma_normal=1` (esa dirección,
+  en esa pestaña); el botón «YouTube normal», con `pluma_normal=2` (todo YouTube en esa pestaña hasta salir de
+  YouTube, con un aviso para volver). Pluma cancela esa navegación y va a la dirección sin la marca: YouTube y la
+  barra nunca la ven.
+- Vídeo: sin el reproductor de YouTube. Al cargar la página, `video.cpp` le pide `__pluma.extract()` (la respuesta
+  visionOS con su HLS, como a la página de YouTube) y mpv entra en `#movie_player` en cuanto dibuja, sin esperar a
+  ninguna página. La página se queda despierta y a la vista (no hay foto ni sueño: es ligera); el reproductor está
+  fijo arriba (sticky) y la página corre por debajo. Cuatro veces por segundo `__pluma.tick()`: el segundo de mpv
+  entra; el sitio del hueco, el segundo de una marca de tiempo pulsada y si las sugerencias tapan el hueco (mpv se
+  esconde: nada de la página se puede pintar encima de su ventana) salen. Al acabar, «A continuación» (la lista o el
+  recomendado) a los 8 s; «Página de YouTube» o un fallo de mpv, el YouTube normal en ese segundo.
+- Historial: las URL de `playbackTracking` (de la respuesta visionOS), con `s.` cambiado a `www.` y `ver=2`, `c=web`,
+  `cver`, `cpn` como YouTube.js: `playback` al empezar y `watchtime` cada 30 s y al salir.
+- Pruebas de los lectores: `node tools\youtube-test.js` (respuestas reales recortadas en `tools\yt-respuestas`).
+  Probar el flujo con sesión no se puede en la instancia de prueba: va sin cuenta.
+
+## Modo lectura (`src/reader.cpp`, `src/reader.html`)
+Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como la vista de lectura de Firefox.
+- Readability de Mozilla 0.6.0 sin tocar (`src/readability/`, Apache-2.0; su licencia va en el zip, `licencias\`).
+  En cada página (DOMContentLoaded; otra vez al acabar de cargar y 1,5 s después de un cambio de dirección hecho por
+  la propia página) `isProbablyReaderable` en la página (1-3 ms; nunca la portada de un sitio: ruta `/`). Si es un
+  artículo, sale el libro en la barra, delante de la estrella. Clic o F9: Readability lee una copia del documento en la
+  página (15-70 ms) y Pluma carga esa misma dirección con `pluma_lector=1` al final, contestando ese documento
+  (WebResourceRequested, un filtro solo para esa dirección que se quita al servir) con `reader.html` (RCDATA 210) y
+  el artículo dentro; la página quita la marca enseguida (`history.replaceState`). Así el modo lectura es una entrada
+  propia del historial (cargar la misma dirección sin marca la reemplazaba y Atrás se saltaba el artículo) y la
+  barra, la estrella, el historial y la sesión ven la dirección limpia (comprobado: la marca no queda en
+  `historial.tsv` ni `sesion.tsv`). Mismo origen: icono e imágenes como siempre; ningún script de la web corre.
+  Salir (libro, F9, «Salir del modo lectura», Atrás): el artículo otra vez, el suyo (se sirve una sola vez), y el
+  automático no lo vuelve a coger.
+- Seguridad: el HTML del artículo no es de fiar. CSP propia (solo el script de la página, con un nonce por página;
+  nada de frames, formularios ni conexiones), el JSON del artículo sin ningún `<` y `clean()` en la página: lista
+  blanca de etiquetas y atributos, solo direcciones http(s) (y `data:image` de mapa de bits), los id con `r-` delante.
+  Prueba: `node tools\reader-test.js <puerto> tools\captura.exe PlumaVentana.<nombre> click <x> <y del libro>`
+  (sirve un artículo con 23 vectores de XSS).
+- La página no habla con Pluma (como todas): pide imágenes a `https://lector.pluma.local/<token>?size=|always=|exit=`,
+  que Pluma contesta (204) solo si el token es el de la página de esa pestaña. Letra: `lectura_letra` en
+  `ajustes.ini`; «Abrir siempre en modo lectura» por sitio en `lectura.tsv` (un host por línea, sin `www.`; desde
+  incógnito no se escribe); entonces sus artículos (los que dicen serlo: `og:type` article o JSON-LD Article/Posting)
+  pasan solos al modo lectura en DOMContentLoaded, salvo la dirección de la que se acaba de salir. Configuración >
+  Modo lectura lista esos sitios para quitarlos.
+- Medido el 26/10, perfil limpio cada vez. A mano (el artículo cargado y luego el libro): la memoria no baja (The
+  Verge 344 -> 340 y 338 -> 336 MB; El País 140 -> 172 y 137 -> 172: el proceso del sitio sigue vivo) y los datos
+  son los de la página (1,7-3 MB) más los del modo lectura (18-155 KB, sus fotos): mejora la lectura, no ahorra.
+  Automático: la página se corta en DOMContentLoaded y el modo lectura sale a los 1,0-1,8 s; datos The Verge 1,9-2,0
+  MB frente a 3,0, El País 1,4-1,5 frente a 1,75.
+
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en
   `paginas.tsv` (url, título). En cuanto hay una, salen solo las suyas. Sin ninguna, «Lo que más visitas» (se puede
@@ -179,8 +252,11 @@ ya tenga esa funcionalidad»).
   solo aparezcan páginas que yo haya añadido, como YouTube... que las pueda añadir fácilmente como un marcador».
 
 ## Incógnito
-- Pestañas de incógnito (⋯ > Pestaña de incógnito, Ctrl+Mayús+N, o «Abrir en una pestaña de incógnito» en el menú de
-  un enlace): vistas InPrivate de WebView2 (`CreateCoreWebView2ControllerWithOptions`, perfil `incognito`): cookies,
+- Ventana de incógnito (⋯ > Nueva ventana de incógnito, Ctrl+Mayús+N, o «Abrir en una ventana de incógnito» en el menú
+  de un enlace), como la InPrivate de Edge: otro Pluma.exe (`--incognito`, ventana, mutex y sesión propios, mismo motor
+  y ajustes) donde todas las pestañas son de incógnito; todo oscuro, barra y páginas, no se
+  queda en memoria al cerrarla y no escribe sesión, historial, fijadas, posición ni actualizaciones. Las extensiones
+  activas se ponen en su perfil en cuanto se lee la lista (los navegadores las apagan en incógnito; Pluma no). Vistas InPrivate de WebView2 (`CreateCoreWebView2ControllerWithOptions`, perfil `incognito`): cookies,
   caché e historial del motor solo en memoria, y se van con su última vista. Pluma no apunta nada suyo: ni historial,
   ni sesión, ni pestañas cerradas, ni iconos en `iconos\`, ni títulos o direcciones en `pluma.log`; las listas del
   reproductor de vídeo se borran del disco al cerrarse. Nunca se precarga nada desde una (cargaría en el perfil normal),

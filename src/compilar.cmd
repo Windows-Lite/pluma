@@ -22,11 +22,14 @@ if not "%~1"=="" set "OUT=%~1"
 rem el que este en memoria tendria bloqueado el ejecutable (no al compilar a otra ruta, para pruebas)
 if "%~1"=="" if exist ..\Pluma.exe ..\Pluma.exe --salir
 if "%~1"=="" ping -n 2 127.0.0.1 >nul
+rem PLUMA_VERSION=1.2.3 (release.yml): the release this build is, for its updates; without it, "dev" (never updates)
+set "VERDEF="
+if defined PLUMA_VERSION set "VERDEF=/DPLUMA_VERSION=\"%PLUMA_VERSION%\""
 rc /nologo /fo pluma.res pluma.rc || exit /b 1
-cl /nologo /O2 /MT /EHsc /utf-8 /W3 /std:c++17 /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN /I "%WV%\include" ^
-   main.cpp tabs.cpp ui.cpp scripts.cpp extensions.cpp video.cpp zoom.cpp lang.cpp pluma.res /Fe:"%OUT%" ^
+cl /nologo %VERDEF% /O2 /MT /EHsc /utf-8 /W3 /std:c++17 /DUNICODE /D_UNICODE /DNOMINMAX /DWIN32_LEAN_AND_MEAN /I "%WV%\include" ^
+   main.cpp tabs.cpp ui.cpp scripts.cpp extensions.cpp video.cpp zoom.cpp lang.cpp update.cpp settings.cpp bookmarks.cpp import.cpp passwords.cpp youtube.cpp reader.cpp pluma.res /Fe:"%OUT%" ^
    /link /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF "%WV%\x64\WebView2LoaderStatic.lib" ^
-   advapi32.lib d2d1.lib dwmapi.lib dwrite.lib gdi32.lib ole32.lib oleaut32.lib psapi.lib shell32.lib shlwapi.lib ^
-   urlmon.lib user32.lib uxtheme.lib version.lib windowscodecs.lib winhttp.lib || exit /b 1
+   advapi32.lib comdlg32.lib crypt32.lib d2d1.lib dwmapi.lib dwrite.lib gdi32.lib ole32.lib oleaut32.lib psapi.lib shell32.lib shlwapi.lib ^
+   bcrypt.lib urlmon.lib user32.lib uxtheme.lib version.lib windowscodecs.lib winhttp.lib || exit /b 1
 del *.obj pluma.res 2>nul
 echo Hecho: %OUT%

@@ -8,7 +8,7 @@
 HINSTANCE g_inst;
 HWND g_win, g_bar, g_edit;
 std::wstring g_root, g_state;
-bool g_test, g_test_visible, g_dev, g_quitting, g_fullscreen, g_motion = true;
+bool g_incognito, g_test, g_test_visible, g_dev, g_quitting, g_fullscreen, g_motion = true;
 double g_open_asked = 0;
 ComPtr<ICoreWebView2Environment> g_env;
 Settings g_set;
@@ -157,6 +157,8 @@ void settings_load() {
     g_set.theme = th == L"claro" ? 0 : th == L"oscuro" ? 1 : 2;
     g_set.font = ini_get(L"fuente", L"");
     g_set.lang = ini_get(L"idioma", L"");
+    std::wstring up = ini_get(L"actualizar", L"auto");
+    g_set.update = up == L"no" ? 0 : up == L"avisar" ? 1 : 2;
     g_set.sleep_s = std::max(10, _wtoi(ini_get(L"dormir_s", L"45").c_str()));
     g_set.discard_s = std::max(0, _wtoi(ini_get(L"descargar_s", L"60").c_str()));
     if (g_set.discard_s > 0 && g_set.discard_s < 10) g_set.discard_s = 10;
@@ -165,7 +167,10 @@ void settings_load() {
     g_set.spare = ini_get(L"reserva", L"0") == L"1";
     g_set.resident = ini_get(L"residente", L"1") != L"0";
     g_set.native_video = ini_get(L"video_propio", L"1") != L"0";
+    g_set.youtube_lite = ini_get(L"youtube_ligero", L"1") != L"0";
     g_set.suggest_top = ini_get(L"sugerir_visitadas", L"1") != L"0";
+    g_set.bookmarks_bar = ini_get(L"barra_marcadores", L"0") == L"1";
+    g_set.reader_size = std::min(40, std::max(12, _wtoi(ini_get(L"lectura_letra", L"20").c_str())));
     g_set.schemes.clear();
     std::wstring sc = ini_get(L"protocolos", L"ytmp3");
     size_t pos = 0;
@@ -184,13 +189,18 @@ void settings_save() {
     WritePrivateProfileStringW(L"pluma", L"tema", g_set.theme == 1 ? L"oscuro" : g_set.theme == 2 ? L"sistema" : L"claro", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"fuente", g_set.font.c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"idioma", g_set.lang.c_str(), f.c_str());
+    settings_page_refresh_soon();
+    WritePrivateProfileStringW(L"pluma", L"actualizar", g_set.update == 0 ? L"no" : g_set.update == 1 ? L"avisar" : L"auto", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"dormir_s", std::to_wstring(g_set.sleep_s).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"descargar_s", std::to_wstring(g_set.discard_s).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"recientes", std::to_wstring(g_set.keep_recent).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"descargar_min", std::to_wstring(g_set.recent_discard_min).c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"residente", g_set.resident ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"video_propio", g_set.native_video ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"youtube_ligero", g_set.youtube_lite ? L"1" : L"0", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"sugerir_visitadas", g_set.suggest_top ? L"1" : L"0", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"lectura_letra", std::to_wstring(g_set.reader_size).c_str(), f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"barra_marcadores", g_set.bookmarks_bar ? L"1" : L"0", f.c_str());
     std::wstring sc;
     for (auto &s : g_set.schemes) sc += (sc.empty() ? L"" : L",") + s;
     WritePrivateProfileStringW(L"pluma", L"protocolos", sc.c_str(), f.c_str());
@@ -243,7 +253,7 @@ static void history_reindex() {
     for (size_t i = 0; i < g_history.size(); i++) g_hist_index[g_history[i].url] = i;
 }
 void history_flush() {
-    if (!g_hist_dirty) return;
+    if (!g_hist_dirty || g_incognito) return;
     g_hist_dirty = false;
     if (g_history.size() > kHistoryMax) {
         // keep the most recent
@@ -287,6 +297,23 @@ void history_title(const std::wstring &url, const std::wstring &title) {
     g_history[it->second].title = title;
     g_hist_dirty = true;
     SetTimer(g_win, kTimerHistory, 4000, NULL);
+}
+bool history_import(const std::wstring &url, const std::wstring &title, int visits, long long last) {
+    // from another browser: add if new, else keep the more recent visit and add up the counts (the caller flushes once)
+    if (!history_worthy(url)) return false;
+    auto it = g_hist_index.find(url);
+    if (it == g_hist_index.end()) {
+        g_hist_index[url] = g_history.size();
+        g_history.push_back({ url, title, std::max(1, visits), last });
+        g_hist_dirty = true;
+        return true;
+    }
+    HistoryEntry &e = g_history[it->second];
+    e.visits += std::max(1, visits);
+    if (last > e.last) e.last = last;
+    if (e.title.empty() && !title.empty()) e.title = title;
+    g_hist_dirty = true;
+    return false;
 }
 static std::wstring bare(const std::wstring &url) {
     // what people type: no scheme, no "www."
@@ -351,11 +378,10 @@ std::vector<Suggestion> history_suggest(const std::wstring &typed, std::wstring 
     }
     return out;
 }
-// ---------------------------------------------------------------- the new tab page: the person's own pages (paginas.tsv:
-// url, title), and the sites they took off its suggestions (ocultas.tsv: one a line)
-std::vector<HistoryEntry> g_pins;
+// ---------------------------------------------------------------- the new tab page: the sites the person took off its
+// suggestions (ocultas.tsv: one a line). The person's own pages ("Tus páginas") are bookmarks now (bookmarks.cpp).
 static std::vector<std::wstring> g_hidden_sites;
-static std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file) {
+std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file) {
     std::vector<std::vector<std::wstring>> rows;
     std::string data;
     if (!read_file(g_state + L"\\" + file, data)) return rows;
@@ -378,44 +404,9 @@ static std::wstring site_key(const std::wstring &url) {
     std::wstring h = lower(url_host(url));
     return starts_with(h, L"www.") ? h.substr(4) : h;
 }
-static std::wstring pin_key(const std::wstring &url) {
-    std::wstring k = url;
-    while (!k.empty() && k.back() == L'/') k.pop_back();
-    return k;
-}
-void pins_load() {
-    g_pins.clear();
-    for (auto &f : tsv_read(L"paginas.tsv")) {
-        if (f[0].empty() || pins_has(f[0])) continue;
-        HistoryEntry e; e.url = f[0]; e.title = f.size() > 1 ? f[1] : L"";
-        g_pins.push_back(e);
-    }
+void hidden_load() {
     g_hidden_sites.clear();
     for (auto &f : tsv_read(L"ocultas.tsv")) if (!f[0].empty()) g_hidden_sites.push_back(f[0]);
-}
-static void pins_save() {
-    std::wstring out;
-    for (auto &e : g_pins) out += e.url + L"\t" + tsv_clean(e.title) + L"\n";
-    write_file(g_state + L"\\paginas.tsv", utf8(out));
-}
-bool pins_has(const std::wstring &url) {
-    for (auto &e : g_pins) if (pin_key(e.url) == pin_key(url)) return true;
-    return false;
-}
-void pins_add(const std::wstring &url, const std::wstring &title, size_t at) {
-    if (url.empty() || pins_has(url)) return;
-    HistoryEntry e; e.url = url; e.title = title;
-    g_pins.insert(g_pins.begin() + std::min(at, g_pins.size()), e);
-    pins_save();
-}
-void pins_remove(const std::wstring &url) {
-    for (size_t i = 0; i < g_pins.size(); i++)
-        if (pin_key(g_pins[i].url) == pin_key(url)) { g_pins.erase(g_pins.begin() + i); pins_save(); return; }
-}
-bool pins_toggle(const std::wstring &url, const std::wstring &title) {
-    if (pins_has(url)) { pins_remove(url); return false; }
-    pins_add(url, title, g_pins.size());
-    return true;
 }
 void history_hide_site(const std::wstring &url, bool hide) {
     std::wstring k = site_key(url);
@@ -454,6 +445,7 @@ std::vector<HistoryEntry> history_top(int n) {
 
 // ---------------------------------------------------------------- the window
 static void save_placement() {
+    if (g_incognito) return;
     WINDOWPLACEMENT wp = { sizeof(wp) };
     if (g_fullscreen) wp = g_before_fs;
     else if (!GetWindowPlacement(g_win, &wp)) return;
@@ -551,12 +543,13 @@ static void hide_window() {
     history_flush();
     ShowWindow(g_win, SW_HIDE);
     tabs_on_hide();
+    update_on_hide();
 }
 static void open_urls(const std::vector<std::wstring> &urls) {
     if (!g_env_ready) { for (auto &u : urls) g_waiting_urls.push_back(u); show_window(); return; }
     bool was_hidden = !IsWindowVisible(g_win);
     if (was_hidden) g_open_asked = now_ms();
-    if (was_hidden && g_tabs.empty()) session_restore();
+    if (was_hidden && g_tabs.empty() && !g_incognito) session_restore();
     for (auto &u : urls) tab_new(u, true);
     if (urls.empty() && g_tabs.empty()) tab_new(L"", true);
     if (urls.empty() && was_hidden) { Tab *t = active_tab(); if (t) tab_activate(g_active); }
@@ -570,6 +563,7 @@ static void quit_now() {
     ui_close_popups();
     if (IsWindowVisible(g_win)) { save_placement(); session_save(); }
     history_flush();
+    update_on_quit();
     SetTimer(g_win, kTimerQuit, 150, NULL);
 }
 
@@ -685,7 +679,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE:
         if (g_quitting) break;
-        if (g_set.resident) { hide_window(); return 0; }
+        if (g_set.resident && !g_incognito) { hide_window(); return 0; }   // (the incognito window goes for good)
         quit_now();
         return 0;
     case WM_COPYDATA: {
@@ -748,6 +742,26 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 void session_save_soon() { if (g_win) SetTimer(g_win, kTimerSession, 1500, NULL); }
 void app_quit() { quit_now(); }
 void app_close_window() { PostMessageW(g_win, WM_CLOSE, 0, 0); }
+std::wstring app_name() { return g_incognito ? std::wstring(L"Pluma (") + T(L"Incógnito") + L")" : L"Pluma"; }
+void app_open_incognito(const std::wstring &url) {
+    if (g_incognito) { tab_new(url, true); return; }
+    // the incognito window is another Pluma.exe (--incognito); if it is already open, it takes the url
+    std::wstring cmd = L"\"" + g_root + L"\\Pluma.exe\" --incognito" + (url.empty() ? L"" : L" \"" + url + L"\"");
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    if (CreateProcessW(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, g_root.c_str(), &si, &pi)) {
+        AllowSetForegroundWindow(pi.dwProcessId);
+        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+    }
+}
+void app_restart(bool hidden) {
+    // the new one waits for this one to go (the "saliendo" handover) and opens what there was: the session, or hidden
+    std::wstring cmd = L"\"" + g_root + L"\\Pluma.exe\"" + (hidden ? L" --oculto" : L"");
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    if (CreateProcessW(NULL, cmd.data(), NULL, NULL, FALSE, 0, NULL, g_root.c_str(), &si, &pi)) { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); }
+    quit_now();
+}
 
 static std::wstring arg_to_url(const std::wstring &a) {
     // a file from the Explorer becomes a file:// address; anything else is taken as typed
@@ -768,6 +782,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     for (int i = 1; i < argc; i++) {
         if (!wcscmp(argv[i], L"--oculto")) g_start_hidden = true;
         else if (!wcscmp(argv[i], L"--salir")) quit = true;
+        else if (!wcscmp(argv[i], L"--incognito")) g_incognito = true;
         else if (argv[i][0] != L'-' || (argv[i][1] && argv[i][1] != L'-')) urls.push_back(arg_to_url(argv[i]));
     }
     LocalFree(argv);
@@ -777,6 +792,9 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     wchar_t inst_name[64] = L"";
     std::wstring suffix;
     if (GetEnvironmentVariableW(L"PLUMA_INSTANCIA", inst_name, 64) > 0) { suffix = std::wstring(L".") + inst_name; g_test = true; }
+    std::wstring state_suffix = suffix;
+    // the incognito window: another Pluma of its own (own window, mutex and session), on the same engine and settings
+    if (g_incognito) { suffix += L".incognito"; g_start_hidden = false; }
     g_class += suffix; g_mutex += suffix;
 
     HANDLE mutex = CreateMutexW(NULL, FALSE, g_mutex.c_str());
@@ -818,7 +836,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_root = exe;
     PWSTR local = NULL;
     SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, NULL, &local);
-    g_state = std::wstring(local ? local : L".") + L"\\Pluma" + (suffix.empty() ? L"" : L"\\prueba" + suffix);
+    g_state = std::wstring(local ? local : L".") + L"\\Pluma" + (state_suffix.empty() ? L"" : L"\\prueba" + state_suffix);
     CoTaskMemFree(local);
     SHCreateDirectoryExW(NULL, g_state.c_str(), NULL);
     wchar_t port[16] = L"";
@@ -845,16 +863,19 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     video_init();
     SetTimer(g_win, kTimerTabs, 5000, NULL);
     if (!g_start_hidden) {
-        session_restore();   // the tabs are drawn at once; their pages come when the engine is up
+        if (!g_incognito) session_restore();   // the tabs are drawn at once; their pages come when the engine is up
         for (auto &u : urls) tab_new(u, true);
         if (g_tabs.empty()) tab_new(L"", true);
         show_window();
         if (active_tab() && active_tab()->url.empty()) ui_focus_address(false);
         log_line(L"ventana a la vista en " + std::to_wstring((int)now_ms()) + L" ms");
     }
+    update_finish();
     history_load();
-    pins_load();
+    hidden_load();
+    bookmarks_load();
     scripts_load();
+    passwords_apply_pending();   // imported passwords waiting from last time: in before the engine opens Login Data
     env_create([] {
         g_env_ready = true;
         log_line(L"motor listo en " + std::to_wstring((int)now_ms()) + L" ms");
@@ -862,6 +883,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
         if (!g_tabs.empty()) tab_activate(g_active < 0 ? 0 : g_active);   // gives the one on screen its page
         if (!g_waiting_urls.empty()) { auto u = g_waiting_urls; g_waiting_urls.clear(); open_urls(u); }
         spare_prepare();
+        update_init();
     });
 
     MSG m;

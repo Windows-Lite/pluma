@@ -1,0 +1,397 @@
+<!doctype html>
+<!-- Pluma's settings page (pluma://settings), inside the exe; settings.cpp serves it and answers its messages.
+     Written in Spanish, as the code: Pluma sends each text in the chosen language (data-t, T()). -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuración</title>
+<style>
+:root {
+  --bg: #f7f7f9; --card: #ffffff; --text: #1b1b1f; --sub: #5f6168; --line: #e2e3e8; --hover: #ededf1;
+  --accent: #2f6fed; --accent-soft: #e6eefe; --danger: #c4314b; --field: #ffffff;
+  color-scheme: light;
+}
+:root.dark {
+  --bg: #1c1d21; --card: #26272c; --text: #ececf0; --sub: #a3a5ad; --line: #36373d; --hover: #303137;
+  --accent: #6d9cff; --accent-soft: #2a3550; --danger: #ff6b81; --field: #1f2025;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+.wrap { display: flex; min-height: 100%; }
+nav { width: 280px; flex: none; padding: 26px 12px 26px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+nav h1 { font-size: 26px; font-weight: 600; margin: 0 12px 18px; }
+.search { position: relative; margin: 0 4px 16px; }
+.search input { width: 100%; height: 36px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); color: var(--text);
+  font: inherit; padding: 0 12px 0 36px; outline: none; }
+.search input:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.search svg { position: absolute; left: 11px; top: 10px; width: 16px; height: 16px; fill: var(--sub); }
+nav a { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 8px; color: var(--text); text-decoration: none;
+  position: relative; cursor: default; }
+nav a:hover { background: var(--hover); }
+nav a.on { background: var(--hover); }
+nav a.on::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 2px; background: var(--accent); }
+nav a svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+nav hr { border: 0; border-top: 1px solid var(--line); margin: 10px 12px; }
+main { flex: 1; min-width: 0; padding: 30px 36px 80px; max-width: 980px; }
+section { padding: 6px 0 22px; }
+section + section { border-top: 1px solid var(--line); padding-top: 26px; }
+section h2 { font-size: 20px; font-weight: 600; margin: 0 0 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.row { display: flex; align-items: center; gap: 16px; padding: 14px 18px; min-height: 60px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row .txt { flex: 1; min-width: 0; }
+.row .name { font-weight: 500; }
+.row .desc { color: var(--sub); font-size: 12.5px; margin-top: 2px; }
+.row.hidden, section.hidden { display: none; }
+select, button { font: inherit; color: var(--text); }
+select { height: 32px; min-width: 190px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); padding: 0 8px; }
+button { height: 32px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); cursor: default; }
+button:hover { background: var(--hover); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--danger); }
+.toggle { position: relative; width: 40px; height: 20px; flex: none; }
+.toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.toggle span { position: absolute; inset: 0; border-radius: 10px; border: 1px solid var(--sub); transition: background .15s; }
+.toggle span::after { content: ""; position: absolute; width: 12px; height: 12px; left: 3px; top: 3px; border-radius: 50%; background: var(--sub); transition: transform .15s; }
+.toggle input:checked + span { background: var(--accent); border-color: var(--accent); }
+.toggle input:checked + span::after { transform: translateX(20px); background: #fff; }
+.themes { display: flex; gap: 10px; flex-wrap: wrap; }
+.themes label { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; cursor: default; }
+.themes label.on { border: 2px solid var(--accent); padding: 7px; }
+.themes input { display: none; }
+.swatch { width: 92px; height: 54px; border-radius: 6px; border: 1px solid var(--line); overflow: hidden; display: flex; }
+.swatch i { flex: 1; }
+.empty { color: var(--sub); padding: 30px 0; display: none; }
+.badge { color: var(--sub); font-size: 13px; }
+@media (max-width: 760px) { nav { display: none; } main { padding: 20px; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <h1 data-t="Configuración">Configuración</h1>
+    <div class="search">
+      <svg viewBox="0 0 16 16"><path d="M6.5 1a5.5 5.5 0 0 1 4.38 8.83l3.65 3.64a.75.75 0 0 1-1.06 1.06l-3.64-3.65A5.5 5.5 0 1 1 6.5 1Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/></svg>
+      <input id="q" type="search" data-tp="Buscar en la configuración" placeholder="Buscar en la configuración" autocomplete="off">
+    </div>
+    <a href="#apariencia"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M10 2.5v15M10 2.5a7.5 7.5 0 0 1 0 15"/></svg><span data-t="Apariencia">Apariencia</span></a>
+    <a href="#buscador"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 5 5"/></svg><span data-t="Buscador">Buscador</span></a>
+    <a href="#nueva"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14"/></svg><span data-t="Página de nueva pestaña">Página de nueva pestaña</span></a>
+    <a href="#marcadores"><svg viewBox="0 0 20 20"><path d="m10 3 2.1 4.6 5 .5-3.8 3.3 1.2 4.9L10 13.8 5.5 16.3l1.2-4.9L2.9 8.1l5-.5Z"/></svg><span data-t="Marcadores">Marcadores</span></a>
+    <a href="#privacidad"><svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span data-t="Privacidad y datos">Privacidad y datos</span></a>
+    <a href="#predeterminado"><svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M3 7h14"/></svg><span data-t="Navegador predeterminado">Navegador predeterminado</span></a>
+    <hr>
+    <a href="#idioma"><svg viewBox="0 0 20 20"><path d="M3 5h8M7 3v2M5 5c0 3 2 6 5 7M9 5c0 3-2 6-5 7M11 17l3-8 3 8M12 14.5h4"/></svg><span data-t="Idioma">Idioma</span></a>
+    <a href="#descargas"><svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span data-t="Descargas">Descargas</span></a>
+    <a href="#video"><svg viewBox="0 0 20 20"><rect x="2.5" y="4.5" width="15" height="11" rx="2.5"/><path d="m8.5 8 4 2-4 2Z"/></svg><span data-t="YouTube y vídeo">YouTube y vídeo</span></a>
+    <a href="#lectura"><svg viewBox="0 0 20 20"><path d="M10 5.5C8.5 4.3 6 4 3 4.5v10c3-.5 5.5-.2 7 1 1.5-1.2 4-1.5 7-1v-10c-3-.5-5.5-.2-7 1Zm0 0v10"/></svg><span data-t="Modo lectura">Modo lectura</span></a>
+    <a href="#sistema"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M7 17h6M10 14v3"/></svg><span data-t="Sistema y rendimiento">Sistema y rendimiento</span></a>
+    <hr>
+    <a href="#extensiones"><svg viewBox="0 0 20 20"><path d="M8 3.5a1.5 1.5 0 0 1 3 0V5h3a1 1 0 0 1 1 1v3h-1.5a1.5 1.5 0 0 0 0 3H15v3a1 1 0 0 1-1 1h-3v-1.5a1.5 1.5 0 0 0-3 0V16H5a1 1 0 0 1-1-1v-3h1.5a1.5 1.5 0 0 0 0-3H4V6a1 1 0 0 1 1-1h3Z"/></svg><span data-t="Extensiones y scripts">Extensiones y scripts</span></a>
+    <a href="#acerca"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.5v.01"/></svg><span data-t="Acerca de Pluma">Acerca de Pluma</span></a>
+  </nav>
+  <main>
+    <section id="apariencia">
+      <h2 data-t="Apariencia">Apariencia</h2>
+      <div class="card">
+        <div class="row" data-k="tema claro oscuro">
+          <div class="txt"><div class="name" data-t="Tema">Tema</div><div class="desc" data-t="La barra, los menús y las páginas que lo admiten">La barra, los menús y las páginas que lo admiten</div></div>
+          <div class="themes" id="themes">
+            <label data-v="2"><input type="radio" name="th"><span class="swatch"><i style="background:#f3f3f6"></i><i style="background:#26272c"></i></span><span data-t="Como Windows">Como Windows</span></label>
+            <label data-v="0"><input type="radio" name="th"><span class="swatch"><i style="background:#f3f3f6"></i></span><span data-t="Claro">Claro</span></label>
+            <label data-v="1"><input type="radio" name="th"><span class="swatch"><i style="background:#26272c"></i></span><span data-t="Oscuro">Oscuro</span></label>
+          </div>
+        </div>
+        <div class="row" data-k="fuente letra tipografia">
+          <div class="txt"><div class="name" data-t="Fuente">Fuente</div><div class="desc" data-t="La de la barra y los menús de Pluma">La de la barra y los menús de Pluma</div></div>
+          <select id="font"></select>
+        </div>
+      </div>
+    </section>
+
+    <section id="buscador">
+      <h2 data-t="Buscador">Buscador</h2>
+      <div class="card">
+        <div class="row" data-k="buscador google bing duckduckgo">
+          <div class="txt"><div class="name" data-t="Buscador de la barra de direcciones">Buscador de la barra de direcciones</div><div class="desc" data-t="Lo que escribas que no sea una dirección se busca aquí">Lo que escribas que no sea una dirección se busca aquí</div></div>
+          <select id="engine"></select>
+        </div>
+      </div>
+    </section>
+
+    <section id="nueva">
+      <h2 data-t="Página de nueva pestaña">Página de nueva pestaña</h2>
+      <div class="card">
+        <div class="row" data-k="sugerir visitadas nueva pestaña">
+          <div class="txt"><div class="name" data-t="Sugerir lo que más visito">Sugerir lo que más visito</div><div class="desc" data-t="Mientras no tengas páginas tuyas fijadas en la pestaña nueva">Mientras no tengas páginas tuyas fijadas en la pestaña nueva</div></div>
+          <label class="toggle"><input type="checkbox" id="suggest"><span></span></label>
+        </div>
+      </div>
+    </section>
+
+    <section id="marcadores">
+      <h2 data-t="Marcadores">Marcadores</h2>
+      <div class="card">
+        <div class="row" data-k="marcadores administrador carpetas">
+          <div class="txt"><div class="name" data-t="Administrador de marcadores">Administrador de marcadores</div><div class="desc" data-t="Tus marcadores y carpetas (Ctrl+Mayús+O)">Tus marcadores y carpetas (Ctrl+Mayús+O)</div></div>
+          <button data-do="bookmarks" data-t="Abrir">Abrir</button>
+        </div>
+        <div class="row" data-k="importar otro navegador edge firefox">
+          <div class="txt"><div class="name" data-t="Importar de otro navegador">Importar de otro navegador</div><div class="desc" data-t="Trae marcadores e historial de Edge, Brave, Vivaldi, Opera o Firefox">Trae marcadores e historial de Edge, Brave, Vivaldi, Opera o Firefox</div></div>
+          <button class="primary" data-do="import" data-t="Importar">Importar</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="privacidad">
+      <h2 data-t="Privacidad y datos">Privacidad y datos</h2>
+      <div class="card">
+        <div class="row" data-k="borrar historial">
+          <div class="txt"><div class="name" data-t="El historial de Pluma">El historial de Pluma</div><div class="desc" data-t="Las páginas que has visitado">Las páginas que has visitado</div></div>
+          <button data-do="clearHistory" data-t="Borrar">Borrar</button>
+        </div>
+        <div class="row" data-k="borrar cookies cache datos">
+          <div class="txt"><div class="name" data-t="Todo menos las contraseñas">Todo menos las contraseñas</div><div class="desc" data-t="Las cookies cierran tus sesiones en las webs.">Las cookies cierran tus sesiones en las webs.</div></div>
+          <button class="danger" data-do="clearAll" data-t="Borrar">Borrar</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="predeterminado">
+      <h2 data-t="Navegador predeterminado">Navegador predeterminado</h2>
+      <div class="card">
+        <div class="row" data-k="predeterminado navegador">
+          <div class="txt"><div class="name" id="defname" data-t="Pluma no es tu navegador predeterminado">Pluma no es tu navegador predeterminado</div><div class="desc" data-t="Los enlaces de otros programas se abren en tu navegador predeterminado">Los enlaces de otros programas se abren en tu navegador predeterminado</div></div>
+          <button class="primary" id="defbtn" data-do="defaultBrowser" data-t="Hacer predeterminado">Hacer predeterminado</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="idioma">
+      <h2 data-t="Idioma">Idioma</h2>
+      <div class="card">
+        <div class="row" data-k="idioma language">
+          <div class="txt"><div class="name" data-t="Idioma de Pluma">Idioma de Pluma</div><div class="desc" data-t="Los menús y los mensajes de Pluma; las webs lo reciben al abrir Pluma de nuevo">Los menús y los mensajes de Pluma; las webs lo reciben al abrir Pluma de nuevo</div></div>
+          <select id="idioma-sel"></select>
+        </div>
+      </div>
+    </section>
+
+    <section id="descargas">
+      <h2 data-t="Descargas">Descargas</h2>
+      <div class="card">
+        <div class="row" data-k="descargas carpeta">
+          <div class="txt"><div class="name" data-t="Lo que has descargado">Lo que has descargado</div><div class="desc" data-t="Ctrl+J">Ctrl+J</div></div>
+          <button data-do="downloads" data-t="Ver descargas">Ver descargas</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="video">
+      <h2 data-t="YouTube y vídeo">YouTube y vídeo</h2>
+      <div class="card">
+        <div class="row" data-k="youtube reproductor video">
+          <div class="txt"><div class="name" data-t="YouTube en el reproductor de Pluma">YouTube en el reproductor de Pluma</div><div class="desc" id="videodesc" data-t="Los vídeos usan mucha menos memoria que en la página">Los vídeos usan mucha menos memoria que en la página</div></div>
+          <label class="toggle"><input type="checkbox" id="video-on"><span></span></label>
+        </div>
+        <div class="row" data-k="youtube ligero rapido memoria">
+          <div class="txt"><div class="name" data-t="YouTube ligero">YouTube ligero</div><div class="desc" data-t="Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta">Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta</div></div>
+          <label class="toggle"><input type="checkbox" id="ytlite"><span></span></label>
+        </div>
+      </div>
+    </section>
+
+    <section id="lectura">
+      <h2 data-t="Modo lectura">Modo lectura</h2>
+      <div class="card" id="lectura-card">
+        <div class="row" data-k="modo lectura articulo lector siempre sitios">
+          <div class="txt"><div class="name" data-t="Sitios que se abren siempre en modo lectura">Sitios que se abren siempre en modo lectura</div><div class="desc" data-t="Se añaden desde el modo lectura: F9 o el libro de la barra de direcciones en un artículo">Se añaden desde el modo lectura: F9 o el libro de la barra de direcciones en un artículo</div></div>
+          <span class="badge" id="lectura-none" data-t="Ninguno todavía">Ninguno todavía</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="sistema">
+      <h2 data-t="Sistema y rendimiento">Sistema y rendimiento</h2>
+      <div class="card">
+        <div class="row" data-k="arrancar windows inicio">
+          <div class="txt"><div class="name" data-t="Arrancar con Windows">Arrancar con Windows</div><div class="desc" data-t="Pluma se abre al instante porque ya está en memoria, escondido">Pluma se abre al instante porque ya está en memoria, escondido</div></div>
+          <label class="toggle"><input type="checkbox" id="startup"><span></span></label>
+        </div>
+        <div class="row" data-k="memoria residente cerrar">
+          <div class="txt"><div class="name" data-t="Seguir en memoria al cerrar la ventana">Seguir en memoria al cerrar la ventana</div><div class="desc" data-t="Volver a abrirlo es instantáneo; Ctrl+Mayús+Q lo cierra del todo">Volver a abrirlo es instantáneo; Ctrl+Mayús+Q lo cierra del todo</div></div>
+          <label class="toggle"><input type="checkbox" id="resident"><span></span></label>
+        </div>
+        <div class="row" data-k="dormir pestañas memoria">
+          <div class="txt"><div class="name" data-t="Dormir las pestañas que no ves">Dormir las pestañas que no ves</div><div class="desc" data-t="Dejan de gastar procesador y memoria; se despiertan al volver a ellas">Dejan de gastar procesador y memoria; se despiertan al volver a ellas</div></div>
+          <select id="sleep">
+            <option value="30" data-t="A los 30 segundos">A los 30 segundos</option>
+            <option value="45" data-t="A los 45 segundos">A los 45 segundos</option>
+            <option value="120" data-t="A los 2 minutos">A los 2 minutos</option>
+            <option value="300" data-t="A los 5 minutos">A los 5 minutos</option>
+            <option value="900" data-t="A los 15 minutos">A los 15 minutos</option>
+          </select>
+        </div>
+        <div class="row" data-k="pestañas rapidas reserva">
+          <div class="txt"><div class="name" data-t="Tener una pestaña preparada">Tener una pestaña preparada</div><div class="desc" data-t="Las pestañas nuevas abren un poco antes, a cambio de algo más de memoria">Las pestañas nuevas abren un poco antes, a cambio de algo más de memoria</div></div>
+          <label class="toggle"><input type="checkbox" id="spare"><span></span></label>
+        </div>
+        <div class="row" data-k="memoria uso">
+          <div class="txt"><div class="name" data-t="Memoria que usa Pluma ahora">Memoria que usa Pluma ahora</div></div>
+          <span class="badge" id="mem"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="extensiones">
+      <h2 data-t="Extensiones y scripts">Extensiones y scripts</h2>
+      <div class="card">
+        <div class="row" data-k="extensiones ublock">
+          <div class="txt"><div class="name" data-t="Extensiones">Extensiones</div><div class="desc" id="extdesc"></div></div>
+          <button data-do="store" data-t="Chrome Web Store">Chrome Web Store</button>
+          <button data-do="extensions" data-t="Gestionar">Gestionar</button>
+        </div>
+        <div class="row" data-k="scripts usuario">
+          <div class="txt"><div class="name" data-t="Scripts de usuario">Scripts de usuario</div><div class="desc" id="scriptdesc"></div></div>
+          <button data-do="scripts" data-t="Gestionar">Gestionar</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="acerca">
+      <h2 data-t="Acerca de Pluma">Acerca de Pluma</h2>
+      <div class="card">
+        <div class="row" data-k="version pluma">
+          <div class="txt"><div class="name" id="ver">Pluma</div><div class="desc" data-t="Navegador ligero sobre el motor de Edge">Navegador ligero sobre el motor de Edge</div></div>
+          <button data-do="repo" data-t="Código fuente">Código fuente</button>
+        </div>
+        <div class="row" data-k="actualizaciones actualizar">
+          <div class="txt"><div class="name" data-t="Actualizaciones">Actualizaciones</div><div class="desc" data-t="Desde las versiones publicadas de Pluma, comprobadas antes de instalarse">Desde las versiones publicadas de Pluma, comprobadas antes de instalarse</div></div>
+          <select id="update">
+            <option value="2" data-t="Automáticas">Automáticas</option>
+            <option value="1" data-t="Avisarme">Avisarme</option>
+            <option value="0" data-t="Nunca">Nunca</option>
+          </select>
+          <button data-do="checkUpdates" data-t="Buscar ahora">Buscar ahora</button>
+        </div>
+      </div>
+    </section>
+    <div class="empty" id="empty" data-t="No hay nada que coincida">No hay nada que coincida</div>
+  </main>
+</div>
+<script>
+const W = window.chrome && chrome.webview;
+const $ = id => document.getElementById(id);
+let S = null, texts = {};
+const tr = s => texts[s] || s;
+const send = o => W && W.postMessage(o);
+const set = (key, value) => send({ op: 'set', key, value });
+const FONTS = ['', 'Roboto', 'Roboto Mono', 'Arial', 'Verdana', 'Georgia', 'Consolas'];
+
+function translate() {
+  document.querySelectorAll('[data-t]').forEach(e => { e.textContent = tr(e.dataset.t); });
+  document.querySelectorAll('[data-tp]').forEach(e => { e.placeholder = tr(e.dataset.tp); });
+  document.title = tr('Configuración');
+}
+function fill(sel, items, value) {
+  sel.textContent = '';
+  for (const [v, name] of items) { const o = document.createElement('option'); o.value = v; o.textContent = name; sel.append(o); }
+  sel.value = value;
+}
+function render() {
+  document.documentElement.classList.toggle('dark', S.dark);
+  document.documentElement.lang = S.lang;
+  document.querySelectorAll('#themes label').forEach(l => l.classList.toggle('on', +l.dataset.v === S.theme));
+  const fonts = FONTS.map(f => [f, f || tr('La de Windows')]);
+  if (!FONTS.includes(S.font)) fonts.push([S.font, S.font]);
+  fill($('font'), fonts, S.font);
+  fill($('engine'), S.engines, S.engine);
+  fill($('idioma-sel'), S.langs, S.idioma);
+  $('suggest').checked = S.suggest;
+  $('ytlite').checked = S.ytlite;
+  $('video-on').checked = S.video; $('video-on').disabled = !S.videoAvailable;
+  if (!S.videoAvailable) $('videodesc').textContent = tr('Falta el motor de vídeo de Pluma (motor-video)');
+  $('startup').checked = S.startup; $('resident').checked = S.resident; $('spare').checked = S.spare;
+  const sl = $('sleep');
+  if (![...sl.options].some(o => +o.value === S.sleep)) { const o = document.createElement('option'); o.value = S.sleep; o.textContent = S.sleep + ' s'; sl.append(o); }
+  sl.value = S.sleep;
+  $('mem').textContent = S.memory + ' MB';
+  $('update').value = S.update;
+  $('ver').textContent = 'Pluma ' + S.version;
+  $('extdesc').textContent = S.extensions === 1 ? tr('1 activa') : S.extensions + tr(' activas');
+  $('scriptdesc').textContent = S.scripts === 1 ? tr('1 activo') : S.scripts + tr(' activos');
+  $('defname').textContent = tr(S.defaultBrowser ? 'Pluma es tu navegador predeterminado' : 'Pluma no es tu navegador predeterminado');
+  $('defbtn').style.display = S.defaultBrowser ? 'none' : '';
+  // the reader view's sites, each with its "Quitar"
+  document.querySelectorAll('#lectura-card .site').forEach(r => r.remove());
+  $('lectura-none').style.display = S.readerSites.length ? 'none' : '';
+  for (const h of S.readerSites) {
+    const r = document.createElement('div'); r.className = 'row site'; r.dataset.k = 'modo lectura ' + h;
+    const n = document.createElement('div'); n.className = 'txt'; n.textContent = h;
+    const b = document.createElement('button'); b.textContent = tr('Quitar'); b.onclick = () => set('readerSiteOff', h);
+    r.append(n, b); $('lectura-card').append(r);
+  }
+}
+// the search: rows by their words (shown, in the language, and their keywords); sections with none left go
+function filter() {
+  const q = $('q').value.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  let any = false;
+  document.querySelectorAll('main section').forEach(sec => {
+    let shown = 0;
+    sec.querySelectorAll('.row').forEach(r => {
+      const words = (r.textContent + ' ' + (r.dataset.k || '') + ' ' + sec.querySelector('h2').textContent).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const ok = !q || words.includes(q);
+      r.classList.toggle('hidden', !ok);
+      if (ok) shown++;
+    });
+    sec.classList.toggle('hidden', !shown);
+    if (shown) any = true;
+  });
+  $('empty').style.display = any ? 'none' : 'block';
+}
+$('q').addEventListener('input', () => { filter(); mark(); });
+document.querySelectorAll('#themes label').forEach(l => l.addEventListener('click', () => set('theme', +l.dataset.v)));
+$('font').onchange = e => set('font', e.target.value);
+$('engine').onchange = e => set('engine', e.target.value);
+$('idioma-sel').onchange = e => { set('idioma', e.target.value); setTimeout(ask, 100); };
+$('update').onchange = e => set('update', +e.target.value);
+$('sleep').onchange = e => set('sleep', +e.target.value);
+for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
+  $(id).onchange = e => set(key, e.target.checked);
+document.querySelectorAll('[data-do]').forEach(b => b.addEventListener('click', () => send({ op: 'do', what: b.dataset.do })));
+// the side list: where each section is, and the one in view
+document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault();
+  $('q').value = ''; filter();
+  document.querySelector(a.getAttribute('href')).scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}));
+function mark() {
+  let cur = null;
+  document.querySelectorAll('main section:not(.hidden)').forEach(s => { if (s.getBoundingClientRect().top < 140) cur = s.id; });
+  if (!cur) { const f = document.querySelector('main section:not(.hidden)'); cur = f && f.id; }
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + cur));
+}
+addEventListener('scroll', mark, { passive: true });
+function ask() {
+  const all = new Set();
+  document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
+  document.querySelectorAll('[data-tp]').forEach(e => all.add(e.dataset.tp));
+  ['La de Windows', '1 activa', ' activas', '1 activo', ' activos', 'Pluma es tu navegador predeterminado', 'Pluma no es tu navegador predeterminado',
+   'Falta el motor de vídeo de Pluma (motor-video)', 'Quitar'].forEach(s => all.add(s));
+  send({ op: 'get', texts: [...all] });
+}
+if (W) W.addEventListener('message', e => {
+  const m = e.data;
+  if (!m || m.op !== 'state') return;
+  if (m.t) { texts = m.t; translate(); }
+  S = m; render(); filter(); mark();
+});
+if (location.hash) addEventListener('load', () => { const s = document.querySelector(location.hash); if (s) s.scrollIntoView(); });
+ask();
+</script>
+</body>
+</html>

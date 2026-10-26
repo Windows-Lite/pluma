@@ -20,9 +20,6 @@ jobs:
         with:
           path: src/sdk
           key: webview2-sdk-v1
-      - name: Build
-        shell: cmd
-        run: src\compilar.cmd "%GITHUB_WORKSPACE%\Pluma.exe"
       - name: Version
         id: v
         shell: bash
@@ -32,6 +29,12 @@ jobs:
           else IFS=. read -r a b c <<< "${last#v}"; v="v$a.$b.$((c+1))"; range="$last..HEAD"; fi
           echo "tag=$v" >> "$GITHUB_OUTPUT"
           { echo "notes<<EOF"; git log --pretty='- %s' $range; echo EOF; } >> "$GITHUB_OUTPUT"
+      - name: Build
+        # the version goes into the exe, for its updates (update.cpp)
+        shell: cmd
+        env:
+          PLUMA_VERSION: ${{ steps.v.outputs.tag }}
+        run: src\compilar.cmd "%GITHUB_WORKSPACE%\Pluma.exe"
       - name: Package
         # one top folder, as instalar.ps1 and the windows-lite lab expect
         shell: pwsh
@@ -41,10 +44,15 @@ jobs:
           Copy-Item Pluma.exe, instalar.ps1, README.md $d
           Copy-Item extensiones, fuentes "$d" -Recurse
           Copy-Item tools\motor-video.ps1 "$d\tools"
+          # third-party code inside Pluma.exe: its license goes with it
+          New-Item -ItemType Directory "$d\licencias" | Out-Null
+          Copy-Item src\readability\LICENSE.md "$d\licencias\readability-LICENSE.md"
           Compress-Archive $d "$d.zip"
+          # "<sha256>  <file>": Pluma checks the download against it before updating
+          "$((Get-FileHash "$d.zip" -Algorithm SHA256).Hash.ToLower())  $d.zip" | Set-Content -NoNewline -Encoding ascii "$d.zip.sha256"
       - name: Publish
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ steps.v.outputs.notes }}
-        run: gh release create "${{ steps.v.outputs.tag }}" "pluma-${{ steps.v.outputs.tag }}.zip" --target "$GITHUB_SHA" --title "Pluma ${{ steps.v.outputs.tag }}" --notes "$NOTES"
+        run: gh release create "${{ steps.v.outputs.tag }}" "pluma-${{ steps.v.outputs.tag }}.zip" "pluma-${{ steps.v.outputs.tag }}.zip.sha256" --target "$GITHUB_SHA" --title "Pluma ${{ steps.v.outputs.tag }}" --notes "$NOTES"

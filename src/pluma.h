@@ -7,7 +7,9 @@
 //   Pluma.exe --oculto     starts it hidden, ready (for Windows startup)
 //   Pluma.exe --salir      closes the one in memory for good
 // PLUMA_INSTANCIA=<name> runs a separate instance (own mutex, window class and data), off the screen, for tests;
-// PLUMA_DEPURAR=<port> opens the DevTools protocol on that port.
+// PLUMA_DEPURAR=<port> opens the DevTools protocol on that port. Test instances only: PLUMA_SIN_SONIDO=1 keeps them
+// silent (the engine and mpv), PLUMA_PRUEBA_ROMPER_VIDEO=K breaks a video list's pieces from piece K on (video.cpp).
+// PLUMA_SIN_MPV_LOG=1 leaves mpv logging as in a normal build (no mpv.log; only its warnings, in pluma.log).
 #pragma once
 #include <windows.h>
 #include <windowsx.h>
@@ -31,6 +33,8 @@
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
+struct Json;   // json.h; the bookmarks/import pages take and give JSON
+
 // ---------------------------------------------------------------- small things (main.cpp)
 double now_ms();
 std::string utf8(const std::wstring &s);
@@ -47,6 +51,7 @@ std::wstring json_escape(const std::wstring &s);  // a JSON string literal, quot
 std::wstring hash_hex(const std::wstring &s);
 bool starts_with(const std::wstring &s, const wchar_t *p);
 bool ends_with_i(const std::wstring &s, const wchar_t *p);
+std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file);   // a tab file in g_state, split into rows/fields
 
 // One value that moves towards a target with ease-out (no overshoot). Everything that moves in the bar is one of these.
 struct Anim {
@@ -68,6 +73,7 @@ extern bool g_motion;   // Windows "Show animations"
 struct Settings {
     std::wstring engine = L"google";   // google, duckduckgo, bing, startpage, brave
     int theme = 2;                     // 0 light (as Mapea), 1 dark, 2 as Windows (the default)
+    int update = 2;                    // 0 never, 1 tell me, 2 automatic (the default; update.cpp)
     std::wstring lang;                 // the interface's language: es, en, pt, fr, de, it (empty = Windows's)
     std::wstring font;                 // the bar's typeface: a family installed in Windows or one in fuentes\ (empty = Windows's)
     int sleep_s = 45;                  // a hidden tab is frozen after this
@@ -77,10 +83,44 @@ struct Settings {
     bool spare = false;                // a view made ahead of time (the next page starts 35 ms sooner; costs ~10 MB)
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
     bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
+    bool youtube_lite = true;          // YouTube answered with Pluma's own light page (youtube.cpp)
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
+    bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
+    int reader_size = 20;              // the reader view's font size, px (reader.cpp)
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
 extern Settings g_set;
+
+// ---------------------------------------------------------------- updates (update.cpp)
+const wchar_t *update_version();   // the release this is ("dev" for a local build)
+void update_finish();              // at start: what the last update left
+void update_init();                // checks from now on, if the build and the settings allow it
+void update_check_now();           // the menu's "check now"
+void update_on_hide();             // the window was closed: a waiting update goes in
+void update_on_quit();
+// ---------------------------------------------------------------- the settings page (settings.cpp)
+bool settings_page_url(const std::wstring &u);              // https://pluma.local/...: Pluma's own page
+std::wstring settings_page_display(const std::wstring &u);  // ... shown as pluma://...
+std::wstring settings_page_from_typed(const std::wstring &typed);   // pluma://settings typed -> its url ("" if not)
+void settings_open();                // opens it (or goes to the tab that has it)
+void settings_attach(ICoreWebView2 *v);   // every view: serves the page and listens to it
+void settings_page_refresh();        // the open settings pages show what changed
+void settings_page_refresh_soon();
+void data_clear_all();               // cookies, cache and history (not passwords)
+void ui_ntp_changed();               // the new tab page's rows are read again
+void ui_open_menu_page(const std::wstring &which);   // the menu, open at "ext" or "scripts"
+std::wstring lang_name(const wchar_t *code);         // a language by its own name ("" = Windows's)             // Pluma closes for good: a waiting update goes in for the next start
+
+// ---------------------------------------------------------------- YouTube ligero (youtube.cpp)
+struct Tab;
+void youtube_attach(Tab *t);              // every view: YouTube's pages answered with Pluma's light one
+void youtube_settings_changed();          // the setting went off: the light pages go back to YouTube's
+
+// ---------------------------------------------------------------- the reader view (reader.cpp)
+void reader_attach(Tab *t);               // every view: is it an article? and Pluma's reader page for it
+void reader_toggle(Tab *t);               // the book in the address bar or F9: into the reader view or out of it
+std::vector<std::wstring> reader_sites(); // the sites opened straight in the reader view (lectura.tsv)
+void reader_site_set(const std::wstring &site, bool on);
 
 // ---------------------------------------------------------------- languages (lang.cpp)
 const wchar_t *T(const wchar_t *es);   // a text of the interface, written in Spanish, in the person's language
@@ -95,29 +135,87 @@ extern std::vector<HistoryEntry> g_history;
 void history_load();
 void history_add(const std::wstring &url, const std::wstring &title);
 void history_title(const std::wstring &url, const std::wstring &title);
+bool history_import(const std::wstring &url, const std::wstring &title, int visits, long long last);   // from another browser
 void history_flush();
 void history_clear();
 struct Suggestion { std::wstring url, title; bool search = false; };
 std::vector<Suggestion> history_suggest(const std::wstring &typed, std::wstring *inline_completion);
 std::vector<HistoryEntry> history_top(int n);
 // the new tab page: the person's own pages (added with the address's star, Ctrl+D), and sites taken off its suggestions
-extern std::vector<HistoryEntry> g_pins;
-void pins_load();
+extern std::vector<HistoryEntry> g_pins;    // the pages shown on the new tab page: a view of the "Tus páginas" folder
 bool pins_has(const std::wstring &url);
 bool pins_toggle(const std::wstring &url, const std::wstring &title);   // true: added
 void pins_add(const std::wstring &url, const std::wstring &title, size_t at);
 void pins_remove(const std::wstring &url);
 void history_hide_site(const std::wstring &url, bool hide);           // off the suggestions (or back on)
+void hidden_load();                                                   // the sites taken off the suggestions (ocultas.tsv)
+
+// ---------------------------------------------------------------- bookmarks (bookmarks.cpp): marcadores.json, a tree of folders
+struct BmNode {
+    int id = 0;
+    int role = 0;                   // 0 normal, 1 the bookmarks bar, 2 the new tab page's "Tus páginas"
+    bool folder = false;
+    std::wstring title, url;
+    long long added = 0;            // epoch seconds
+    std::vector<BmNode> kids;       // for folders
+};
+extern BmNode g_bm_root;
+void bookmarks_load();              // reads marcadores.json; migrates paginas.tsv the first time
+void bookmarks_save();
+int bm_bar_folder();                // id of "Barra de marcadores"
+int bm_pins_folder();              // id of "Tus páginas" (the new tab page)
+BmNode *bm_find(int id);           // a node by its id, or nullptr
+int bm_add(int parent, const std::wstring &url, const std::wstring &title);   // a bookmark; -1 if its url is already there
+int bm_add_folder(int parent, const std::wstring &title);
+void bm_remove(int id);
+void bm_rename(int id, const std::wstring &title);
+void bm_move(int id, int new_parent, int at);
+bool bm_url_in(int folder, const std::wstring &url);
+void bm_toggle_in(int folder, const std::wstring &url, const std::wstring &title);   // add it to the folder, or take it out
+int bm_count();                     // how many bookmarks (not folders) in the whole tree
+int bm_new_id();                    // a fresh node id (for import, which builds a subtree in one go)
+std::wstring bm_shown_title(const BmNode &n);   // a folder's name as shown (the permanent ones in the UI language)
+BmNode &bm_root();                  // the root folder (its kids are the top-level folders)
+void bm_commit();                   // after a batch change: save, resync the new tab page, refresh the open pages
+void bookmarks_open();              // the manager page (pluma://bookmarks)
+void import_open();                 // the wizard (pluma://import)
+// the pages Pluma serves from the exe that are not the settings page (bookmarks.cpp answers them)
+std::wstring bm_page_state(const std::wstring &path, const Json &texts);
+void bm_page_do(ICoreWebView2 *v, const std::wstring &path, const Json &j);
+void bm_pages_refresh();            // the open bookmarks/import pages show what changed
+
+// ---------------------------------------------------------------- import from another browser (import.cpp, used by bookmarks.cpp)
+struct ImportProfile {
+    std::wstring browser;           // "Edge", "Brave", "Vivaldi", "Opera", "Firefox"
+    std::wstring name;              // the profile's display name
+    std::wstring path;              // the profile's folder
+    bool firefox = false;
+    bool running = false;           // the browser is open (its files are copied before being read)
+    int bookmarks = 0, history = 0, passwords = 0;   // counts found (estimates)
+};
+std::vector<ImportProfile> import_scan();           // the browsers and profiles found
+struct ImportResult { int bookmarks = 0, history = 0, passwords = 0; std::wstring note; };
+ImportResult import_do(const ImportProfile &p, bool bookmarks, bool history, bool passwords);
+int passwords_store_kind();          // 0 unknown, 10 writable (v10/DPAPI), 20 app-bound (not writable)
+// passwords come from a CSV the other browser exports (its own store is app-bound and cannot be read)
+void passwords_open_edge_export();   // opens edge://settings/passwords in Edge, for the user to export
+ImportResult passwords_import_pick();   // a file picker, then import the chosen CSV (passwords = how many; -1 cancelled)
+bool passwords_delete_csv();        // overwrites and deletes the CSV just imported (asked first on the page)
+int passwords_apply_pending();       // at the next start, before the engine runs: writes the ready rows into Login Data
 
 void set_fullscreen(bool on);
 void app_quit();                          // closes Pluma for good (not just the window)
 void app_close_window();                  // what the window's X does
+std::wstring app_name();                  // "Pluma", or "Pluma (Incógnito)": the window's title
+void app_open_incognito(const std::wstring &url = L"");   // the incognito window (or a tab in it, from there)
+void app_restart(bool hidden);            // starts Pluma.exe again (after an update) and closes this one
 std::wstring fixup_input(const std::wstring &typed);   // what was typed in the address bar -> the url to load
 
 extern HINSTANCE g_inst;
 extern HWND g_win, g_bar, g_edit;
 extern std::wstring g_root, g_state;   // the exe's folder; %LOCALAPPDATA%\Pluma (or its test folder)
 extern bool g_test, g_dev, g_quitting, g_fullscreen;
+extern bool g_incognito;   // the incognito window (--incognito): every tab InPrivate, all dark, nothing kept
 extern bool g_test_visible;   // a test instance on the screen (PLUMA_A_LA_VISTA), to record what the user would see
 extern double g_open_asked;               // when a page was asked for (start, or from memory): for the log
 extern ComPtr<ICoreWebView2Environment> g_env;
@@ -143,6 +241,10 @@ struct Tab {
     bool video_mode = false;           // ... on screen instead of the page, which sleeps behind it
     std::wstring video_declined;       // the video the person went back to the page for: it stays on the page
     bool incognito = false;            // InPrivate: nothing of it is kept (history, cookies, session); gone with the window
+    bool yt_lite = false;              // its page is Pluma's light YouTube (youtube.cpp): Pluma's player goes straight in
+    bool readerable = false;           // its page is an article: the address bar offers the reader view (reader.cpp)
+    bool reader = false;               // ... and it is on screen
+    std::wstring reader_declined;      // the address the person left the reader view at (no automatic reader view there)
     // the bar's geometry, animated
     Anim x, w, hover, close_hover;
     bool placed = false;
@@ -216,7 +318,8 @@ void ui_toggle_pin();                      // the page on screen onto the new ta
 // colours (Mapea's tokens)
 struct Palette { D2D1_COLOR_F bg, surface, text, sub, line, line_strong, accent, accent_soft, error, hover, press; };
 const Palette &pal();
-bool dark_theme();
+bool dark_theme();       // the bar (always dark in the incognito window)
+bool user_dark_theme();  // what the settings say (ordinary pages follow this one)
 
 // ---------------------------------------------------------------- YouTube in Pluma's own player (video.cpp)
 void video_init();
