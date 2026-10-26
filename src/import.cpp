@@ -67,7 +67,7 @@ static std::vector<std::vector<std::wstring>> sql_rows(const std::wstring &db_pa
 
 // copy a database (and its -wal) to a throwaway file, so a database in use can be read
 static std::wstring copy_db(const std::wstring &src) {
-    std::wstring dir = g_state + L"\\imp_tmp";
+    std::wstring dir = g_data + L"\\imp_tmp";
     CreateDirectoryW(dir.c_str(), NULL);
     std::wstring dst = dir + L"\\" + std::to_wstring(GetTickCount64()) + L".db";
     std::string data;
@@ -131,12 +131,13 @@ static void chromium_build(const Json &node, BmNode &into, int &added) {
 static void add_chromium(std::vector<ImportProfile> &out, const std::wstring &browser, const std::wstring &root, const wchar_t *exe, bool single) {
     if (!PathFileExistsW(root.c_str())) return;
     bool running = proc_running(exe);
-    auto one = [&](const std::wstring &dir, const std::wstring &name) {
+    auto one = [&](const std::wstring &dir, const std::wstring &name, const std::wstring &account = L"") {
         if (!PathFileExistsW(dir.c_str())) return;
-        ImportProfile p; p.browser = browser; p.name = name; p.path = dir; p.running = running;
+        ImportProfile p; p.browser = browser; p.name = name; p.account = account; p.path = dir; p.running = running;
         p.bookmarks = chromium_bookmark_count(dir);
         p.history = -1;
         p.passwords = -1;
+        p.extensions = ext_import_count(dir);
         if (p.bookmarks > 0 || PathFileExistsW((dir + L"\\History").c_str())) out.push_back(p);
     };
     if (single) { one(root, browser); return; }
@@ -148,6 +149,16 @@ static void add_chromium(std::vector<ImportProfile> &out, const std::wstring &br
         if (info.kind == Json::OBJ) for (auto &kv : info.obj) if (kv.first == dir) { std::wstring n = kv.second[L"name"].s; if (!n.empty()) return n; }
         return dir;
     };
+    // the account signed in, if any: what Edge shows under the name (and the better name when the profile kept its
+    // default one, "Perfil 1")
+    auto account_of = [&](const std::wstring &dir) -> std::wstring {
+        if (info.kind == Json::OBJ) for (auto &kv : info.obj) if (kv.first == dir) return kv.second[L"user_name"].s;
+        return L"";
+    };
+    auto default_named = [&](const std::wstring &dir) -> bool {
+        if (info.kind == Json::OBJ) for (auto &kv : info.obj) if (kv.first == dir) return kv.second[L"is_using_default_name"].b;
+        return false;
+    };
     WIN32_FIND_DATAW fd;
     HANDLE h = FindFirstFileW((root + L"\\*").c_str(), &fd);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -155,7 +166,8 @@ static void add_chromium(std::vector<ImportProfile> &out, const std::wstring &br
         if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
         std::wstring d = fd.cFileName;
         if (d != L"Default" && !starts_with(d, L"Profile ")) continue;
-        one(root + L"\\" + d, name_of(d));
+        std::wstring acc = account_of(d);
+        one(root + L"\\" + d, default_named(d) && !acc.empty() ? acc : name_of(d), acc);
     } while (FindNextFileW(h, &fd));
     FindClose(h);
 }
@@ -194,6 +206,12 @@ std::vector<ImportProfile> import_scan() {
     bool okl = SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, lp));
     bool oka = SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_APPDATA, NULL, 0, ap));
     std::wstring L = okl ? lp : L"", A = oka ? ap : L"";
+    // tests: a copy of Edge's folder instead of the real one (PLUMA_EDGE_DIR), and no other browser
+    wchar_t edge_copy[MAX_PATH] = L"";
+    if (g_test && GetEnvironmentVariableW(L"PLUMA_EDGE_DIR", edge_copy, MAX_PATH) > 0) {
+        add_chromium(out, L"Edge", edge_copy, L"msedge-copia-de-prueba.exe", false);
+        return out;
+    }
     if (okl) {
         add_chromium(out, L"Edge", L + L"\\Microsoft\\Edge\\User Data", L"msedge.exe", false);
         add_chromium(out, L"Brave", L + L"\\BraveSoftware\\Brave-Browser\\User Data", L"brave.exe", false);
@@ -264,9 +282,33 @@ ImportResult import_do(const ImportProfile &p, bool want_bookmarks, bool want_hi
     if (p.passwords != 0) r.note = T(L"Las contraseñas no se pueden importar: el navegador las guarda protegidas.");
     return r;
 }
+// into another profile's files: its history and bookmarks are swapped in for the import, and this window's put back
+ImportResult import_into(const std::wstring &id, const ImportProfile &p, bool bookmarks, bool history) {
+    if (id == g_profile_id) return import_do(p, bookmarks, history, false);
+    ImportResult r;
+    if (g_incognito) { r.note = T(L"No disponible en una ventana de incógnito."); return r; }
+    // its window, if open, writes what it has first, and reads it all again after
+    HWND w = profile_window(id);
+    DWORD_PTR res = 0;
+    if (w) SendMessageTimeoutW(w, WM_APP + 41, 0, 0, SMTO_ABORTIFHUNG, 5000, &res);
+    history_flush();
+    std::wstring mine = g_data;
+    history_stash(true); bookmarks_stash(true); g_quiet_commit = true;
+    g_data = profile_data_dir(id);
+    SHCreateDirectoryExW(NULL, g_data.c_str(), NULL);
+    history_load();
+    bookmarks_load();
+    r = import_do(p, bookmarks, history, false);
+    history_flush();
+    g_data = mine;
+    g_quiet_commit = false; bookmarks_stash(false); history_stash(false);
+    if (w) PostMessageW(w, WM_APP + 40, 0, 0);
+    return r;
+}
+
 // ---------------------------------------------------------------- can Pluma's engine take written passwords?
 int passwords_store_kind() {
-    std::wstring prof = g_state + L"\\webview2\\EBWebView\\Default";
+    std::wstring prof = wv_profile_dir();
     std::wstring db = copy_db(prof + L"\\Login Data");
     if (!db.empty()) {
         auto rows = sql_rows(db, "select hex(substr(password_value,1,3)) from logins limit 1");

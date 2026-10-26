@@ -2,7 +2,7 @@
 # them (captura.exe gets the layered windows opaque). Before it, actions on the player, at points of the window's
 # client area: they go as window messages to whatever is there (a control layer or the player's window), since the
 # page's DevTools input does not reach Pluma's own player.
-#   tools\foto.ps1 [-Nombre yt] [-Salida x.png] [-Acciones 'move 700,500','click 30,860','key 0x4B','char <','wait 500']
+#   tools\foto.ps1 [-Nombre yt] [-Salida x.png] [-Acciones 'move 700,500','click 30,860','wheel 400,300,-120','key 0x4B','char <','wait 500']
 param([string]$Nombre = 'yt', [string]$Salida = '', [string[]]$Acciones = @(), [string]$Raton = '', [int]$Espera = 300)
 Add-Type -Namespace W -Name U -MemberDefinition @'
 [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t);
@@ -56,6 +56,13 @@ foreach ($a in $Acciones) {
                 [W.U]::SendMessageW($t[0], 0x0203, [IntPtr]1, $lp) | Out-Null; Start-Sleep -Milliseconds 30
                 [W.U]::SendMessageW($t[0], 0x0202, [IntPtr]::Zero, $lp) | Out-Null
             }
+        }
+        'wheel' {
+            # 'wheel x,y,delta': the wheel over that point (-120 one notch down)
+            $x, $y, $d = $arg -split ',' | ForEach-Object { [int]$_ }
+            $t = Target $x $y
+            if (-not $t) { "nada en $arg"; continue }
+            [W.U]::SendMessageW($t[0], 0x020A, [IntPtr]([int64]$d * 65536), [IntPtr]::Zero) | Out-Null
         }
         'key' { $p = Player; [W.U]::SendMessageW($p, 0x0100, [IntPtr][int]$arg, [IntPtr]1) | Out-Null; [W.U]::SendMessageW($p, 0x0101, [IntPtr][int]$arg, [IntPtr]0xC0000001) | Out-Null }
         'char' { $p = Player; foreach ($c in $arg.ToCharArray()) { [W.U]::SendMessageW($p, 0x0102, [IntPtr][int]$c, [IntPtr]1) | Out-Null } }

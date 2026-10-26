@@ -46,6 +46,7 @@ section h2 { font-size: 20px; font-weight: 600; margin: 0 0 14px; }
 .row .name { font-weight: 500; }
 .row .desc { color: var(--sub); font-size: 12.5px; margin-top: 2px; }
 .row.hidden, section.hidden { display: none; }
+.off { display: none !important; }   /* state the page controls, apart from the search's .hidden */
 select, button { font: inherit; color: var(--text); }
 select { height: 32px; min-width: 190px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); padding: 0 8px; }
 button { height: 32px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); cursor: default; }
@@ -66,6 +67,25 @@ button.danger { color: var(--danger); }
 .swatch i { flex: 1; }
 .empty { color: var(--sub); padding: 30px 0; display: none; }
 .badge { color: var(--sub); font-size: 13px; }
+h3.sub { font-size: 15px; font-weight: 600; margin: 22px 0 10px; }
+.row.col { flex-direction: column; align-items: stretch; gap: 10px; }
+input[type=range] { accent-color: var(--accent); margin: 0; }
+.range { display: flex; align-items: center; gap: 10px; flex: none; }
+.range input { width: 220px; }
+.val { min-width: 58px; text-align: right; color: var(--sub); font-size: 13px; font-variant-numeric: tabular-nums; }
+.eq { display: flex; justify-content: space-between; gap: 4px; padding: 2px 4px 2px; }
+.eq .band { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.eq .band span { color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
+.eq input { writing-mode: vertical-lr; direction: rtl; height: 120px; width: 22px; }
+.avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; font-weight: 600; display: flex; align-items: center; justify-content: center; flex: none; }
+.pname { font: inherit; font-weight: 500; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 3px 6px; margin-left: -7px; width: 100%; max-width: 320px; }
+.pname:hover { border-color: var(--line); }
+.pname:focus { outline: none; border-color: var(--accent); background: var(--field); }
+.colors { display: flex; gap: 6px; margin-top: 6px; }
+.colors i { width: 16px; height: 16px; border-radius: 50%; cursor: default; box-sizing: border-box; }
+.colors i.on { outline: 2px solid var(--text); outline-offset: 2px; }
+.confirm { background: var(--hover); }
+.confirm .desc { color: var(--text); }
 @media (max-width: 760px) { nav { display: none; } main { padding: 20px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -78,16 +98,19 @@ button.danger { color: var(--danger); }
       <svg viewBox="0 0 16 16"><path d="M6.5 1a5.5 5.5 0 0 1 4.38 8.83l3.65 3.64a.75.75 0 0 1-1.06 1.06l-3.64-3.65A5.5 5.5 0 1 1 6.5 1Zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/></svg>
       <input id="q" type="search" data-tp="Buscar en la configuración" placeholder="Buscar en la configuración" autocomplete="off">
     </div>
+    <a href="#perfiles"><svg viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.5"/><path d="M3.5 17a6.5 6.5 0 0 1 13 0"/></svg><span data-t="Perfiles">Perfiles</span></a>
     <a href="#apariencia"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M10 2.5v15M10 2.5a7.5 7.5 0 0 1 0 15"/></svg><span data-t="Apariencia">Apariencia</span></a>
     <a href="#buscador"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 5 5"/></svg><span data-t="Buscador">Buscador</span></a>
     <a href="#nueva"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14"/></svg><span data-t="Página de nueva pestaña">Página de nueva pestaña</span></a>
     <a href="#marcadores"><svg viewBox="0 0 20 20"><path d="m10 3 2.1 4.6 5 .5-3.8 3.3 1.2 4.9L10 13.8 5.5 16.3l1.2-4.9L2.9 8.1l5-.5Z"/></svg><span data-t="Marcadores">Marcadores</span></a>
     <a href="#privacidad"><svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span data-t="Privacidad y datos">Privacidad y datos</span></a>
     <a href="#predeterminado"><svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M3 7h14"/></svg><span data-t="Navegador predeterminado">Navegador predeterminado</span></a>
+    <a href="#sincronizar"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 0 1 10-4.5M16 10a6 6 0 0 1-10 4.5M14 3v2.5h-2.5M6 17v-2.5h2.5"/></svg><span data-t="Sincronizar">Sincronizar</span></a>
     <hr>
     <a href="#idioma"><svg viewBox="0 0 20 20"><path d="M3 5h8M7 3v2M5 5c0 3 2 6 5 7M9 5c0 3-2 6-5 7M11 17l3-8 3 8M12 14.5h4"/></svg><span data-t="Idioma">Idioma</span></a>
     <a href="#descargas"><svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span data-t="Descargas">Descargas</span></a>
     <a href="#video"><svg viewBox="0 0 20 20"><rect x="2.5" y="4.5" width="15" height="11" rx="2.5"/><path d="m8.5 8 4 2-4 2Z"/></svg><span data-t="YouTube y vídeo">YouTube y vídeo</span></a>
+    <a href="#ligeras"><svg viewBox="0 0 20 20"><path d="M11 2.5 4.5 11H10l-1 6.5L15.5 9H10l1-6.5Z"/></svg><span data-t="Webs ligeras">Webs ligeras</span></a>
     <a href="#lectura"><svg viewBox="0 0 20 20"><path d="M10 5.5C8.5 4.3 6 4 3 4.5v10c3-.5 5.5-.2 7 1 1.5-1.2 4-1.5 7-1v-10c-3-.5-5.5-.2-7 1Zm0 0v10"/></svg><span data-t="Modo lectura">Modo lectura</span></a>
     <a href="#sistema"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M7 17h6M10 14v3"/></svg><span data-t="Sistema y rendimiento">Sistema y rendimiento</span></a>
     <hr>
@@ -95,6 +118,17 @@ button.danger { color: var(--danger); }
     <a href="#acerca"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.5v.01"/></svg><span data-t="Acerca de Pluma">Acerca de Pluma</span></a>
   </nav>
   <main>
+    <section id="perfiles">
+      <h2 data-t="Perfiles">Perfiles</h2>
+      <div class="card" id="proflist"></div>
+      <div class="card" style="margin-top:12px">
+        <div class="row" data-k="perfil nuevo cuenta">
+          <div class="txt"><div class="name" data-t="Nuevo perfil">Nuevo perfil</div><div class="desc" data-t="Cada perfil tiene sus sesiones, marcadores, historial, extensiones y contraseñas, en su propia ventana">Cada perfil tiene sus sesiones, marcadores, historial, extensiones y contraseñas, en su propia ventana</div></div>
+          <button class="primary" id="profnew" data-t="Añadir">Añadir</button>
+        </div>
+      </div>
+    </section>
+
     <section id="apariencia">
       <h2 data-t="Apariencia">Apariencia</h2>
       <div class="card">
@@ -158,6 +192,10 @@ button.danger { color: var(--danger); }
           <div class="txt"><div class="name" data-t="Todo menos las contraseñas">Todo menos las contraseñas</div><div class="desc" data-t="Las cookies cierran tus sesiones en las webs.">Las cookies cierran tus sesiones en las webs.</div></div>
           <button class="danger" data-do="clearAll" data-t="Borrar">Borrar</button>
         </div>
+        <div class="row" data-k="contraseñas seguras sugerir generar password">
+          <div class="txt"><div class="name" data-t="Sugerir contraseñas seguras">Sugerir contraseñas seguras</div><div class="desc" data-t="Al crear una cuenta, Pluma propone una y la guarda para ese sitio">Al crear una cuenta, Pluma propone una y la guarda para ese sitio</div></div>
+          <label class="toggle"><input type="checkbox" id="passgen"><span></span></label>
+        </div>
       </div>
     </section>
 
@@ -171,12 +209,98 @@ button.danger { color: var(--danger); }
       </div>
     </section>
 
+    <section id="sincronizar">
+      <h2 data-t="Sincronizar">Sincronizar</h2>
+      <p class="desc" style="margin:-6px 0 14px" data-t="Una copia cifrada con tu contraseña de todos tus perfiles (marcadores, historial, pestañas, ajustes, scripts, extensiones, contraseñas y sesiones iniciadas). Si reinstalas Windows, la recuperas con tu contraseña.">Una copia cifrada con tu contraseña de todos tus perfiles (marcadores, historial, pestañas, ajustes, scripts, extensiones, contraseñas y sesiones iniciadas). Si reinstalas Windows, la recuperas con tu contraseña.</p>
+      <div class="card">
+        <div class="row" data-k="sincronizar donde copia nube carpeta cuenta">
+          <div class="txt"><div class="name" data-t="Dónde se guarda la copia">Dónde se guarda la copia</div><div class="desc" id="sync-dest-desc" data-t="En una carpeta (OneDrive, Google Drive, Dropbox, un disco), o conecta tu cuenta">En una carpeta (OneDrive, Google Drive, Dropbox, un disco), o conecta tu cuenta</div></div>
+          <select id="sync-dest">
+            <option value="" data-t="Desactivado">Desactivado</option>
+            <option value="carpeta" data-t="Una carpeta">Una carpeta</option>
+            <option value="gdrive">Google Drive</option>
+            <option value="onedrive">OneDrive</option>
+            <option value="dropbox">Dropbox</option>
+          </select>
+        </div>
+        <div class="row off" id="sync-folder-row" data-k="sincronizar carpeta elegir">
+          <div class="txt"><div class="name" data-t="Carpeta de la copia">Carpeta de la copia</div><div class="desc" id="sync-folder-path">—</div></div>
+          <button data-sync="folder" data-t="Elegir carpeta">Elegir carpeta</button>
+        </div>
+        <div class="row off" id="sync-account-row" data-k="sincronizar cuenta conectar">
+          <div class="txt"><div class="name" data-t="Cuenta">Cuenta</div><div class="desc" id="sync-account">—</div></div>
+          <button class="primary" id="sync-connect" data-t="Conectar">Conectar</button>
+          <button id="sync-disconnect" data-t="Desconectar">Desconectar</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="row col" data-k="sincronizar contraseña copia cifrado pista">
+          <div class="txt"><div class="name" data-t="Contraseña de la copia">Contraseña de la copia</div><div class="desc" id="sync-pw-desc" data-t="Sin ella nadie puede abrir la copia, tampoco nosotros. Apúntala: no se puede recuperar.">Sin ella nadie puede abrir la copia, tampoco nosotros. Apúntala: no se puede recuperar.</div></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="sync-pw" type="password" data-tp="Contraseña" placeholder="Contraseña" autocomplete="new-password" style="height:32px;border-radius:6px;border:1px solid var(--line);background:var(--field);color:var(--text);padding:0 10px">
+            <input id="sync-hint" type="text" data-tp="Pista (opcional)" placeholder="Pista (opcional)" style="height:32px;border-radius:6px;border:1px solid var(--line);background:var(--field);color:var(--text);padding:0 10px">
+            <button class="primary" data-sync="password" data-t="Guardar">Guardar</button>
+            <button class="danger off" id="sync-pw-clear" data-sync="clearpw" data-t="Quitar">Quitar</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="row" data-k="sincronizar automatica cada hora">
+          <div class="txt"><div class="name" data-t="Copia automática">Copia automática</div><div class="desc" data-t="Cada hora si hay cambios, y al cerrar">Cada hora si hay cambios, y al cerrar</div></div>
+          <label class="toggle"><input type="checkbox" id="sync-auto"><span></span></label>
+        </div>
+        <div class="row" data-k="sincronizar copiar ahora ultima tamaño">
+          <div class="txt"><div class="name" data-t="Copiar ahora">Copiar ahora</div><div class="desc" id="sync-last">—</div></div>
+          <span class="badge" id="sync-status"></span>
+          <button data-sync="now" data-t="Copiar ahora">Copiar ahora</button>
+        </div>
+      </div>
+      <h3 class="sub" data-t="Restaurar">Restaurar</h3>
+      <div class="card">
+        <div class="row col" data-k="restaurar copia recuperar contraseña">
+          <div class="txt"><div class="name" data-t="¿Tienes una copia de Pluma?">¿Tienes una copia de Pluma?</div><div class="desc" data-t="Elige el fichero de copia y escribe su contraseña. Se guarda aparte lo que haya ahora.">Elige el fichero de copia y escribe su contraseña. Se guarda aparte lo que haya ahora.</div></div>
+          <div><button data-sync="pickRestore" data-t="Elegir copia">Elegir copia</button></div>
+          <div id="sync-restore-box" class="off" style="width:100%">
+            <div class="desc" id="sync-restore-info" style="margin:6px 0"></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <input id="sync-restore-pw" type="password" data-tp="Contraseña de la copia" placeholder="Contraseña de la copia" autocomplete="off" style="height:32px;border-radius:6px;border:1px solid var(--line);background:var(--field);color:var(--text);padding:0 10px">
+              <button class="primary" data-sync="restore" data-t="Restaurar">Restaurar</button>
+            </div>
+            <div class="desc" id="sync-restore-msg" style="margin-top:6px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="idioma">
       <h2 data-t="Idioma">Idioma</h2>
       <div class="card">
         <div class="row" data-k="idioma language">
           <div class="txt"><div class="name" data-t="Idioma de Pluma">Idioma de Pluma</div><div class="desc" data-t="Los menús y los mensajes de Pluma; las webs lo reciben al abrir Pluma de nuevo">Los menús y los mensajes de Pluma; las webs lo reciben al abrir Pluma de nuevo</div></div>
           <select id="idioma-sel"></select>
+        </div>
+      </div>
+      <h3 class="sub" data-t="Traducción">Traducción</h3>
+      <div class="card" id="tr-card">
+        <div class="row" data-k="traducir traduccion translate ofrecer idioma paginas">
+          <div class="txt"><div class="name" data-t="Ofrecer traducir las páginas que no están en tu idioma">Ofrecer traducir las páginas que no están en tu idioma</div><div class="desc" data-t="El icono de traducir se enciende en la barra de direcciones y una ventanita lo ofrece, como en Edge">El icono de traducir se enciende en la barra de direcciones y una ventanita lo ofrece, como en Edge</div></div>
+          <label class="toggle"><input type="checkbox" id="tr-offer"><span></span></label>
+        </div>
+        <div class="row" data-k="traducir traduccion translate destino idioma">
+          <div class="txt"><div class="name" data-t="Traducir a">Traducir a</div><div class="desc" data-t="Las páginas y el texto que selecciones (clic derecho > Traducir). Lo hace Google Translate; nada sale de Pluma hasta que pides traducir">Las páginas y el texto que selecciones (clic derecho > Traducir). Lo hace Google Translate; nada sale de Pluma hasta que pides traducir</div></div>
+          <select id="tr-target"></select>
+        </div>
+        <div class="row" id="tr-always-head" data-k="traducir siempre idiomas">
+          <div class="txt"><div class="name" data-t="Idiomas que se traducen siempre">Idiomas que se traducen siempre</div><div class="desc" data-t="Se eligen desde el icono de traducir de la barra de direcciones">Se eligen desde el icono de traducir de la barra de direcciones</div></div>
+          <span class="badge" id="tr-always-none" data-t="Ninguno todavía">Ninguno todavía</span>
+        </div>
+        <div class="row" id="tr-never-head" data-k="no traducir nunca idiomas">
+          <div class="txt"><div class="name" data-t="Idiomas que no se traducen nunca">Idiomas que no se traducen nunca</div></div>
+          <span class="badge" id="tr-never-none" data-t="Ninguno todavía">Ninguno todavía</span>
+        </div>
+        <div class="row" id="tr-sites-head" data-k="no traducir nunca sitios webs">
+          <div class="txt"><div class="name" data-t="Sitios que no se traducen nunca">Sitios que no se traducen nunca</div></div>
+          <span class="badge" id="tr-sites-none" data-t="Ninguno todavía">Ninguno todavía</span>
         </div>
       </div>
     </section>
@@ -198,9 +322,50 @@ button.danger { color: var(--danger); }
           <div class="txt"><div class="name" data-t="YouTube en el reproductor de Pluma">YouTube en el reproductor de Pluma</div><div class="desc" id="videodesc" data-t="Los vídeos usan mucha menos memoria que en la página">Los vídeos usan mucha menos memoria que en la página</div></div>
           <label class="toggle"><input type="checkbox" id="video-on"><span></span></label>
         </div>
+      </div>
+    </section>
+
+    <section id="ligeras">
+      <h2 data-t="Webs ligeras">Webs ligeras</h2>
+      <div class="card">
         <div class="row" data-k="youtube ligero rapido memoria">
           <div class="txt"><div class="name" data-t="YouTube ligero">YouTube ligero</div><div class="desc" data-t="Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta">Pluma abre YouTube con una página propia, mucho más ligera, con tu misma cuenta</div></div>
           <label class="toggle"><input type="checkbox" id="ytlite"><span></span></label>
+        </div>
+        <div class="row" data-k="youtube music musica ligero rapido memoria">
+          <div class="txt"><div class="name" data-t="YouTube Music ligero">YouTube Music ligero</div><div class="desc" data-t="Una página propia de Pluma para YouTube Music; la música suena en el reproductor de Pluma y sigue mientras navegas">Una página propia de Pluma para YouTube Music; la música suena en el reproductor de Pluma y sigue mientras navegas</div></div>
+          <label class="toggle"><input type="checkbox" id="musiclite"><span></span></label>
+        </div>
+        <div class="row" data-k="reddit ligero rapido memoria">
+          <div class="txt"><div class="name" data-t="Reddit ligero">Reddit ligero</div><div class="desc" data-t="Una página propia de Pluma para Reddit, mucho más ligera, con tu misma cuenta; sus vídeos, en el reproductor de Pluma">Una página propia de Pluma para Reddit, mucho más ligera, con tu misma cuenta; sus vídeos, en el reproductor de Pluma</div></div>
+          <label class="toggle"><input type="checkbox" id="redditlite"><span></span></label>
+        </div>
+      </div>
+      <h3 class="sub" data-t="Sonido">Sonido</h3>
+      <div class="card">
+        <div class="row" data-k="sonido efectos audio bass boost nightcore slowed 8d sala">
+          <div class="txt"><div class="name" data-t="Efectos de sonido">Efectos de sonido</div><div class="desc" data-t="En el reproductor de Pluma, también desde su menú; se oye al momento">En el reproductor de Pluma, también desde su menú; se oye al momento</div></div>
+          <select id="fx"></select>
+        </div>
+        <div class="row" data-k="sonido tono pitch semitonos agudo grave">
+          <div class="txt"><div class="name" data-t="Tono">Tono</div><div class="desc" data-t="Más agudo o más grave sin cambiar la velocidad">Más agudo o más grave sin cambiar la velocidad</div></div>
+          <div class="range"><input type="range" id="pitch" min="-6" max="6" step="1"><span class="val" id="pitch-v"></span></div>
+        </div>
+        <div class="row col" data-k="sonido ecualizador equalizer bandas frecuencias">
+          <div class="txt"><div class="name" data-t="Ecualizador">Ecualizador</div><div class="desc" data-t="Al moverlo, el efecto pasa a Personalizado">Al moverlo, el efecto pasa a Personalizado</div></div>
+          <div class="eq" id="eq"></div>
+        </div>
+        <div class="row" data-k="sonido graves bass boost">
+          <div class="txt"><div class="name" data-t="Graves">Graves</div></div>
+          <div class="range"><input type="range" id="bass" min="-12" max="12" step="1"><span class="val" id="bass-v"></span></div>
+        </div>
+        <div class="row" data-k="sonido reverberacion reverb eco sala">
+          <div class="txt"><div class="name" data-t="Reverberación">Reverberación</div><div class="desc" data-t="Como si sonara en una sala">Como si sonara en una sala</div></div>
+          <div class="range"><input type="range" id="reverb" min="0" max="100" step="5"><span class="val" id="reverb-v"></span></div>
+        </div>
+        <div class="row" data-k="sonido restablecer efectos">
+          <div class="txt"><div class="name" data-t="Sin efectos">Sin efectos</div><div class="desc" data-t="Vuelve todo a cero: el sonido tal cual">Vuelve todo a cero: el sonido tal cual</div></div>
+          <button id="fx-reset" data-t="Restablecer">Restablecer</button>
         </div>
       </div>
     </section>
@@ -234,6 +399,15 @@ button.danger { color: var(--danger); }
             <option value="120" data-t="A los 2 minutos">A los 2 minutos</option>
             <option value="300" data-t="A los 5 minutos">A los 5 minutos</option>
             <option value="900" data-t="A los 15 minutos">A los 15 minutos</option>
+          </select>
+        </div>
+        <div class="row" data-k="descargar pestañas memoria recargar">
+          <div class="txt"><div class="name" data-t="Descargar las pestañas que no ves">Descargar las pestañas que no ves</div><div class="desc" data-t="Gastan casi nada, pero al volver a ellas se cargan de nuevo y pierden lo que tenían">Gastan casi nada, pero al volver a ellas se cargan de nuevo y pierden lo que tenían</div></div>
+          <select id="discard">
+            <option value="0" data-t="Nunca">Nunca</option>
+            <option value="600" data-t="A los 10 minutos">A los 10 minutos</option>
+            <option value="3600" data-t="A la hora">A la hora</option>
+            <option value="14400" data-t="A las 4 horas">A las 4 horas</option>
           </select>
         </div>
         <div class="row" data-k="pestañas rapidas reserva">
@@ -302,7 +476,53 @@ function fill(sel, items, value) {
   for (const [v, name] of items) { const o = document.createElement('option'); o.value = v; o.textContent = name; sel.append(o); }
   sel.value = value;
 }
+let confirming = null;   // the profile whose removal waits for a yes (the default one has id '')
+function renderProfiles() {
+  const P = S.profiles; if (!P) return;
+  const box = $('proflist');
+  if (box.contains(document.activeElement) && document.activeElement.classList.contains('pname')) return;   // (typing a name)
+  box.textContent = '';
+  P.list.forEach(p => {
+    const row = document.createElement('div'); row.className = 'row'; row.dataset.k = 'perfil ' + p.name;
+    const av = document.createElement('div'); av.className = 'avatar'; av.style.background = p.color; av.textContent = (p.name.trim()[0] || '?').toUpperCase();
+    const txt = document.createElement('div'); txt.className = 'txt';
+    const name = document.createElement('input'); name.className = 'pname'; name.value = p.name; name.maxLength = 60;
+    name.onchange = () => { if (name.value.trim()) send({ op: 'profile', what: 'rename', id: p.id, name: name.value.trim() }); };
+    name.onkeydown = e => { if (e.key === 'Enter') name.blur(); };
+    const cols = document.createElement('div'); cols.className = 'colors';
+    P.colors.forEach(c => {
+      const i = document.createElement('i'); i.style.background = c; if (c === p.color) i.className = 'on';
+      i.title = c; i.onclick = () => send({ op: 'profile', what: 'color', id: p.id, color: c });
+      cols.append(i);
+    });
+    txt.append(name, cols);
+    const badge = document.createElement('span'); badge.className = 'badge';
+    badge.textContent = p.id === P.current ? tr('Esta ventana') : p.open ? tr('Abierto') : '';
+    row.append(av, txt, badge);
+    if (p.id !== P.current) {
+      const ob = document.createElement('button'); ob.textContent = tr('Abrir'); ob.onclick = () => send({ op: 'profile', what: 'open', id: p.id });
+      row.append(ob);
+    }
+    if (p.id && p.id !== P.current) {
+      const rb = document.createElement('button'); rb.className = 'danger'; rb.textContent = tr('Quitar');
+      rb.onclick = () => { confirming = confirming === p.id ? null : p.id; renderProfiles(); };
+      row.append(rb);
+    }
+    box.append(row);
+    if (p.id && confirming === p.id) {
+      const c = document.createElement('div'); c.className = 'row confirm';
+      const t = document.createElement('div'); t.className = 'txt';
+      const d = document.createElement('div'); d.className = 'desc'; d.textContent = tr('Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.');
+      t.append(d);
+      const no = document.createElement('button'); no.textContent = tr('Cancelar'); no.onclick = () => { confirming = null; renderProfiles(); };
+      const yes = document.createElement('button'); yes.className = 'primary'; yes.style.background = 'var(--danger)'; yes.style.borderColor = 'var(--danger)';
+      yes.textContent = tr('Quitar el perfil'); yes.onclick = () => { confirming = null; send({ op: 'profile', what: 'remove', id: p.id }); };
+      c.append(t, no, yes); box.append(c);
+    }
+  });
+}
 function render() {
+  renderProfiles();
   document.documentElement.classList.toggle('dark', S.dark);
   document.documentElement.lang = S.lang;
   document.querySelectorAll('#themes label').forEach(l => l.classList.toggle('on', +l.dataset.v === S.theme));
@@ -312,13 +532,19 @@ function render() {
   fill($('engine'), S.engines, S.engine);
   fill($('idioma-sel'), S.langs, S.idioma);
   $('suggest').checked = S.suggest;
+  $('passgen').checked = S.passgen;
   $('ytlite').checked = S.ytlite;
+  $('musiclite').checked = S.musiclite;
+  $('redditlite').checked = S.redditlite;
   $('video-on').checked = S.video; $('video-on').disabled = !S.videoAvailable;
   if (!S.videoAvailable) $('videodesc').textContent = tr('Falta el motor de vídeo de Pluma (motor-video)');
   $('startup').checked = S.startup; $('resident').checked = S.resident; $('spare').checked = S.spare;
   const sl = $('sleep');
   if (![...sl.options].some(o => +o.value === S.sleep)) { const o = document.createElement('option'); o.value = S.sleep; o.textContent = S.sleep + ' s'; sl.append(o); }
   sl.value = S.sleep;
+  const dc = $('discard');
+  if (![...dc.options].some(o => +o.value === S.discard)) { const o = document.createElement('option'); o.value = S.discard; o.textContent = Math.round(S.discard / 60) + ' min'; dc.append(o); }
+  dc.value = S.discard;
   $('mem').textContent = S.memory + ' MB';
   $('update').value = S.update;
   $('ver').textContent = 'Pluma ' + S.version;
@@ -335,7 +561,108 @@ function render() {
     const b = document.createElement('button'); b.textContent = tr('Quitar'); b.onclick = () => set('readerSiteOff', h);
     r.append(n, b); $('lectura-card').append(r);
   }
+  renderTranslate();
+  renderSound();
+  renderSync();
 }
+// ---- translation: the target, and the lists, each entry with its "Quitar" under its heading
+function renderTranslate() {
+  $('tr-offer').checked = S.trOffer;
+  fill($('tr-target'), S.trTargets, S.trTarget);
+  document.querySelectorAll('#tr-card .site').forEach(r => r.remove());
+  const list = (head, none, items, key) => {
+    $(none).style.display = items.length ? 'none' : '';
+    let after = $(head);
+    for (const it of items) {
+      const [v, name] = Array.isArray(it) ? it : [it, it];
+      const r = document.createElement('div'); r.className = 'row site'; r.dataset.k = 'traducir ' + name;
+      const n = document.createElement('div'); n.className = 'txt'; n.textContent = name;
+      const b = document.createElement('button'); b.textContent = tr('Quitar'); b.onclick = () => set(key, v);
+      r.append(n, b); after.after(r); after = r;
+    }
+  };
+  list('tr-always-head', 'tr-always-none', S.trAlways, 'trAlwaysOff');
+  list('tr-never-head', 'tr-never-none', S.trNever, 'trNeverOff');
+  list('tr-sites-head', 'tr-sites-none', S.trSites, 'trSiteOff');
+}
+// ---- sync / backup
+let restorePath = '';
+function renderSync() {
+  const s = S.sync; if (!s) return;
+  $('sync-dest').value = s.dest;
+  $('sync-folder-row').classList.toggle('off', s.dest !== 'carpeta');
+  $('sync-account-row').classList.toggle('off', !(s.dest === 'gdrive' || s.dest === 'onedrive' || s.dest === 'dropbox'));
+  $('sync-folder-path').textContent = s.folder || tr('Sin elegir');
+  $('sync-account').textContent = s.account || tr('Sin conectar');
+  $('sync-connect').textContent = s.account ? tr('Volver a conectar') : tr('Conectar');
+  $('sync-disconnect').classList.toggle('off', !s.account);
+  $('sync-auto').checked = s.auto;
+  $('sync-pw-clear').classList.toggle('off', !s.hasPassword);
+  if (s.hasPassword && !$('sync-pw').value) $('sync-pw').placeholder = '••••••••';
+  $('sync-hint').value = $('sync-hint').value || s.hint || '';
+  $('sync-status').textContent = s.status || '';
+  const kb = s.size > 0 ? ' · ' + (s.size < 1048576 ? Math.round(s.size / 1024) + ' KB' : (s.size / 1048576).toFixed(1) + ' MB') : '';
+  $('sync-last').textContent = s.last ? tr('Última copia') + ': ' + s.last + kb : tr('Todavía no hay ninguna copia');
+}
+const sync = o => W && W.postMessage(Object.assign({ op: 'sync' }, o));
+$('sync-dest').onchange = e => { sync({ cmd: 'dest', value: e.target.value }); };
+$('sync-auto').onchange = e => sync({ cmd: 'auto', on: e.target.checked });
+$('sync-connect').onclick = () => sync({ cmd: 'connect', provider: S.sync.dest });
+$('sync-disconnect').onclick = () => sync({ cmd: 'disconnect' });
+document.querySelectorAll('[data-sync]').forEach(b => b.addEventListener('click', () => {
+  const c = b.dataset.sync;
+  if (c === 'password') { const pw = $('sync-pw').value; if (!pw) return; sync({ cmd: 'password', pw, hint: $('sync-hint').value }); $('sync-pw').value = ''; }
+  else if (c === 'clearpw') sync({ cmd: 'password', pw: '', hint: '' });
+  else if (c === 'folder') sync({ cmd: 'folder' });
+  else if (c === 'now') sync({ cmd: 'now' });
+  else if (c === 'pickRestore') sync({ cmd: 'pickRestore' });
+  else if (c === 'restore') { const pw = $('sync-restore-pw').value; if (!pw || !restorePath) return; $('sync-restore-msg').textContent = tr('Restaurando...'); sync({ cmd: 'restore', path: restorePath, password: pw }); }
+}));
+// ---- the sound block: a preset fills the sliders with what it does; moving one makes it the person's own
+const FREQ = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
+let dragged = null, sendTimer = 0, sentAt = 0;
+const db = n => (n > 0 ? '+' : '') + n + ' dB';
+function fxOf(id) {
+  if (id === 'personalizado') return S.sound.custom;
+  const p = S.sound.presets.find(x => x[0] === id);
+  return p ? p[2] : S.sound.presets[0][2];
+}
+function renderSound() {
+  const snd = S.sound;
+  if (!$('eq').children.length) {
+    $('eq').innerHTML = FREQ.map((f, i) => `<label class="band"><span id="eq${i}-v"></span><input type="range" id="eq${i}" min="-12" max="12" step="1"><span>${f}</span></label>`).join('');
+    for (let i = 0; i < 10; i++) $('eq' + i).addEventListener('input', e => own(c => { c.eq[i] = +e.target.value; }));
+  }
+  fill($('fx'), snd.presets.map(p => [p[0], p[1]]), snd.preset);
+  const fx = fxOf(snd.preset);
+  const put = (id, v, text) => { if (dragged !== $(id)) { $(id).value = v; $(id + '-v').textContent = text; } };
+  put('pitch', snd.pitch, snd.pitch ? (snd.pitch > 0 ? '+' : '') + snd.pitch : tr('Normal'));
+  for (let i = 0; i < 10; i++) put('eq' + i, fx.eq[i], (fx.eq[i] > 0 ? '+' : '') + fx.eq[i]);
+  put('bass', fx.bass, db(fx.bass));
+  put('reverb', fx.reverb, fx.reverb + ' %');
+}
+function sendSound() {
+  // at most every 150 ms while a slider moves (each change rebuilds mpv's filters), and the last one always
+  clearTimeout(sendTimer);
+  const go = () => { sentAt = Date.now(); set('sound', { preset: S.sound.preset, pitch: S.sound.pitch, custom: S.sound.custom }); };
+  const wait = 150 - (Date.now() - sentAt);
+  if (wait <= 0) go(); else sendTimer = setTimeout(go, wait);
+}
+function own(change) {
+  const c = JSON.parse(JSON.stringify(fxOf(S.sound.preset)));
+  change(c);
+  S.sound.custom = { eq: c.eq, bass: c.bass, reverb: c.reverb };
+  S.sound.preset = 'personalizado';
+  renderSound();
+  sendSound();
+}
+document.addEventListener('pointerdown', e => { if (e.target.type === 'range') dragged = e.target; });
+addEventListener('pointerup', () => { dragged = null; if (S) renderSound(); });
+$('fx').onchange = e => { S.sound.preset = e.target.value; renderSound(); sendSound(); };
+$('pitch').addEventListener('input', e => { S.sound.pitch = +e.target.value; $('pitch-v').textContent = S.sound.pitch ? (S.sound.pitch > 0 ? '+' : '') + S.sound.pitch : tr('Normal'); sendSound(); });
+$('bass').addEventListener('input', e => { $('bass-v').textContent = db(+e.target.value); own(c => { c.bass = +e.target.value; }); });
+$('reverb').addEventListener('input', e => { $('reverb-v').textContent = e.target.value + ' %'; own(c => { c.reverb = +e.target.value; }); });
+$('fx-reset').onclick = () => { S.sound.preset = 'no'; S.sound.pitch = 0; S.sound.custom = { eq: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], bass: 0, reverb: 0 }; renderSound(); sendSound(); };
 // the search: rows by their words (shown, in the language, and their keywords); sections with none left go
 function filter() {
   const q = $('q').value.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -359,9 +686,13 @@ $('font').onchange = e => set('font', e.target.value);
 $('engine').onchange = e => set('engine', e.target.value);
 $('idioma-sel').onchange = e => { set('idioma', e.target.value); setTimeout(ask, 100); };
 $('update').onchange = e => set('update', +e.target.value);
+$('tr-offer').onchange = e => set('trOffer', e.target.checked);
+$('tr-target').onchange = e => set('trTarget', e.target.value);
 $('sleep').onchange = e => set('sleep', +e.target.value);
-for (const [id, key] of [['suggest', 'suggest'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
+$('discard').onchange = e => set('discard', +e.target.value);
+for (const [id, key] of [['suggest', 'suggest'], ['passgen', 'passgen'], ['video-on', 'video'], ['ytlite', 'ytlite'], ['musiclite', 'musiclite'], ['redditlite', 'redditlite'], ['startup', 'startup'], ['resident', 'resident'], ['spare', 'spare']])
   $(id).onchange = e => set(key, e.target.checked);
+$('profnew').onclick = () => send({ op: 'profile', what: 'new' });
 document.querySelectorAll('[data-do]').forEach(b => b.addEventListener('click', () => send({ op: 'do', what: b.dataset.do })));
 // the side list: where each section is, and the one in view
 document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', e => {
@@ -381,12 +712,34 @@ function ask() {
   document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
   document.querySelectorAll('[data-tp]').forEach(e => all.add(e.dataset.tp));
   ['La de Windows', '1 activa', ' activas', '1 activo', ' activos', 'Pluma es tu navegador predeterminado', 'Pluma no es tu navegador predeterminado',
-   'Falta el motor de vídeo de Pluma (motor-video)', 'Quitar'].forEach(s => all.add(s));
+   'Falta el motor de vídeo de Pluma (motor-video)', 'Esta ventana', 'Abierto', 'Abrir', 'Quitar', 'Cancelar', 'Quitar el perfil', 'Normal',
+   'Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.',
+   'Sin elegir', 'Sin conectar', 'Conectar', 'Volver a conectar', 'Última copia', 'Todavía no hay ninguna copia',
+   'Copia del', 'Pista', 'Ese fichero no es una copia de Pluma.', 'Restaurando...', 'Contraseña incorrecta.',
+   'La copia está dañada.', 'No se pudo restaurar.'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {
   const m = e.data;
-  if (!m || m.op !== 'state') return;
+  if (!m) return;
+  if (m.op === 'restoreInfo') {
+    restorePath = m.path;
+    $('sync-restore-box').classList.remove('off');
+    $('sync-restore-msg').textContent = '';
+    if (m.info && m.info.ok) {
+      let t = tr('Copia del') + ' ' + (m.info.when || '?');
+      if (m.info.equipo) t += ' · ' + m.info.equipo;
+      if (m.info.hint) t += ' · ' + tr('Pista') + ': ' + m.info.hint;
+      $('sync-restore-info').textContent = t;
+    } else $('sync-restore-info').textContent = tr('Ese fichero no es una copia de Pluma.');
+    return;
+  }
+  if (m.op === 'restoreResult') {
+    const msg = { 1: tr('Contraseña incorrecta.'), 2: tr('La copia está dañada.'), 3: tr('Ese fichero no es una copia de Pluma.'), 4: tr('No se pudo restaurar.') };
+    $('sync-restore-msg').textContent = m.code === 0 ? tr('Restaurando...') : (msg[m.code] || '');
+    return;
+  }
+  if (m.op !== 'state') return;
   if (m.t) { texts = m.t; translate(); }
   S = m; render(); filter(); mark();
 });

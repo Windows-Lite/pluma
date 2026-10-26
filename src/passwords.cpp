@@ -69,6 +69,44 @@ static bool master_key(std::vector<BYTE> &out) {
     LocalFree(keyb.pbData);
     return out.size() == 32;
 }
+bool engine_key_get(std::string &key) {
+    std::vector<BYTE> k;
+    if (!master_key(k)) return false;
+    key.assign((const char *)k.data(), k.size());
+    SecureZeroMemory(k.data(), k.size());
+    return true;
+}
+// guards the key for this Windows account and writes it in Local State (engine stopped). Only os_crypt.encrypted_key
+// changes; with no Local State yet, a minimal one (the engine fills in the rest).
+bool engine_key_put(const std::string &key, const std::wstring &aside) {
+    if (key.size() != 32) return false;
+    DATA_BLOB in{ (DWORD)key.size(), (BYTE *)key.data() }, prot{};
+    if (!CryptProtectData(&in, NULL, NULL, NULL, NULL, 0, &prot)) return false;
+    std::string raw = "DPAPI" + std::string((const char *)prot.pbData, prot.cbData);
+    LocalFree(prot.pbData);
+    DWORD n = 0;
+    CryptBinaryToStringA((const BYTE *)raw.data(), (DWORD)raw.size(), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &n);
+    std::string b64(n, 0);
+    if (!CryptBinaryToStringA((const BYTE *)raw.data(), (DWORD)raw.size(), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, &b64[0], &n)) return false;
+    b64.resize(n);
+    std::wstring dir = g_state + L"\\webview2\\EBWebView";
+    std::wstring ls = dir + L"\\Local State";
+    std::string s;
+    if (read_file(ls, s)) {
+        write_file(aside + L"\\Local State", s);
+        const std::string tag = "\"encrypted_key\":\"";
+        size_t os = s.find("\"os_crypt\"");
+        size_t a = os == std::string::npos ? os : s.find(tag, os);
+        size_t b = a == std::string::npos ? a : s.find('"', a + tag.size());
+        if (b != std::string::npos) s = s.substr(0, a + tag.size()) + b64 + s.substr(b);
+        else if (os == std::string::npos && s.size() > 1 && s[0] == '{') s = "{\"os_crypt\":{\"encrypted_key\":\"" + b64 + "\"}," + s.substr(1);
+        else return false;   // an os_crypt without the field: not a layout we know, leave it
+    } else {
+        SHCreateDirectoryExW(NULL, dir.c_str(), NULL);
+        s = "{\"os_crypt\":{\"encrypted_key\":\"" + b64 + "\"}}";
+    }
+    return write_file(ls, s);
+}
 // v10 = "v10" + 12-byte nonce + AES-256-GCM ciphertext + 16-byte tag
 static bool encrypt_v10(const std::vector<BYTE> &key, const std::string &plain, std::vector<BYTE> &out) {
     BCRYPT_ALG_HANDLE alg = NULL; BCRYPT_KEY_HANDLE k = NULL;
@@ -158,7 +196,7 @@ static std::wstring realm_of(const std::wstring &url) {
 }
 
 // ---------------------------------------------------------------- the pending file (ready rows, no plaintext)
-static std::wstring pending_file() { return g_state + L"\\passwords-pending.tsv"; }
+static std::wstring pending_file() { return g_data + L"\\passwords-pending.tsv"; }
 static std::wstring hex_of(const std::vector<BYTE> &b) {
     static const wchar_t *d = L"0123456789abcdef";
     std::wstring s; s.reserve(b.size() * 2);
@@ -177,7 +215,7 @@ static std::wstring tsv_safe(const std::wstring &s) { std::wstring o = s; for (a
 static std::set<std::wstring> existing_logins(const std::wstring &login_data) {
     std::set<std::wstring> set;
     if (!pq::load()) return set;
-    std::wstring dir = g_state + L"\\imp_tmp"; CreateDirectoryW(dir.c_str(), NULL);
+    std::wstring dir = g_data + L"\\imp_tmp"; CreateDirectoryW(dir.c_str(), NULL);
     std::wstring copy = dir + L"\\ld-" + std::to_wstring(GetTickCount64()) + L".db";
     std::string d;
     if (!read_file(login_data, d) || !write_file(copy, d)) return set;
@@ -185,10 +223,13 @@ static std::set<std::wstring> existing_logins(const std::wstring &login_data) {
     void *db = nullptr;
     if (pq::open(utf8(copy).c_str(), &db, 2, nullptr) == 0 && db) {
         void *st = nullptr;
-        if (pq::prepare(db, "select signon_realm, username_value from logins", -1, &st, nullptr) == 0 && st) {
+        if (pq::prepare(db, "select signon_realm, username_value, blacklisted_by_user from logins", -1, &st, nullptr) == 0 && st) {
             while (pq::step(st) == 100) {
-                const unsigned char *a = pq::ctext(st, 0), *b = pq::ctext(st, 1);
-                set.insert(wide(std::string(a ? (const char *)a : "")) + L"\n" + wide(std::string(b ? (const char *)b : "")));
+                const unsigned char *a = pq::ctext(st, 0), *b = pq::ctext(st, 1), *c = pq::ctext(st, 2);
+                std::wstring realm = wide(std::string(a ? (const char *)a : ""));
+                // a site the person said "never" to is a row of its own: "never\t<realm>" here
+                if (c && c[0] == '1') set.insert(L"never\t" + realm);
+                else set.insert(realm + L"\n" + wide(std::string(b ? (const char *)b : "")));
             }
             pq::finalize(st);
         }
@@ -221,7 +262,7 @@ static ImportResult import_file(const std::wstring &path) {
     bool header_ok = false;
     auto creds = read_creds(path, header_ok);
     if (!header_ok) { r.note = T(L"El CSV no tiene las columnas esperadas (url, username, password)."); return r; }
-    auto have = existing_logins(g_state + L"\\webview2\\EBWebView\\Default\\Login Data");
+    auto have = existing_logins(wv_profile_dir() + L"\\Login Data");
     std::wstring out;
     for (auto &c : creds) {
         std::wstring realm = realm_of(c.url);
@@ -239,6 +280,29 @@ static ImportResult import_file(const std::wstring &path) {
     }
     g_last_csv = path;
     return r;
+}
+
+// one password Pluma keeps itself (a suggested one whose save prompt went without saving, passgen.cpp): encrypted at
+// once into the pending file, written into Login Data at the next start. 1 kept, 2 already there, 3 a site with
+// "never", 0 not possible.
+int passwords_keep(const std::wstring &url, const std::wstring &user, const std::wstring &pass) {
+    if (g_incognito || pass.empty() || passwords_store_kind() == 20) return 0;   // (an app-bound store takes nothing written)
+    std::wstring clean = url.substr(0, url.find_first_of(L"?#"));
+    std::wstring realm = realm_of(clean);
+    if (realm.empty()) return 0;
+    std::vector<BYTE> key, blob;
+    if (!master_key(key)) return 0;
+    auto have = existing_logins(wv_profile_dir() + L"\\Login Data");
+    if (have.count(L"never\t" + realm)) { SecureZeroMemory(key.data(), key.size()); return 3; }
+    if (have.count(realm + L"\n" + user)) { SecureZeroMemory(key.data(), key.size()); return 2; }
+    std::string plain = utf8(pass);
+    bool ok = encrypt_v10(key, plain, blob);
+    SecureZeroMemory(&plain[0], plain.size());
+    SecureZeroMemory(key.data(), key.size());
+    if (!ok) return 0;
+    std::string existing; read_file(pending_file(), existing);
+    std::wstring row = tsv_safe(realm) + L"\t" + tsv_safe(clean) + L"\t" + tsv_safe(user) + L"\t" + hex_of(blob) + L"\n";
+    return write_file(pending_file(), existing + utf8(row)) ? 1 : 0;
 }
 
 bool passwords_delete_csv() {
@@ -321,13 +385,13 @@ int passwords_apply_pending() {
     if (g_incognito) return 0;   // the ordinary window's engine may have Login Data open; it applies them itself
     std::string data;
     if (!read_file(pending_file(), data)) return 0;
-    std::wstring ld = g_state + L"\\webview2\\EBWebView\\Default\\Login Data";
+    std::wstring ld = wv_profile_dir() + L"\\Login Data";
     if (!PathFileExistsW(ld.c_str())) return 0;   // the engine has not made it yet: try again next start
     if (!pq::load()) return 0;
     // back up Login Data first
     SYSTEMTIME t; GetLocalTime(&t);
     wchar_t stamp[32]; swprintf_s(stamp, L"%04d%02d%02d-%02d%02d%02d", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
-    std::wstring bdir = g_state + L"\\passwords-backup-" + stamp;
+    std::wstring bdir = g_data + L"\\passwords-backup-" + stamp;
     CreateDirectoryW(bdir.c_str(), NULL);
     for (const wchar_t *suf : { L"", L"-journal", L"-wal" }) {
         std::string s; if (read_file(ld + suf, s)) write_file(bdir + L"\\Login Data" + suf, s);

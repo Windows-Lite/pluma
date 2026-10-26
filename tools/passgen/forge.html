@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><title>Crear cuenta</title><link rel="stylesheet" href="style.css">
+<h1>Crear cuenta</h1>
+<!-- a page that tries to make Pluma keep a password it did not make: its own script reports one, and a frame of
+     another site asks for one and reports it. Pluma must ignore both (tools/passgen/prueba.ps1) -->
+<form id="signup" method="post" action="created">
+  <input name="email" id="email" type="email" autocomplete="username" value="forja@example.com">
+  <input name="password" id="pw" type="password" autocomplete="new-password">
+  <button type="submit">Crear cuenta</button>
+</form>
+<iframe id="other" style="width:400px;height:60px;border:0"></iframe>
+<script>
+const say = (path, body) => { const x = new XMLHttpRequest(); x.open('POST', location.origin + '/.well-known/pluma-passgen/' + path, false); try { x.send(JSON.stringify(body)); } catch (e) {} return x.status; };
+document.getElementById('other').src = 'http://localhost:' + location.port + '/forge-frame.html';
+document.getElementById('signup').addEventListener('submit', () => say('sent', { user: 'forja@example.com', pass: document.getElementById('pw').value }));
+</script>

@@ -1,8 +1,8 @@
 <!doctype html>
-<!-- Pluma's light YouTube page (youtube.cpp serves it at YouTube's own addresses, inside the exe). It asks YouTube's
+<!-- Pluma's light YouTube page (lite.cpp serves it at YouTube's own addresses, inside the exe). It asks YouTube's
      API (/youtubei/v1) as YouTube's page does, with the person's cookies, and draws the answer. Written in Spanish, as
      the code: Pluma writes the texts in the chosen language into CFG.t as it serves it (t('...')). Anything that
-     fails goes to YouTube's own page (pluma_normal=1: youtube.cpp takes the mark off). -->
+     fails goes to YouTube's own page (pluma_normal=1: lite.cpp takes the mark off). -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -811,6 +811,9 @@ window.__pluma = {
     const n = nextVideo();
     const replay = `<a class="btn" href="/watch?v=${encodeURIComponent(W.id)}">${esc(t('Volver a ver'))}</a>`;
     if (!n) { veil(replay); return; }
+    // in a tab behind, the next one at once, as YouTube's own autoplay there (nobody sees a countdown, and a hidden
+    // page's timers may be slowed down to one a minute)
+    if (document.hidden) { location.href = n.url; return; }
     let left = 8;
     veil(`<div class="next"><img src="${esc(n.thumb)}" alt=""><div><div class="sub" style="color:#ddd">${esc(t('A continuación'))} <span id="cd">${left}</span></div>` +
          `<div class="tt">${esc(n.title)}</div><div class="sub" style="color:#ddd">${esc(n.channel || '')}</div></div></div>` +

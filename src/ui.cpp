@@ -11,9 +11,10 @@
 
 // ---------------------------------------------------------------- metrics (DIP; multiplied by the screen's scale)
 static const float kTabRowH = 38, kToolRowH = 44, kNoticeH = 44, kCapW = 46, kTabMax = 236, kTabMin = 40, kTabGap = 2,
-                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30, kBmRowH = 32, kBmBtnH = 24;
+                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30, kBmRowH = 32, kBmBtnH = 24, kAvatarW = 32;
 static const double kHoverMs = 120, kTabMs = 180, kPanelMs = 140;
-static float g_s = 1;
+static float &ui_g_s();
+#define g_s (ui_g_s())   // the window's screen scale (state of each window: UiWin, at the end)
 float ui_scale() { return g_s; }
 static float S(float v) { return v * g_s; }
 static std::wstring strip_scheme(const std::wstring &u);
@@ -27,7 +28,8 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
-                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736 };
+                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
+                 G_COPY = 0xE8C8, G_WINDOW = 0xE78B, G_NEW_WINDOW_OUT = 0xE8A7, G_SWITCH = 0xE8AB, G_WARN = 0xE7BA };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -65,17 +67,21 @@ static ComPtr<IWICImagingFactory> g_wic;
 static ComPtr<IDWriteFontCollection> g_ui_fonts;   // the fuentes folder's, when the chosen family is one of them (else Windows's)
 static ComPtr<IDWriteFontCollection> g_own_fonts;  // Roboto and Roboto Mono, from the fuentes folder
 static std::wstring g_ui_family = L"Segoe UI", g_icon_family = L"Segoe Fluent Icons";
-static ComPtr<ID2D1HwndRenderTarget> g_rt;
+static ComPtr<ID2D1HwndRenderTarget> &ui_g_rt();
+#define g_rt (ui_g_rt())
 static D2D1_RENDER_TARGET_TYPE render_type() {
     // PLUMA_DIBUJO=cpu draws the bar without the graphics card (to compare what each costs)
     wchar_t v[8] = L"";
     GetEnvironmentVariableW(L"PLUMA_DIBUJO", v, 8);
     return !wcscmp(v, L"cpu") ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT;
 }
-static ComPtr<ID2D1SolidColorBrush> g_br;
-struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, menu, hint, word, ntp, ntp_sub, notice; };
-static Formats g_f;
-static HFONT g_edit_font;
+static ComPtr<ID2D1SolidColorBrush> &ui_g_br();
+#define g_br (ui_g_br())
+struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, chip, chip_b, menu, hint, word, ntp, ntp_sub, notice, avatar, avatar_lg, title; };
+static Formats &ui_g_f();
+#define g_f (ui_g_f())
+static HFONT &ui_g_edit_font();
+#define g_edit_font (ui_g_edit_font())
 static std::unordered_map<std::wstring, float> g_widths;   // text widths, measured once
 static HBRUSH g_edit_brush;
 static COLORREF g_edit_bg;
@@ -104,12 +110,18 @@ static void make_formats() {
     g_f.icon = make_format(true, S(16), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.icon_sm = make_format(true, S(10), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
     g_f.icon_lg = make_format(true, S(20), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
+    // the "Not secure" chip before the address, as in Chrome and Edge
+    g_f.chip = make_format(false, S(13), DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.chip_b = make_format(false, S(13), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.menu = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.hint = make_format(false, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_f.word = make_format(false, S(30), DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.ntp = make_format(false, S(13), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.ntp_sub = make_format(false, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_f.notice = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.avatar = make_format(false, S(11.5f), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_f.avatar_lg = make_format(false, S(22), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_f.title = make_format(false, S(16), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING);
     if (g_edit_font) DeleteObject(g_edit_font);
     g_edit_font = CreateFontW(-(int)lroundf(S(14)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, g_ui_family.c_str());
@@ -208,34 +220,79 @@ static void soft_shadow(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, D2D1_REC
 
 // ---------------------------------------------------------------- state of the bar
 struct Ghost { float w, x = 0; int slot; std::wstring title; ComPtr<ID2D1Bitmap> icon; Anim k; };   // a tab closing
-static std::vector<Ghost> g_ghosts;
-static std::unordered_map<int, ComPtr<ID2D1Bitmap>> g_icons;      // tab id -> favicon on the bar's target
-static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> g_host_icons, g_ext_icons;
-static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
-static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
-static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
+static std::vector<Ghost> &ui_g_ghosts();
+#define g_ghosts (ui_g_ghosts())
+static std::unordered_map<int, ComPtr<ID2D1Bitmap>> &ui_g_icons();
+#define g_icons (ui_g_icons())
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_host_icons();
+#define g_host_icons (ui_g_host_icons())
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_ext_icons();
+#define g_ext_icons (ui_g_ext_icons())
+static Anim &ui_g_sheet_k();
+#define g_sheet_k (ui_g_sheet_k())
+static Anim &ui_g_notice_h();
+#define g_notice_h (ui_g_notice_h())
+static Anim &ui_g_addr_focus();
+#define g_addr_focus (ui_g_addr_focus())
+static Anim &ui_g_menu_btn_open();
+#define g_menu_btn_open (ui_g_menu_btn_open())
+static int &ui_g_sheet_from();
+#define g_sheet_from (ui_g_sheet_from())
+static int &ui_g_sheet_to();
+#define g_sheet_to (ui_g_sheet_to())
+static float &ui_g_frozen_w();
+#define g_frozen_w (ui_g_frozen_w())
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE, H_TRANSLATE };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
-static HitInfo g_hover, g_press;
-static std::unordered_map<int, Anim> g_btn_hover;  // per control
-static int g_caption_hot, g_caption_down;
-static bool g_tracking, g_dragging, g_active_window = true;
-static int g_drag_id; static float g_drag_dx, g_drag_x, g_press_x;
+static HitInfo &ui_g_hover();
+#define g_hover (ui_g_hover())
+static HitInfo &ui_g_press();
+#define g_press (ui_g_press())
+static std::unordered_map<int, Anim> &ui_g_btn_hover();
+#define g_btn_hover (ui_g_btn_hover())
+static int &ui_g_caption_hot();
+#define g_caption_hot (ui_g_caption_hot())
+static int &ui_g_caption_down();
+#define g_caption_down (ui_g_caption_down())
+static bool &ui_g_tracking();
+#define g_tracking (ui_g_tracking())
+static bool &ui_g_dragging();
+#define g_dragging (ui_g_dragging())
+static bool &ui_g_active_window();
+#define g_active_window (ui_g_active_window())
+static int &ui_g_drag_id();
+#define g_drag_id (ui_g_drag_id())
+static float &ui_g_drag_dx();
+#define g_drag_dx (ui_g_drag_dx())
+static float &ui_g_drag_x();
+#define g_drag_x (ui_g_drag_x())
+static float &ui_g_press_x();
+#define g_press_x (ui_g_press_x())
+static float &ui_g_press_y();
+#define g_press_y (ui_g_press_y())
 struct Notice { std::wstring text, button; std::function<void()> action; double until = 0; bool on = false; int owner = 0; };
-static Notice g_notice;
-static std::wstring g_addr_text;                  // what the address shows when not being typed in
-static std::vector<HistoryEntry> g_ntp_rows;
-static bool g_ntp_pins, g_ntp_filled;            // the rows are the person's own pages (else suggestions); computed
+static Notice &ui_g_notice();
+#define g_notice (ui_g_notice())
+static std::wstring &ui_g_addr_text();
+#define g_addr_text (ui_g_addr_text())
+static std::vector<HistoryEntry> &ui_g_ntp_rows();
+#define g_ntp_rows (ui_g_ntp_rows())
+static bool &ui_g_ntp_pins();
+#define g_ntp_pins (ui_g_ntp_pins())
+static bool &ui_g_ntp_filled();
+#define g_ntp_filled (ui_g_ntp_filled())
 static double g_ntp_mem_at = -1e9; static size_t g_ntp_mem;
 static WNDPROC g_edit_proc;
 static bool g_in_change;
-static std::wstring g_typed;                      // what the person typed (without the inline completion)
+static std::wstring &ui_g_typed();
+#define g_typed (ui_g_typed())
 static void close_suggestions();
 static void update_suggestions();
 static void sug_move(int d);
 static bool sug_commit(bool new_tab);
-static void open_menu_page(int page, RECT anchor, int tab_id = 0);
+static void open_menu_page(int page, RECT anchor, int tab_id = 0, bool quiet = false);
+static bool g_menu_page_is_profiles();   // the profile button's menu is open (its button stays lit)
 static void menu_close();
 
 static int hover_key(Hit h, int id) { return (int)h * 100000 + id; }
@@ -257,8 +314,9 @@ float ui_band_height() {
 }
 
 // ---------------------------------------------------------------- layout of the tab row
-struct Geo { float W, strip_l, strip_r, cap_l, tab_w, plus_x, addr_l, addr_r, menu_x, ext_l; };
-static Geo g_geo;
+struct Geo { float W, strip_l, strip_r, cap_l, tab_w, plus_x, addr_l, addr_r, menu_x, ext_l, avatar_l, avatar_w; };
+static Geo &ui_g_geo();
+#define g_geo (ui_g_geo())
 static size_t ext_buttons() { size_t n = 0; for (auto &e : g_exts) if (e.enabled && !e.popup.empty()) n++; return std::min<size_t>(n, 4); }
 static void compute_geo() {
     RECT rc; GetClientRect(g_bar, &rc);
@@ -274,8 +332,11 @@ static void compute_geo() {
     g.tab_w = w;
     g.menu_x = g.W - S(8 + kBtn);
     g.ext_l = g.menu_x - S(4) - ext_buttons() * S(kBtn + 2);
+    // the profile's avatar (as Edge's) right after the address; in incognito, its badge instead
+    g.avatar_w = g_incognito ? text_w(g_f.hint.Get(), T(L"Incógnito")) + S(38) : S(kAvatarW);
+    g.avatar_l = g.ext_l - S(2) - g.avatar_w;
     g.addr_l = S(8 + (kBtn + 4) * 3 + 2);
-    g.addr_r = g.ext_l - S(6);
+    g.addr_r = g.avatar_l - S(6);
     g_geo = g;
     for (auto &t : g_tabs) {
         if (!t->placed) { t->w.snap(0); t->placed = true; }
@@ -286,7 +347,8 @@ static void compute_geo() {
 // settled: where they end up, for clicks: closing tabs fast must not wait for the animation (the next tab's cross
 // is under the mouse at once, as in Chrome)
 struct Slot { Tab *t; float x, w; };
-static float g_strip_end;
+static float &ui_g_strip_end();
+#define g_strip_end (ui_g_strip_end())
 static std::vector<Slot> tab_slots(double now, bool settled = false) {
     std::vector<Slot> out;
     float x = g_geo.strip_l;
@@ -329,12 +391,30 @@ static D2D1_RECT_F plus_rect(double now, bool settled = false) {
     float x = (settled ? settled_strip_end(now) : strip_end(now)) + S(4);
     return R(x, S(kTabY), x + S(kPlusW), S(kTabY + kTabH));
 }
+static D2D1_COLOR_F rgb_of(unsigned c) { return hex(c & 0xffffff); }
+static std::wstring initial_of(const std::wstring &name) {
+    std::wstring n = trim(name);
+    if (n.empty()) return L"?";
+    std::wstring one = n.substr(0, IS_HIGH_SURROGATE(n[0]) && n.size() > 1 ? 2 : 1);
+    CharUpperBuffW(one.data(), (DWORD)one.size());
+    return one;
+}
+// a profile's avatar: its colour, its initial in white (big: the flyout's header)
+static void draw_avatar(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, float cx, float cy, float r, const Profile &p, bool big = false) {
+    b->SetColor(rgb_of(p.color));
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), b);
+    text(rt, b, (big ? g_f.avatar_lg : g_f.avatar).Get(), initial_of(profile_shown_name(p)), R(cx - r, cy - r, cx + r, cy + r), hex(0xffffff));
+}
 static D2D1_RECT_F cap_rect(int i) { return R(g_geo.cap_l + S(kCapW) * i, 0, g_geo.cap_l + S(kCapW) * (i + 1), S(kTabRowH)); }
 static float tool_y() { return S(kTabRowH); }
 static D2D1_RECT_F btn_rect(int i) {   // 0 back, 1 forward, 2 reload
     float y = tool_y() + S((kToolRowH - kBtn) / 2);
     float x = S(8) + S(kBtn + 4) * i;
     return R(x, y, x + S(kBtn), y + S(kBtn));
+}
+static D2D1_RECT_F profile_rect() {
+    float y = tool_y() + S((kToolRowH - kBtn) / 2);
+    return R(g_geo.avatar_l, y, g_geo.avatar_l + g_geo.avatar_w, y + S(kBtn));
 }
 static D2D1_RECT_F menu_rect() { float y = tool_y() + S((kToolRowH - kBtn) / 2); return R(g_geo.menu_x, y, g_geo.menu_x + S(kBtn), y + S(kBtn)); }
 static D2D1_RECT_F ext_rect(size_t i) {
@@ -361,9 +441,15 @@ static D2D1_RECT_F reader_rect() {
     D2D1_RECT_F s = star_rect();
     return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
 }
+// the translate icon before them: the page is in another language, or translated (translate.cpp)
+static bool translate_shown() { Tab *t = active_tab(); return star_shown() && (t->tr_state || (t->tr_offer && g_set.tr_offer)); }
+static D2D1_RECT_F translate_rect() {
+    D2D1_RECT_F s = reader_shown() ? reader_rect() : star_rect();
+    return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
+}
 static D2D1_RECT_F zoom_rect() {
     D2D1_RECT_F a = addr_rect();
-    float r = reader_shown() ? reader_rect().left - S(4) : star_shown() ? star_rect().left - S(4) : a.right - S(6);
+    float r = translate_shown() ? translate_rect().left - S(4) : reader_shown() ? reader_rect().left - S(4) : star_shown() ? star_rect().left - S(4) : a.right - S(6);
     return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
@@ -453,6 +539,7 @@ static HitInfo hit_test(float x, float y) {
     if (y < S(kTabRowH + kToolRowH)) {
         for (int i = 0; i < 3; i++) if (inside(btn_rect(i), x, y)) { h.what = (Hit)(H_BACK + i); return h; }
         if (inside(menu_rect(), x, y)) { h.what = H_MENU; return h; }
+        if (inside(profile_rect(), x, y)) { h.what = H_PROFILE; return h; }
         size_t k = 0;
         for (size_t i = 0; i < g_exts.size() && k < ext_buttons(); i++) {
             if (!g_exts[i].enabled || g_exts[i].popup.empty()) continue;
@@ -461,6 +548,7 @@ static HitInfo hit_test(float x, float y) {
         }
         if (star_shown() && inside(star_rect(), x, y)) { h.what = H_STAR; return h; }
         if (reader_shown() && inside(reader_rect(), x, y)) { h.what = H_READER; return h; }
+        if (translate_shown() && inside(translate_rect(), x, y)) { h.what = H_TRANSLATE; return h; }
         if (zoom_shown() && inside(zoom_rect(), x, y)) { h.what = H_ZOOM; return h; }
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
@@ -664,6 +752,13 @@ static void paint_button(ID2D1RenderTarget *rt, D2D1_RECT_F r, Hit h, int id, wc
     if (hv > 0 || down) fill(rt, g_br.Get(), r, S(8), down ? p.press : alpha(p.hover, hv * 1.3f));
     glyph(rt, g_br.Get(), g_f.icon.Get(), g, r, enabled ? p.text : alpha(p.sub, 0.45f));
 }
+// this computer's own servers are not "not secure" (Chrome treats them as secure contexts)
+static bool local_host(const std::wstring &u) {
+    std::wstring h = url_host(u);
+    if (starts_with(h, L"[")) return starts_with(h, L"[::1]");
+    h = h.substr(0, h.find(L':'));
+    return h == L"localhost" || (h.size() > 10 && h.compare(h.size() - 10, 10, L".localhost") == 0) || starts_with(h, L"127.");
+}
 static std::wstring strip_scheme(const std::wstring &u) {
     std::wstring s = starts_with(u, L"https://") ? u.substr(8) : u;
     size_t slash = s.find(L'/');
@@ -697,6 +792,23 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     paint_button(rt, btn_rect(1), H_FWD, 0, G_FWD, t && t->can_fwd, now, &busy);
     paint_button(rt, btn_rect(2), H_RELOAD, 0, t && t->loading ? G_STOP : G_RELOAD, t && !t->url.empty(), now, &busy);
     paint_button(rt, menu_rect(), H_MENU, 0, G_MORE, true, now, &busy);
+    {
+        // the profile's avatar, lit while its flyout is open; in incognito, the badge (as Edge's "InPrivate")
+        D2D1_RECT_F ar = profile_rect();
+        float ah = std::max(hov(H_PROFILE, 0), g_menu_page_is_profiles() ? 1.f : 0.f);
+        busy |= g_btn_hover[hover_key(H_PROFILE, 0)].running(now);
+        bool down = g_press.what == H_PROFILE && g_hover.what == H_PROFILE;
+        float cy = (ar.top + ar.bottom) / 2;
+        if (g_incognito) {
+            D2D1_RECT_F pr = R(ar.left, ar.top + S(3), ar.right, ar.bottom - S(3));
+            fill(rt, g_br.Get(), pr, S(8), down ? p.press : mix(alpha(p.accent_soft, 0.55f), p.hover, ah * 0.6f));
+            glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_INPRIVATE, R(pr.left + S(6), pr.top, pr.left + S(28), pr.bottom), p.accent);
+            text(rt, g_br.Get(), g_f.hint.Get(), T(L"Incógnito"), R(pr.left + S(28), pr.top, pr.right - S(8), pr.bottom), p.accent);
+        } else {
+            if (ah > 0 || down) fill(rt, g_br.Get(), ar, S(8), down ? p.press : alpha(p.hover, ah * 1.3f));
+            draw_avatar(rt, g_br.Get(), (ar.left + ar.right) / 2, cy, S(11), profile_current());
+        }
+    }
     size_t k = 0;
     for (size_t i = 0; i < g_exts.size() && k < ext_buttons(); i++) {
         Extension &e = g_exts[i];
@@ -747,14 +859,29 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
     std::wstring u = t ? settings_page_display(t->url) : L"";
     wchar_t ig = G_SEARCH;
     D2D1_COLOR_F ic = p.sub;
+    // the site info, the size of the toolbar's glyphs; a page that is not safe says so in red, as in Chrome and Edge:
+    // plain http (not this computer's own) on a soft red pill, a certificate error on a stronger one
+    int unsafe = 0;   // 1 http, 2 certificate error
     if (!focused && !u.empty()) {
-        if (starts_with(u, L"https://")) ig = G_LOCK;
-        else if (starts_with(u, L"http://")) { ig = G_INFO; ic = p.error; }
+        if (starts_with(u, L"https://")) { ig = G_LOCK; if (t->cert_error) unsafe = 2; }
+        else if (starts_with(u, L"http://")) { ig = G_INFO; if (!local_host(u)) unsafe = 1; }
         else if (starts_with(u, L"file:")) ig = G_FILE;
         else if (starts_with(u, L"chrome-extension:")) ig = G_PUZZLE;
         else ig = G_INFO;
     }
-    glyph(rt, g_br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), ic);
+    float text_l = a.left + S(36);
+    if (unsafe) {
+        ig = G_WARN; ic = p.error;
+        auto cf = unsafe == 2 ? g_f.chip_b : g_f.chip;
+        std::wstring label = T(L"No seguro");
+        D2D1_RECT_F chip = R(a.left + S(5), a.top + S(5), ix + S(13) + text_w(cf.Get(), label) + S(9), a.bottom - S(5));
+        float k = (unsafe == 2 ? 0.20f : 0.10f) * (dark_theme() ? 1.6f : 1);
+        fill(rt, g_br.Get(), chip, S(7), alpha(p.error, k));
+        if (unsafe == 2) stroke(rt, g_br.Get(), chip, S(7), alpha(p.error, 0.55f), S(1));
+        text(rt, g_br.Get(), cf.Get(), label, R(ix + S(13), a.top, chip.right, a.bottom), p.error);
+        text_l = chip.right + S(8);
+    }
+    glyph(rt, g_br.Get(), g_f.icon.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), ic);
     float right = a.right - S(12);
     if (star_shown()) {
         // the star: filled in the accent when the page is one of the person's own on the new tab page
@@ -778,6 +905,17 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_READER, r, t->reader ? p.accent : mix(p.sub, p.text, rh));
         right = r.left - S(4);
     }
+    if (translate_shown()) {
+        // translate: in the accent while offered (the page is in another language), on a soft fill once translated
+        D2D1_RECT_F r = translate_rect();
+        auto &ta = g_btn_hover[hover_key(H_TRANSLATE, 0)];
+        busy |= ta.running(now);
+        float th = ta.at(now);
+        if (t->tr_state) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
+        else if (th > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, th * 1.3f));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_LANG, r, t->tr_state || t->tr_offer ? p.accent : mix(p.sub, p.text, th));
+        right = r.left - S(4);
+    }
     if (zoom_shown()) {
         D2D1_RECT_F z = zoom_rect();
         float zh = hov(H_ZOOM, 0);
@@ -787,17 +925,8 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         text(rt, g_br.Get(), f.Get(), zs, R(z.left, z.top, z.right - S(8), z.bottom), p.sub);
         right = z.left - S(6);
     }
-    if (t && t->incognito && !focused) {
-        // a pill that says so, at the end of the address, as Edge's "InPrivate"
-        float tw = text_w(g_f.hint.Get(), T(L"Incógnito"));
-        D2D1_RECT_F pr = R(right - tw - S(36), a.top + S(5), right, a.bottom - S(5));
-        fill(rt, g_br.Get(), pr, S(7), alpha(p.accent_soft, 0.55f));
-        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_INPRIVATE, R(pr.left + S(4), pr.top, pr.left + S(26), pr.bottom), p.accent);
-        text(rt, g_br.Get(), g_f.hint.Get(), T(L"Incógnito"), R(pr.left + S(28), pr.top, pr.right - S(4), pr.bottom), p.accent);
-        right = pr.left - S(6);
-    }
     if (!focused) {
-        D2D1_RECT_F tr = R(a.left + S(36), a.top, right, a.bottom);
+        D2D1_RECT_F tr = R(text_l, a.top, right, a.bottom);
         if (u.empty()) text(rt, g_br.Get(), g_f.addr.Get(), T(L"Busca o escribe una dirección"), tr, p.sub);
         else {
             // the site in ink, the rest of the address in grey
@@ -946,7 +1075,8 @@ static void release_bitmaps() {
 // gives timers their turn only when no painting is pending) and the motion keeps the screen's own rhythm.
 static HANDLE g_anim_event;
 static std::atomic<bool> g_anim_on{ false }, g_frame_pending{ false };
-static bool g_bar_busy;
+static bool &ui_g_bar_busy();
+#define g_bar_busy (ui_g_bar_busy())
 static void want_frames() {
     if (!g_anim_event) return;
     if (!g_anim_on.exchange(true)) SetEvent(g_anim_event);
@@ -956,7 +1086,7 @@ static void anim_thread() {
         WaitForSingleObject(g_anim_event, INFINITE);
         while (g_anim_on) {
             if (FAILED(DwmFlush())) Sleep(16);
-            if (!g_frame_pending.exchange(true)) PostMessageW(g_bar, WM_APP + 22, 0, 0);
+            if (!g_frame_pending.exchange(true)) PostMessageW(g_app, WM_APP + 22, 0, 0);   // (ui_frame, for every window)
         }
     }
 }
@@ -1012,7 +1142,7 @@ static void start_animation_thread() {
     g_anim_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     std::thread(anim_thread).detach();
 }
-void ui_post(std::function<void()> f) { PostMessageW(g_bar, WM_APP + 21, 0, (LPARAM)new std::function<void()>(std::move(f))); }
+void ui_post(std::function<void()> f) { PostMessageW(g_app, WM_APP + 21, 0, (LPARAM)new std::function<void()>(std::move(f))); }
 
 // ---------------------------------------------------------------- the address field
 bool ui_address_focused() { return g_edit && GetFocus() == g_edit; }
@@ -1079,6 +1209,9 @@ static void delete_word_left() {
     SendMessageW(g_edit, EM_REPLACESEL, TRUE, (LPARAM)L"");
 }
 static LRESULT CALLBACK edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    Window *self = win_of_hwnd(h);
+    if (!self) return CallWindowProcW(g_edit_proc, h, msg, wp, lp);
+    WinScope ws(self);
     switch (msg) {
     case WM_KEYDOWN: {
         bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
@@ -1160,7 +1293,7 @@ struct Panel {
     POINT pos{};
     std::function<void(Panel &, double)> draw;
 };
-static Panel g_menu, g_sug, g_toast;
+static Panel g_menu, g_sug, g_toast, g_bubble, g_tip;
 static const float kPanelPad = 18;   // room around the panel for its shadow (DIP)
 static void panel_free(Panel &p) {
     if (p.h) { DestroyWindow(p.h); p.h = NULL; }
@@ -1171,6 +1304,7 @@ static void panel_free(Panel &p) {
 }
 static void panel_render(Panel &p) {
     if (!p.h || p.w <= 0 || p.hh <= 0) return;
+    WinScope ws(win_of_hwnd(GetWindow(p.h, GW_OWNER)));   // (drawn with its window's scale and fonts)
     if (!p.dc) {
         BITMAPINFO bi = {};
         bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -1207,7 +1341,7 @@ static void panel_render(Panel &p) {
 }
 static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp);
 static void panel_open(Panel &p, int x, int y, int w, int hh, bool activate) {
-    if (p.closing) panel_free(p);
+    if (p.closing || (p.h && GetWindow(p.h, GW_OWNER) != g_win)) panel_free(p);   // (open over another window: it moves to this one)
     p.closing = false;
     if (p.w != w || p.hh != hh) {
         p.rt.Reset();
@@ -1218,7 +1352,7 @@ static void panel_open(Panel &p, int x, int y, int w, int hh, bool activate) {
     bool fresh = !p.h;
     if (!p.h) {
         DWORD ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | (activate ? 0 : WS_EX_NOACTIVATE);
-        if (&p == &g_toast) ex |= WS_EX_TRANSPARENT;
+        if (&p == &g_toast || &p == &g_tip) ex |= WS_EX_TRANSPARENT;
         p.h = CreateWindowExW(ex, L"PlumaPanel", L"", WS_POPUP, x, y, w, hh, g_win, NULL, g_inst, NULL);
     }
     if (fresh) { p.fade.snap(0); p.fade.go(1, kPanelMs); p.slide.snap(1); p.slide.go(0, kPanelMs); }
@@ -1337,22 +1471,37 @@ std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET, PAGE_INCOGNITO, PAGE_DOWNLOADS };
 struct MItem {
-    int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
+    int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back, 8 header (the profile's flyout),
+                    // 9 a download (name, its bar while on its way, its state under it; hint = the state)
     std::wstring text, hint;
     wchar_t icon = 0;
     bool on = false, enabled = true, danger = false;
     std::function<void()> act;
     int page = 0;
     wchar_t b1 = 0, b2 = 0;                 // small buttons at the right of the row
+    bool avatar = false; Profile prof;      // a profile's row: its avatar instead of an icon
     std::function<void()> act1, act2;
+    float progress = -1; int dl_state = 0;   // a download's row (DownloadRow)
 };
 static std::vector<MItem> g_items;
 static int g_menu_page = PAGE_MAIN, g_menu_tab = 0, g_menu_sel = -1, g_menu_hot_btn = 0;
+static bool g_menu_page_is_profiles() { return g_menu.h && !g_menu.closing && (g_menu_page == PAGE_PROFILES || g_menu_page == PAGE_INCOGNITO); }
 static RECT g_menu_anchor;
+static bool g_menu_quiet;              // opened by Pluma itself (the translate offer): never takes the focus, closes on its own
+static bool g_menu_quiet_touched;      // ... the mouse went over it (then it stays until a click elsewhere)
+static double g_menu_quiet_since;
+static int g_menu_quiet_tab;           // ... and the tab on screen then (another one: it goes)
+static bool keep_on_screen() { return !g_test || g_test_visible; }   // (a test instance's panels stay off the screen with it)
+static std::wstring fmt1(const wchar_t *tpl, const std::wstring &a) {
+    std::wstring s = tpl;
+    size_t at = s.find(L"%1");
+    if (at != std::wstring::npos) s.replace(at, 2, a);
+    return s;
+}
 static const float kMenuW = 344, kItemH = 34, kSepH = 9;
-static float item_h(const MItem &m) { return m.kind == 1 ? S(kSepH) : m.kind == 6 ? S(30) : S(kItemH); }
+static float item_h(const MItem &m) { return m.kind == 1 ? S(kSepH) : m.kind == 6 ? S(30) : m.kind == 8 ? S(76) : m.kind == 9 ? S(54) : S(kItemH); }
 static std::vector<MItem> build_page(int page);
 static void menu_rebuild() { g_items = build_page(g_menu_page); }
 static D2D1_RECT_F item_rect(size_t i) {
@@ -1363,6 +1512,7 @@ static D2D1_RECT_F item_rect(size_t i) {
 static D2D1_RECT_F item_btn(size_t i, int which) {   // 1 or 2, from the right
     D2D1_RECT_F r = item_rect(i);
     float x = r.right - S(4) - which * S(30);
+    if (g_items[i].kind == 9) { float cy = (r.top + r.bottom) / 2; return R(x, cy - S(15), x + S(28), cy + S(15)); }   // (a tall row: a square button)
     return R(x, r.top + S(3), x + S(28), r.bottom - S(3));
 }
 static void menu_draw(Panel &p, double now) {
@@ -1378,6 +1528,51 @@ static void menu_draw(Panel &p, double now) {
         r.left += dx; r.right += dx;
         if (m.kind == 1) { fill(p.rt.Get(), p.br.Get(), R(r.left + S(8), (r.top + r.bottom) / 2, r.right - S(8), (r.top + r.bottom) / 2 + S(1)), 0, c.line); continue; }
         if (m.kind == 6) { text(p.rt.Get(), p.br.Get(), g_f.menu.Get(), m.text, R(r.left + S(12), r.top, r.right - S(12), r.bottom), c.sub); continue; }
+        if (m.kind == 8) {
+            // as Edge's flyout: the profile big, its avatar and its name (incognito: its sign on the accent)
+            float cx = r.left + S(36), cy = (r.top + r.bottom) / 2, rad = S(24);
+            if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), cx, cy, rad, m.prof, true);
+            else {
+                p.br->SetColor(c.accent_soft);
+                p.rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), rad, rad), p.br.Get());
+                glyph(p.rt.Get(), p.br.Get(), g_f.icon_lg.Get(), m.icon, R(cx - rad, cy - rad, cx + rad, cy + rad), c.accent);
+            }
+            float tl = cx + rad + S(16), tr = r.right - S(12);
+            if (m.hint.empty()) text(p.rt.Get(), p.br.Get(), g_f.title.Get(), m.text, R(tl, r.top, tr, r.bottom), c.text);
+            else {
+                text(p.rt.Get(), p.br.Get(), g_f.title.Get(), m.text, R(tl, cy - S(23), tr, cy + S(1)), c.text);
+                text(p.rt.Get(), p.br.Get(), g_f.ntp.Get(), m.hint, R(tl, cy + S(1), tr, cy + S(21)), c.sub);
+            }
+            continue;
+        }
+        if (m.kind == 9) {
+            // a download, as in Edge's flyout: its file, its name, a bar while it comes, its state; the button at the right
+            bool hot = (int)i == g_menu_sel && (m.act || (m.b1 && g_menu_hot_btn == 1));
+            if (hot) fill(p.rt.Get(), p.br.Get(), r, S(9), c.hover);
+            float ix = r.left + S(18), cy = (r.top + r.bottom) / 2, tr = r.right - S(12);
+            glyph(p.rt.Get(), p.br.Get(), g_f.icon.Get(), G_FILE, R(ix - S(12), cy - S(12), ix + S(12), cy + S(12)), m.dl_state == 2 ? c.error : c.sub);
+            if (m.b1) {
+                D2D1_RECT_F b = item_btn(i, 1); b.left += dx; b.right += dx;
+                if (g_menu_sel == (int)i && g_menu_hot_btn == 1) fill(p.rt.Get(), p.br.Get(), b, S(7), c.press);
+                glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), m.b1, b, c.sub);
+                tr = b.left - S(4);
+            }
+            float tl = r.left + S(38);
+            text(p.rt.Get(), p.br.Get(), g_f.menu.Get(), m.text, R(tl, r.top + S(4), tr, cy + S(1)), m.dl_state >= 2 ? c.sub : c.text);
+            if (m.dl_state == 0) {
+                D2D1_RECT_F bar = R(tl, cy + S(4), tr, cy + S(7));
+                fill(p.rt.Get(), p.br.Get(), bar, S(1.5f), c.line);
+                float f = m.progress < 0 ? 0.3f : m.progress;   // (size unknown: a short piece)
+                if (f > 0) fill(p.rt.Get(), p.br.Get(), R(bar.left, bar.top, bar.left + (bar.right - bar.left) * f, bar.bottom), S(1.5f), m.progress < 0 ? c.accent_soft : c.accent);
+                text(p.rt.Get(), p.br.Get(), g_f.tab.Get(), m.hint, R(tl, cy + S(8), tr, r.bottom - S(2)), c.sub);
+            } else {
+                D2D1_RECT_F st = R(tl, cy + S(1), tr, r.bottom - S(6));
+                text(p.rt.Get(), p.br.Get(), g_f.tab.Get(), m.hint, st, m.dl_state == 2 ? c.error : c.sub);
+                // done: says what a click does, as Edge's "Open file"
+                if (m.dl_state == 1) text(p.rt.Get(), p.br.Get(), g_f.tab.Get(), T(L"Abrir archivo"), R(tl + text_w(g_f.tab.Get(), m.hint) + S(10), st.top, tr, st.bottom), c.accent);
+            }
+            continue;
+        }
         bool sel = (int)i == g_menu_sel && m.enabled && m.kind != 5;
         if (sel) fill(p.rt.Get(), p.br.Get(), r, S(9), c.hover);
         D2D1_COLOR_F ink = !m.enabled ? alpha(c.sub, 0.55f) : m.danger ? c.error : c.text;
@@ -1386,7 +1581,8 @@ static void menu_draw(Panel &p, double now) {
         if (m.kind == 3) ig = m.on ? G_CHECK : 0;
         if (m.kind == 4) ig = m.on ? G_CHECK : 0;
         if (m.kind == 7) ig = G_CHEV_L;
-        if (ig) glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), m.kind >= 3 && m.kind <= 4 ? c.accent : (m.danger ? c.error : c.sub));
+        if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), ix, cy, S(11), m.prof);
+        else if (ig) glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), m.kind >= 3 && m.kind <= 4 ? c.accent : (m.danger ? c.error : c.sub));
         float tr = r.right - S(12);
         if (m.kind == 2) { glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_CHEV_R, R(r.right - S(28), r.top, r.right - S(8), r.bottom), c.sub); tr -= S(18); }
         if (m.b1) {
@@ -1434,21 +1630,29 @@ static void menu_place(bool from_side) {
     if (g_menu_page == PAGE_TAB) x = g_menu_anchor.left - (int)pad;
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(MonitorFromRect(&g_menu_anchor, MONITOR_DEFAULTTONEAREST), &mi);
-    x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
-    if (y + hh > mi.rcWork.bottom + pad) y = std::max((int)mi.rcWork.top, (int)(mi.rcWork.bottom + pad) - hh);
+    if (keep_on_screen()) {
+        x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
+        if (y + hh > mi.rcWork.bottom + pad) y = std::max((int)mi.rcWork.top, (int)(mi.rcWork.bottom + pad) - hh);
+    }
     g_menu.draw = menu_draw;
     bool fresh = !g_menu.h || g_menu.closing;
-    panel_open(g_menu, x, y, w, hh, true);
+    panel_open(g_menu, x, y, w, hh, !g_menu_quiet);
     if (!fresh && from_side) { g_menu.slide.snap(1); g_menu.slide.go(0, kPanelMs); panel_render(g_menu); }
 }
-static void open_menu_page(int page, RECT anchor, int tab_id) {
+static void open_menu_page(int page, RECT anchor, int tab_id, bool quiet) {
+    // (a quiet one's window cannot take the focus: the person's own menu is a new window)
+    if (g_menu.h && g_menu_quiet && !quiet) panel_free(g_menu);
+    g_menu_quiet = quiet; g_menu_quiet_touched = false; g_menu_quiet_since = now_ms();
+    { Tab *a = active_tab(); g_menu_quiet_tab = a ? a->id : 0; }
     g_menu_page = page; g_menu_tab = tab_id; g_menu_sel = -1; g_menu_anchor = anchor;
     close_suggestions();
     menu_place(false);
-    g_menu_btn_open.go(1, kHoverMs);
+    if (quiet && g_menu.h) SetTimer(g_menu.h, 6, 200, NULL);
+    if (!quiet) g_menu_btn_open.go(1, kHoverMs);
 }
 static void menu_close() {
     if (!g_menu.h) return;
+    if (g_menu_quiet) { KillTimer(g_menu.h, 6); g_menu_quiet = false; }
     panel_close(g_menu);
     g_menu_btn_open.go(0, kHoverMs);
     ui_invalidate();
@@ -1469,7 +1673,7 @@ void ui_open_menu() {
 void data_clear_all() {
     ComPtr<ICoreWebView2_13> v13; ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Profile2> p2;
     Tab *t = nullptr;
-    for (auto &x : g_tabs) if (x->view && !x->incognito) { t = x.get(); break; }
+    for (Tab *x : all_tabs()) if (x->view && !x->incognito) { t = x; break; }
     history_clear();
     if (t && SUCCEEDED(t->view.As(&v13)) && SUCCEEDED(v13->get_Profile(&pr)) && SUCCEEDED(pr.As(&p2)))
         p2->ClearBrowsingData((COREWEBVIEW2_BROWSING_DATA_KINDS)(COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE |
@@ -1498,12 +1702,18 @@ static std::vector<MItem> build_page(int page) {
     std::vector<MItem> v;
     if (page == PAGE_MAIN) {
         v.push_back(item(T(L"Pestaña nueva"), G_NEWTAB, T(L"Ctrl+T"), [] { after_menu([] { tab_new(L"", true); }); }));
+        v.push_back(item(T(L"Nueva ventana"), G_WINDOW, T(L"Ctrl+N"), [] { after_menu([] { win_open_new(); }); }));
         v.push_back(item(T(L"Nueva ventana de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { app_open_incognito(); }); }));
         MItem re = item(T(L"Reabrir pestaña cerrada"), G_UNDO, T(L"Ctrl+Mayús+T"), [] { after_menu([] { tab_reopen_closed(); }); });
         v.push_back(re);
         v.push_back(sep());
         MItem z; z.kind = 5; z.text = L"Zoom"; z.icon = G_ZOOM; v.push_back(z);
-        v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { after_menu([] { tab_downloads(); }); }));
+        v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { menu_go(PAGE_DOWNLOADS); }));
+        Tab *at = active_tab();
+        if (at && at->view && !settings_page_url(at->url) && (starts_with(at->url, L"https://") || starts_with(at->url, L"http://"))) {
+            if (at->tr_state) v.push_back(item(T(L"Mostrar original"), G_LANG, L"", [] { after_menu([] { translate_original(active_tab()); }); }));
+            else v.push_back(item(T(L"Traducir página"), G_LANG, translate_lang_name(translate_target(), true), [] { after_menu([] { translate_page(active_tab()); }); }));
+        }
         v.push_back(sep());
         size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
         v.push_back(sub(T(L"Extensiones"), G_PUZZLE, on == 1 ? T(L"1 activa") : on ? std::to_wstring(on) + T(L" activas") : L"", PAGE_EXT));
@@ -1515,6 +1725,8 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sub(T(L"Fuente"), G_FONT, g_set.font.empty() ? T(L"La de Windows") : g_set.font, PAGE_FONT));
         v.push_back(sub(T(L"Borrar datos"), G_ERASE, L"", PAGE_CLEAR));
         v.push_back(item(T(L"Configuración"), G_GEAR, L"", [] { after_menu([] { settings_open(); }); }));
+        if (!g_incognito)
+            v.push_back(item(T(L"Sincronizar"), G_CLOUD, L"", [] { after_menu([] { settings_open_sync(); }); }));
         v.push_back(item(T(L"Herramientas de desarrollo"), G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
         if (!g_incognito)
             v.push_back(item(T(L"Buscar actualizaciones"), G_UPDATE, update_version(), [] { after_menu([] { update_check_now(); }); }));
@@ -1596,6 +1808,23 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(item(T(L"Duplicar"), G_NEWTAB, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t && !t->url.empty()) tab_new(t->url, true, tab_index(id) + 1, t->incognito); }); }));
         if (t->view) v.push_back(item(t->muted ? T(L"Volver a dar sonido") : T(L"Silenciar"), t->muted ? G_VOL : G_MUTE, L"", [id] { after_menu([id] { tab_mute(tab_by_id(id)); }); }));
         v.push_back(sep());
+        // to another window, as Edge's "Move tab to": a new one, or each of the others (by the tab it shows)
+        if (g_tabs.size() > 1)
+            v.push_back(item(T(L"Mover a una ventana nueva"), G_NEW_WINDOW_OUT, L"", [id] { after_menu([id] { Tab *t = tab_by_id(id); if (t) tab_to_new_window(t, nullptr); }); }));
+        for (auto &w : g_windows) {
+            if (w.get() == g_cw) continue;
+            int wid = w->id;
+            v.push_back(item(T(L"Mover a ") + win_name(w.get()), G_SWITCH, L"", [id, wid] { after_menu([id, wid] {
+                Tab *t = tab_by_id(id);
+                Window *to = win_by_id(wid);
+                if (!t || !to) return;
+                Window *from = win_of_tab(t);
+                tab_move(t, to, (int)to->tabs.size(), true);
+                win_show(to, true);
+                if (from && from->tabs.empty()) win_close(from);
+            }); }));
+        }
+        v.push_back(sep());
         v.push_back(item(T(L"Cerrar las de la derecha"), G_X, L"", [id] { after_menu([id] { int i = tab_index(id); while (i >= 0 && (int)g_tabs.size() > i + 1) tab_close((int)g_tabs.size() - 1); }); }));
         v.push_back(item(T(L"Cerrar las demás"), G_X, L"", [id] { after_menu([id] { for (int k = (int)g_tabs.size() - 1; k >= 0; k--) if (g_tabs[k]->id != id) tab_close(k); }); }));
         v.push_back(item(T(L"Cerrar"), G_X, T(L"Ctrl+W"), [id] { after_menu([id] { tab_close(tab_index(id)); }); }));
@@ -1638,6 +1867,105 @@ static std::vector<MItem> build_page(int page) {
             v.push_back(item(t, G_GLOBE, L"", [u] { after_menu([u] { Tab *a = active_tab(); if (a && a->url.empty()) tab_navigate(a, u); else tab_new(u, true); }); }));
         }
         if (!any) v.push_back(note(T(L"Carpeta vacía")));
+    } else if (page == PAGE_PROFILES) {
+        // the avatar's flyout, as Edge's: this profile big, its settings, the other profiles (their window, opened or
+        // brought to the front), a new one, incognito
+        Profile cur = profile_current();
+        MItem head; head.kind = 8; head.enabled = false; head.text = profile_shown_name(cur); head.avatar = true; head.prof = cur;
+        v.push_back(head);
+        v.push_back(item(T(L"Configuración del perfil"), G_GEAR, L"", [] { after_menu([] { settings_open(L"perfiles"); }); }));
+        v.push_back(sep());
+        bool any = false;
+        for (auto &pr : profiles_list()) {
+            std::wstring id = pr.id;
+            if (id == g_profile_id) continue;
+            if (!any) { v.push_back(note(T(L"Otros perfiles"))); any = true; }
+            MItem m = item(profile_shown_name(pr), 0, profile_window(id) ? T(L"Abierto") : L"", [id] { after_menu([id] { profile_open(id); }); });
+            m.avatar = true; m.prof = pr;
+            v.push_back(m);
+        }
+        v.push_back(item(T(L"Añadir perfil"), G_ADD, L"", [] { after_menu([] {
+            std::wstring id = profile_create(T(L"Perfil") + std::wstring(L" ") + std::to_wstring(profiles_list().size() + 1));
+            if (!id.empty()) profile_open(id);
+        }); }));
+        v.push_back(item(T(L"Nueva ventana de incógnito"), G_INPRIVATE, T(L"Ctrl+Mayús+N"), [] { after_menu([] { app_open_incognito(); }); }));
+    } else if (page == PAGE_INCOGNITO) {
+        // the incognito badge's flyout, as Edge's InPrivate one: what it is, and a way out
+        MItem head; head.kind = 8; head.enabled = false; head.text = T(L"Incógnito"); head.icon = G_INPRIVATE;
+        head.hint = T(L"Nada se guarda al cerrar");
+        v.push_back(head);
+        v.push_back(sep());
+        v.push_back(item(T(L"Cerrar ventana de incógnito"), G_X, L"", [] { after_menu([] { app_close_window(); }); }));
+    } else if (page == PAGE_DOWNLOADS) {
+        // Pluma's downloads (the engine's own flyout took the engine down on "Open file"), newest first
+        v.push_back(note(T(L"Descargas")));
+        auto rows = downloads_rows();
+        if (rows.empty()) v.push_back(note(T(L"Aún no has descargado nada")));
+        for (size_t k = 0; k < rows.size() && k < 8; k++) {
+            const DownloadRow &d = rows[k];
+            int id = d.id;
+            MItem m; m.kind = 9; m.text = d.name; m.hint = d.status; m.progress = d.progress; m.dl_state = d.state;
+            if (d.state == 1) {
+                m.act = [id] { after_menu([id] { download_open(id); }); };
+                m.b1 = G_FOLDER; m.act1 = [id] { after_menu([id] { download_show(id); }); };
+            } else if (d.state == 0) {
+                m.b1 = G_X; m.act1 = [id] { download_cancel(id); };
+            }
+            v.push_back(m);
+        }
+        v.push_back(sep());
+        v.push_back(item(T(L"Abrir carpeta de descargas"), G_FOLDER, L"", [] { after_menu([] { downloads_open_folder(); }); }));
+    } else if (page == PAGE_TRANSLATE) {
+        // the translate icon (or the offer): as Edge's, with the page's language, the target and what to remember
+        int id = g_menu_tab;
+        Tab *t = tab_by_id(id);
+        if (!t) return v;
+        std::wstring lang = t->page_lang, tl = translate_target(), site = translate_site(t);
+        std::wstring tl1 = tl.substr(0, tl.find(L'-'));
+        v.push_back(note(lang.empty() ? std::wstring(T(L"Traducir esta página")) : fmt1(T(L"Página en %1"), translate_lang_name(lang, false))));
+        if (t->tr_state == 1) v.push_back(note(fmt1(T(L"Traduciendo… %1 %"), std::to_wstring(translate_progress(t)))));
+        if (t->tr_state) v.push_back(item(T(L"Mostrar original"), G_UNDO, L"", [id] { after_menu([id] { translate_original(tab_by_id(id)); }); }));
+        else v.push_back(item(T(L"Traducir"), G_LANG, translate_lang_name(tl, true), [id] { after_menu([id] { translate_page(tab_by_id(id)); }); }));
+        v.push_back(sub(T(L"Traducir a"), G_GLOBE, translate_lang_name(tl, true), PAGE_TR_TARGET));
+        v.push_back(sep());
+        if (!lang.empty() && lang != tl1) {
+            std::wstring name = translate_lang_name(lang, false);
+            MItem al; al.kind = 3; al.text = fmt1(T(L"Traducir siempre las páginas en %1"), name); al.on = translate_always(lang);
+            al.act = [id, lang] {
+                bool on = !translate_always(lang);
+                translate_set_always(lang, on);
+                Tab *t = tab_by_id(id);
+                if (on && t && !t->tr_state) translate_page(t);
+            };
+            v.push_back(al);
+            MItem nv; nv.kind = 3; nv.text = fmt1(T(L"No traducir nunca las páginas en %1"), name); nv.on = translate_never(lang);
+            nv.act = [lang] { translate_set_never(lang, !translate_never(lang)); };
+            v.push_back(nv);
+        }
+        if (!site.empty()) {
+            MItem ns; ns.kind = 3; ns.text = T(L"No traducir nunca este sitio"); ns.on = translate_never_site(site);
+            ns.act = [site] { translate_set_never_site(site, !translate_never_site(site)); };
+            v.push_back(ns);
+        }
+        v.push_back(sep());
+        if (!t->tr_state) v.push_back(item(T(L"Ahora no"), G_X, L"", [] { after_menu([] {}); }));
+        v.push_back(item(T(L"Configuración de traducción"), G_GEAR, L"", [] { after_menu([] { settings_open(L"idioma"); }); }));
+    } else if (page == PAGE_TR_TARGET) {
+        MItem b = back(T(L"Traducir a"));
+        b.act = [] { menu_go(PAGE_TRANSLATE); };
+        v.push_back(b);
+        std::wstring tl = translate_target();
+        for (auto &c : translate_targets()) {
+            MItem m; m.kind = 4; m.text = translate_lang_name(c, true); m.on = c == tl;
+            m.act = [c] {
+                bool changed = c != translate_target();
+                translate_set_target(c);
+                Tab *t = tab_by_id(g_menu_tab);
+                if (changed && t && t->tr_state) translate_page(t);   // (into the new one now)
+                menu_go(PAGE_TRANSLATE);
+            };
+            v.push_back(m);
+        }
     } else if (page == PAGE_ONE_EXT) {
         // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
         size_t i = (size_t)g_menu_tab;
@@ -1684,8 +2012,11 @@ static void menu_activate(int i, int btn) {
 static void menu_key(UINT vk) {
     int n = (int)g_items.size();
     auto selectable = [](const MItem &m) { return m.enabled && m.kind != 1 && m.kind != 6; };
-    if (vk == VK_ESCAPE) { if (g_menu_page != PAGE_MAIN && g_menu_page != PAGE_TAB) menu_go(PAGE_MAIN); else after_menu([] {}); return; }
-    if (vk == VK_LEFT && g_menu_page != PAGE_MAIN && g_menu_page != PAGE_TAB) { menu_go(PAGE_MAIN); return; }
+    bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES || g_menu_page == PAGE_INCOGNITO || g_menu_page == PAGE_TRANSLATE ||
+               g_menu_page == PAGE_DOWNLOADS;
+    int parent = g_menu_page == PAGE_TR_TARGET ? PAGE_TRANSLATE : PAGE_MAIN;
+    if (vk == VK_ESCAPE) { if (!top) menu_go(parent); else after_menu([] {}); return; }
+    if (vk == VK_LEFT && !top) { menu_go(parent); return; }
     if (vk == VK_UP || vk == VK_DOWN) {
         int d = vk == VK_UP ? -1 : 1, i = g_menu_sel;
         for (int k = 0; k < n; k++) { i = (i + d + n) % n; if (selectable(g_items[i])) break; }
@@ -1728,17 +2059,329 @@ void ui_toast(const std::wstring &t) {
     panel_open(g_toast, o.x, o.y, w, h, false);
     SetTimer(g_toast.h, 2, 2600, NULL);
 }
-void ui_close_popups() { close_suggestions(); if (g_menu.h && !g_menu.closing) menu_close(); }
+// ---------------------------------------------------------------- the avatar's tooltip: the profile's name (as Edge's)
+static std::wstring g_tip_text;
+static void tip_draw(Panel &p, double now) {
+    const Palette &c = pal();
+    float pad = S(kPanelPad);
+    D2D1_RECT_F card = R(pad, pad - S(3) * p.slide.at(now), p.w - pad, p.hh - pad);
+    soft_shadow(p.rt.Get(), p.br.Get(), card, S(6), 0.6f);
+    fill(p.rt.Get(), p.br.Get(), card, S(6), c.surface);
+    stroke(p.rt.Get(), p.br.Get(), card, S(6), alpha(c.text, dark_theme() ? 0.12f : 0.09f), S(1));
+    text(p.rt.Get(), p.br.Get(), g_f.tab.Get(), g_tip_text, R(card.left + S(10), card.top, card.right - S(8), card.bottom), c.text);
+}
+static void tip_close() { if (g_tip.h && !g_tip.closing) panel_close(g_tip); }
+static void tip_show(RECT anchor, const std::wstring &t) {
+    // under the button, centred on it; kept on its screen
+    g_tip_text = t;
+    float pad = S(kPanelPad);
+    int w = (int)(std::min(S(320), text_w(g_f.tab.Get(), t) + S(20)) + pad * 2), h = (int)(S(28) + pad * 2);
+    int x = (anchor.left + anchor.right) / 2 - w / 2, y = anchor.bottom + (int)S(6) - (int)pad;
+    if (keep_on_screen()) {
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromRect(&anchor, MONITOR_DEFAULTTONEAREST), &mi);
+        x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
+    }
+    g_tip.draw = tip_draw;
+    panel_open(g_tip, x, y, w, h, false);
+}
+// ---------------------------------------------------------------- page translation (translate.cpp): its popup and the bubble
+static void menu_refresh() {
+    // the open menu shows what changed (its height too)
+    if (!g_menu.h || g_menu.closing) return;
+    menu_rebuild();
+    float h = S(12);
+    for (auto &m : g_items) h += item_h(m);
+    if ((int)(h + S(kPanelPad) * 2) != g_menu.hh) menu_place(false); else panel_render(g_menu);
+}
+void ui_translate_changed() {
+    ui_invalidate();
+    if (g_menu.h && !g_menu.closing && (g_menu_page == PAGE_TRANSLATE || g_menu_page == PAGE_MAIN)) menu_refresh();
+}
+static RECT bar_rect_on_screen(D2D1_RECT_F r) {
+    POINT a = { (LONG)r.left, (LONG)r.top }, b = { (LONG)r.right, (LONG)r.bottom };
+    ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+    return { a.x, a.y, b.x, b.y };
+}
+static void open_translate_menu(bool quiet) {
+    Tab *t = active_tab();
+    if (!t) return;
+    open_menu_page(PAGE_TRANSLATE, bar_rect_on_screen(translate_shown() ? translate_rect() : menu_rect()), t->id, quiet);
+}
+void ui_open_translate_menu() { open_translate_menu(false); }
+void ui_open_profile_menu(bool quiet) {
+    // the avatar's flyout (in incognito, the badge's); quiet: tests, without the focus
+    tip_close();
+    open_menu_page(g_incognito ? PAGE_INCOGNITO : PAGE_PROFILES, bar_rect_on_screen(profile_rect()), 0, quiet);
+}
+void ui_open_downloads(bool quiet) {
+    // the downloads panel under ⋯ (Ctrl+J, ⋯ > Descargas, Configuración); quiet: Pluma shows it when a download starts
+    // or ends, as Edge its flyout, unless the person is busy elsewhere, and it never takes the focus
+    // (open over another window: it comes to this one, the window of the tab the download came from)
+    bool open = g_menu.h && !g_menu.closing && g_menu_page == PAGE_DOWNLOADS && GetWindow(g_menu.h, GW_OWNER) == g_win;
+    if (quiet) {
+        if (open) { if (g_menu_quiet) g_menu_quiet_since = now_ms(); menu_refresh(); return; }   // (news: its 12 s again)
+        if (g_menu.h && !g_menu.closing && g_menu_page == PAGE_DOWNLOADS && g_menu_quiet) menu_close();
+        if (ui_address_focused() || (g_menu.h && !g_menu.closing) || !IsWindowVisible(g_win) || IsIconic(g_win)) return;
+        if (!g_test && GetForegroundWindow() != g_win) return;
+    } else if (open && !g_menu_quiet) { menu_close(); return; }   // (Ctrl+J again: away, as Edge)
+    open_menu_page(PAGE_DOWNLOADS, bar_rect_on_screen(menu_rect()), 0, quiet);
+}
+void ui_downloads_changed() {
+    // (from an app-wide timer: the panel's own window is made current, or it would move to another one)
+    if (!g_menu.h || g_menu.closing || g_menu_page != PAGE_DOWNLOADS) return;
+    WinScope ws(win_of_hwnd(GetWindow(g_menu.h, GW_OWNER)));
+    menu_refresh();
+}
+void ui_open_menu_quietly(bool translate) {
+    // tests: a menu shown without taking the focus (a test instance never takes it from the user)
+    if (translate) { open_translate_menu(true); return; }
+    open_menu_page(PAGE_MAIN, bar_rect_on_screen(menu_rect()), 0, true);
+}
+bool ui_translate_offer(Tab *t) {
+    // as Edge's: the popup under the icon, unless the person is busy elsewhere (then the lit icon is enough); it takes
+    // the place of another quiet one (the last tab's offer, still there: the new tab is on screen before it goes)
+    if (!t || t != active_tab() || !translate_shown() || ui_address_focused() || (g_menu.h && !g_menu.closing && !g_menu_quiet) ||
+        !IsWindowVisible(g_win) || IsIconic(g_win)) return false;
+    if (!g_test && GetForegroundWindow() != g_win) return false;
+    open_translate_menu(true);
+    return true;
+}
+static bool mouse_clicked() {   // a button down anywhere (test instances: never, the mouse is the user's)
+    return !g_test && ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) || (GetAsyncKeyState(VK_RBUTTON) & 0x8000));
+}
+static bool escape_down() { return !g_test && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) && GetForegroundWindow() == g_win; }
+static void quiet_watch() {
+    // the offer closes with a click elsewhere, Esc, another tab, or by itself after 12 s if the mouse never went to it
+    if (!g_menu_quiet || !g_menu.h || g_menu.closing) return;
+    POINT c; GetCursorPos(&c);
+    RECT wr; GetWindowRect(g_menu.h, &wr);
+    int pad = (int)S(kPanelPad);
+    InflateRect(&wr, -pad, -pad);
+    bool over = PtInRect(&wr, c) != FALSE;
+    if (over) g_menu_quiet_touched = true;
+    Tab *t = active_tab();
+    if ((mouse_clicked() && !over) || escape_down() || !t || t->id != g_menu_quiet_tab || !IsWindowVisible(g_win) || IsIconic(g_win) ||
+        (!g_menu_quiet_touched && now_ms() - g_menu_quiet_since > 12000))
+        menu_close();
+}
+
+static std::wstring g_bub_title, g_bub_text;
+static bool g_bub_loading;
+static RECT g_bub_anchor;
+static int g_bub_hot, g_bub_tab, g_bub_tr;   // (g_bub_tr: was the page translated when it opened)
+static double g_bub_opened, g_bub_copied = -1e9;
+static const float kBubW = 380, kBubHead = 38, kBubMaxBody = 320;
+static ComPtr<IDWriteTextLayout> bubble_layout() {
+    ComPtr<IDWriteTextLayout> l;
+    if (!g_dw || !g_f.menu) return l;
+    g_dw->CreateTextLayout(g_bub_text.c_str(), (UINT32)g_bub_text.size(), g_f.menu.Get(), S(kBubW - 30), 100000, &l);
+    if (l) {
+        l->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        l->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        l->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        DWRITE_TRIMMING none = { DWRITE_TRIMMING_GRANULARITY_NONE, 0, 0 };
+        l->SetTrimming(&none, NULL);
+    }
+    return l;
+}
+static D2D1_RECT_F bubble_card(const Panel &p) { float pad = S(kPanelPad); return R(pad, pad, p.w - pad, p.hh - pad); }
+static D2D1_RECT_F bubble_btn(const Panel &p, int which) {   // 1 copy, 2 close
+    D2D1_RECT_F c = bubble_card(p);
+    float x = c.right - S(8) - S(30) * (which == 2 ? 1 : 2);
+    return R(x, c.top + S(6), x + S(28), c.top + S(34));
+}
+static void bubble_draw(Panel &p, double now) {
+    const Palette &c = pal();
+    D2D1_RECT_F card = bubble_card(p);
+    card.top -= S(6) * p.slide.at(now); card.bottom -= S(6) * p.slide.at(now);
+    panel_card(p, card);
+    float dy = card.top - bubble_card(p).top;
+    glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_LANG, R(card.left + S(8), card.top + S(6), card.left + S(34), card.top + S(34)), c.accent);
+    D2D1_RECT_F copy = bubble_btn(p, 1), close = bubble_btn(p, 2);
+    copy.top += dy; copy.bottom += dy; close.top += dy; close.bottom += dy;
+    text(p.rt.Get(), p.br.Get(), g_f.hint.Get(), g_bub_title, R(card.left + S(36), card.top + S(6), copy.left - S(4), card.top + S(34)), c.sub);
+    bool copied = now - g_bub_copied < 1500;
+    if (!g_bub_loading) {
+        if (g_bub_hot == 1) fill(p.rt.Get(), p.br.Get(), copy, S(7), c.hover);
+        glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), copied ? G_CHECK : G_COPY, copy, copied ? c.accent : c.sub);
+    }
+    if (g_bub_hot == 2) fill(p.rt.Get(), p.br.Get(), close, S(7), c.hover);
+    glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_X, close, c.sub);
+    auto l = bubble_layout();
+    if (!l) return;
+    D2D1_RECT_F body = R(card.left + S(14), card.top + S(kBubHead), card.right - S(14), card.bottom - S(12));
+    p.rt->PushAxisAlignedClip(body, D2D1_ANTIALIAS_MODE_ALIASED);
+    p.br->SetColor(g_bub_loading ? c.sub : c.text);
+    p.rt->DrawTextLayout(D2D1::Point2F(body.left, body.top), l.Get(), p.br.Get());
+    p.rt->PopAxisAlignedClip();
+}
+static void bubble_place() {
+    float pad = S(kPanelPad);
+    auto l = bubble_layout();
+    DWRITE_TEXT_METRICS m{};
+    if (l) l->GetMetrics(&m);
+    float body = std::min(std::max(m.height, S(18)), S(kBubMaxBody));
+    int w = (int)(S(kBubW) + pad * 2), hh = (int)(S(kBubHead) + body + S(14) + pad * 2);
+    RECT a = g_bub_anchor;
+    int x = a.left - (int)pad, y = a.bottom + (int)S(8) - (int)pad;
+    if (keep_on_screen()) {
+        // under the words, or over them when there is no room below; always on their screen
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromRect(&a, MONITOR_DEFAULTTONEAREST), &mi);
+        if (y + hh - pad > mi.rcWork.bottom) y = a.top - (int)S(8) - hh + (int)pad;
+        y = std::max((int)mi.rcWork.top - (int)pad, std::min(y, (int)mi.rcWork.bottom - hh + (int)pad));
+        x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
+    }
+    g_bubble.draw = bubble_draw;
+    bool fresh = !g_bubble.h || g_bubble.closing;
+    panel_open(g_bubble, x, y, w, hh, false);
+    if (fresh && g_bubble.h) SetTimer(g_bubble.h, 5, 120, NULL);
+}
+static void bubble_close() {
+    if (!g_bubble.h || g_bubble.closing) return;
+    KillTimer(g_bubble.h, 5);
+    panel_close(g_bubble);
+}
+void ui_bubble(RECT anchor, const std::wstring &title, const std::wstring &text, bool loading) {
+    Tab *t = active_tab();
+    g_bub_anchor = anchor; g_bub_title = title; g_bub_text = text; g_bub_loading = loading;
+    g_bub_hot = 0; g_bub_tab = t ? t->id : 0; g_bub_tr = t ? t->tr_state : 0; g_bub_opened = now_ms(); g_bub_copied = -1e9;
+    bubble_place();
+}
+void ui_bubble_text(const std::wstring &title, const std::wstring &text, bool loading) {
+    if (!g_bubble.h || g_bubble.closing) return;
+    g_bub_title = title; g_bub_text = text; g_bub_loading = loading;
+    bubble_place();
+}
+static void bubble_watch() {
+    // a click elsewhere, Esc, another tab, the whole page being translated or the window going: the bubble goes
+    if (!g_bubble.h || g_bubble.closing) return;
+    POINT c; GetCursorPos(&c);
+    RECT wr; GetWindowRect(g_bubble.h, &wr);
+    int pad = (int)S(kPanelPad);
+    InflateRect(&wr, -pad, -pad);
+    bool over = PtInRect(&wr, c) != FALSE;
+    Tab *t = active_tab();
+    if ((mouse_clicked() && !over && now_ms() - g_bub_opened > 400) || escape_down() || !t || t->id != g_bub_tab || (!g_bub_tr && t->tr_state) ||
+        !IsWindowVisible(g_win) || IsIconic(g_win))
+        bubble_close();
+}
+static void copy_to_clipboard(const std::wstring &s) {
+    if (!OpenClipboard(g_win)) return;
+    EmptyClipboard();
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (s.size() + 1) * sizeof(wchar_t));
+    if (h) {
+        memcpy(GlobalLock(h), s.c_str(), (s.size() + 1) * sizeof(wchar_t));
+        GlobalUnlock(h);
+        if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
+    }
+    CloseClipboard();
+}
+IStream *ui_glyph_png(wchar_t g) {
+    // the page's context menu takes its icons as images: the glyph drawn once, in the menu's ink (it follows the theme)
+    static std::unordered_map<int, std::string> cache;
+    bool dark = dark_theme();
+    int key = (int)g * 2 + (dark ? 1 : 0);
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        std::string png;
+        const UINT px = 32;
+        ComPtr<IWICBitmap> bmp;
+        ComPtr<ID2D1RenderTarget> rt;
+        ComPtr<IDWriteTextFormat> f;
+        ComPtr<ID2D1SolidColorBrush> br;
+        D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+        if (g_wic && g_d2d && g_dw && SUCCEEDED(g_wic->CreateBitmap(px, px, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) &&
+            SUCCEEDED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt)) &&
+            SUCCEEDED(g_dw->CreateTextFormat(g_icon_family.c_str(), NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 24.0f, L"", &f)) &&
+            SUCCEEDED(rt->CreateSolidColorBrush(dark ? hex(0xe7eaee) : hex(0x1d2733), &br))) {
+            f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            rt->BeginDraw();
+            rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+            rt->DrawText(&g, 1, f.Get(), D2D1::RectF(0, 0, (float)px, (float)px), br.Get());
+            if (SUCCEEDED(rt->EndDraw())) {
+                IStream *s = SHCreateMemStream(NULL, 0);
+                ComPtr<IWICBitmapEncoder> enc;
+                ComPtr<IWICBitmapFrameEncode> fr;
+                if (s && SUCCEEDED(g_wic->CreateEncoder(GUID_ContainerFormatPng, NULL, &enc)) && SUCCEEDED(enc->Initialize(s, WICBitmapEncoderNoCache)) &&
+                    SUCCEEDED(enc->CreateNewFrame(&fr, NULL)) && SUCCEEDED(fr->Initialize(NULL)) && SUCCEEDED(fr->SetSize(px, px)) &&
+                    SUCCEEDED(fr->WriteSource(bmp.Get(), NULL)) && SUCCEEDED(fr->Commit()) && SUCCEEDED(enc->Commit())) {
+                    STATSTG st{};
+                    LARGE_INTEGER zero{};
+                    if (SUCCEEDED(s->Stat(&st, STATFLAG_NONAME)) && SUCCEEDED(s->Seek(zero, STREAM_SEEK_SET, NULL))) {
+                        png.resize((size_t)st.cbSize.QuadPart);
+                        ULONG got = 0;
+                        if (FAILED(s->Read(&png[0], (ULONG)png.size(), &got)) || got != png.size()) png.clear();
+                    }
+                }
+                if (s) s->Release();
+            }
+        }
+        it = cache.emplace(key, png).first;
+    }
+    if (it->second.empty()) return nullptr;
+    return SHCreateMemStream((const BYTE *)it->second.data(), (UINT)it->second.size());
+}
+
+void ui_blend_panels(BYTE *bits, int w, int h, POINT origin) {
+    // tests: the open panels into a picture of the window, with their real transparency (as the screen shows them)
+    for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble, &g_tip }) {
+        if (!p->h || !p->bmp || !IsWindowVisible(p->h)) continue;
+        DIBSECTION ds{};
+        if (!GetObjectW(p->bmp, sizeof(ds), &ds) || !ds.dsBm.bmBits) continue;
+        float k = std::max(0.0f, std::min(1.0f, p->fade.at(now_ms())));
+        for (int y = 0; y < p->hh; y++)
+            for (int x = 0; x < p->w; x++) {
+                int dx = p->pos.x - origin.x + x, dy = p->pos.y - origin.y + y;
+                if (dx < 0 || dy < 0 || dx >= w || dy >= h) continue;
+                BYTE *src = (BYTE *)ds.dsBm.bmBits + (y * p->w + x) * 4, *d = bits + (dy * w + dx) * 4;
+                float a = src[3] / 255.0f * k;
+                for (int c = 0; c < 3; c++) d[c] = (BYTE)std::min(255.0f, src[c] * k + d[c] * (1 - a));
+            }
+    }
+}
+void ui_frame() {
+    // one animation frame: every window whose bar moves, and the panels fading or sliding
+    g_frame_pending = false;
+    double now = now_ms();
+    bool busy = false;
+    std::vector<Window *> ws;
+    for (auto &w : g_windows) ws.push_back(w.get());
+    for (Window *w : ws) {
+        if (!win_alive(w) || !w->ui) continue;
+        WinScope scope(w);
+        if (g_bar_busy) { paint(); busy |= g_bar_busy; }
+    }
+    for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble, &g_tip })
+        if (p->h && (p->fade.running(now) || p->slide.running(now) || p->closing)) { panel_render(*p); busy |= p->h != NULL; }
+    if (!busy) g_anim_on = false;
+}
+static bool panel_here(const Panel &p) { return p.h && GetWindow(p.h, GW_OWNER) == g_win; }   // over the current window
+void ui_close_popups() {
+    // (only the current window's: the others' stay as they are)
+    if (panel_here(g_sug)) close_suggestions();
+    if (panel_here(g_menu) && !g_menu.closing) menu_close();
+    if (panel_here(g_bubble) && !g_bubble.closing && now_ms() - g_bub_opened > 500) bubble_close();   // (not the page taking the focus back from its own menu)
+}
 
 static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    Panel *p = h == g_menu.h ? &g_menu : h == g_sug.h ? &g_sug : h == g_toast.h ? &g_toast : nullptr;
+    Window *owner = win_of_hwnd(h);   // (a panel's parent is the window it is over)
+    if (!owner) return DefWindowProcW(h, msg, wp, lp);
+    WinScope ws(owner);
+    Panel *p = h == g_menu.h ? &g_menu : h == g_sug.h ? &g_sug : h == g_toast.h ? &g_toast : h == g_bubble.h ? &g_bubble : h == g_tip.h ? &g_tip : nullptr;
     switch (msg) {
     case WM_TIMER:
         if (!p) break;
         if (wp == 2) { KillTimer(h, 2); panel_close(*p); return 0; }
+        if (wp == 5 && p == &g_bubble) { bubble_watch(); return 0; }
+        if (wp == 6 && p == &g_menu) { quiet_watch(); return 0; }
+        if (wp == 7) KillTimer(h, 7);   // (the bubble's "copied" tick, drawn once more)
         panel_render(*p);
         return 0;
-    case WM_MOUSEACTIVATE: return p == &g_menu ? MA_ACTIVATE : MA_NOACTIVATE;
+    case WM_MOUSEACTIVATE: return p == &g_menu && !g_menu_quiet ? MA_ACTIVATE : MA_NOACTIVATE;
     case WM_ACTIVATE:
         if (p == &g_menu && LOWORD(wp) == WA_INACTIVE && !g_menu.closing) menu_close();
         return 0;
@@ -1749,6 +2392,9 @@ static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (p == &g_menu) {
             int btn = 0, i = menu_hit(x, y, &btn);
             if (i != g_menu_sel || btn != g_menu_hot_btn) { g_menu_sel = i; g_menu_hot_btn = btn; panel_render(g_menu); }
+        } else if (p == &g_bubble) {
+            int hot = inside(bubble_btn(g_bubble, 1), (float)x, (float)y) && !g_bub_loading ? 1 : inside(bubble_btn(g_bubble, 2), (float)x, (float)y) ? 2 : 0;
+            if (hot != g_bub_hot) { g_bub_hot = hot; panel_render(g_bubble); }
         } else if (p == &g_sug) {
             float pad = S(kPanelPad);
             int i = (int)((y - pad - S(6)) / S(kSugRow));
@@ -1760,10 +2406,15 @@ static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSELEAVE:
         if (p == &g_menu) { g_menu_hot_btn = 0; panel_render(g_menu); }
         if (p == &g_sug) { g_sug_hover = -1; panel_render(g_sug); }
+        if (p == &g_bubble && g_bub_hot) { g_bub_hot = 0; panel_render(g_bubble); }
         return 0;
     case WM_LBUTTONUP: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
         if (p == &g_menu) { int btn = 0, i = menu_hit(x, y, &btn); if (i >= 0) menu_activate(i, btn); else after_menu([] {}); }
+        else if (p == &g_bubble) {
+            if (g_bub_hot == 1) { copy_to_clipboard(g_bub_text); g_bub_copied = now_ms(); panel_render(g_bubble); SetTimer(h, 7, 1600, NULL); }
+            else if (g_bub_hot == 2) bubble_close();
+        }
         else if (p == &g_sug && g_sug_hover >= 0) {
             g_sug_sel = g_sug_hover;
             if (g_sug_sel == 0) commit_address(false); else sug_commit(false);
@@ -1791,6 +2442,7 @@ static void set_hover(HitInfo h) {
     g_hover = h;
     if (h.what == H_NTP_ROW) SetTimer(g_bar, 33, 120, NULL);
     if (h.what == H_TAB) SetTimer(g_bar, 34, 150, NULL);
+    if (h.what == H_PROFILE) SetTimer(g_bar, 35, 500, NULL); else tip_close();
     HCURSOR cur = LoadCursorW(NULL, h.what == H_ADDR ? IDC_IBEAM : h.what == H_NTP_ROW || h.what == H_NTP_X ? IDC_HAND : IDC_ARROW);
     SetCursor(cur);
     ui_invalidate();
@@ -1803,7 +2455,7 @@ void ui_caption_hover(int code) {
 void ui_caption_press(int code, bool down) { g_caption_down = down ? code : 0; ui_invalidate(); }
 void ui_window_activated(bool active) {
     g_active_window = active;
-    if (!active) close_suggestions();
+    if (!active) { close_suggestions(); tip_close(); }
     ui_invalidate();
 }
 static void drag_update(float x) {
@@ -1831,6 +2483,206 @@ static void drag_update(float x) {
         session_save_soon();
     }
     ui_invalidate();
+}
+// ---------------------------------------------------------------- a tab dragged between windows (as Chromium's TabDragController)
+// Inside its strip a tab only moves along it. Taken out (more than 15 DIP above or below it, or past its ends) it goes
+// to a window of its own that follows the mouse; over another window's strip it goes in there, at the slot under the
+// mouse. The only tab of a window moves the window itself, and that window closes if the tab goes into another.
+// Dropped over nothing, the new window stays where it is. All in screen pixels; the views move alive (tab_move).
+struct TabDrag { bool on = false; int tab = 0, floating = 0; POINT off{}; UINT off_dpi = 0; float dx_dip = 0, dy_dip = 0; };
+static TabDrag g_tdrag;
+static POINT g_test_pointer;   // (tests: where the mouse would be)
+static RECT strip_on_screen(Window *w) {
+    WinScope ws(w);
+    RECT rc; GetClientRect(g_bar, &rc);
+    POINT a = { 0, (LONG)-S(15) }, b = { rc.right, (LONG)S(kTabRowH + 15) };   // (Chromium's vertical magnetism)
+    ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+    return { a.x, a.y, b.x, b.y };
+}
+static Window *strip_under(POINT pt, Window *skip) {
+    // our windows from the top down: the first whose strip has the point (one that covers the point without its
+    // strip there hides what is under it)
+    for (HWND h = GetTopWindow(NULL); h; h = GetWindow(h, GW_HWNDNEXT)) {
+        Window *w = nullptr;
+        for (auto &o : g_windows) if (o->hwnd == h) w = o.get();
+        if (!w || w == skip || !IsWindowVisible(h) || IsIconic(h) || w->fullscreen) continue;
+        RECT r = strip_on_screen(w);
+        if (PtInRect(&r, pt)) return w;
+        RECT wr; GetWindowRect(h, &wr);
+        if (PtInRect(&wr, pt)) return nullptr;
+    }
+    return nullptr;
+}
+static int slot_at(Window *w, POINT pt) {
+    WinScope ws(w);
+    ScreenToClient(g_bar, &pt);
+    float c = pt.x - g_tdrag.dx_dip * g_s + g_geo.tab_w / 2;
+    int at = (int)((c - g_geo.strip_l) / (g_geo.tab_w + S(kTabGap)));
+    return std::max(0, std::min(at, (int)g_tabs.size()));
+}
+static POINT grab_offset(Window *f) {
+    // where the mouse holds the window: on its tab, as far into it as the tab was held
+    WinScope ws(f);
+    compute_geo();
+    float dx = std::max(S(8), std::min(g_tdrag.dx_dip * g_s, g_geo.tab_w - S(8)));
+    POINT c = { (LONG)(g_geo.strip_l + dx), (LONG)(g_tdrag.dy_dip * g_s) };
+    ClientToScreen(g_bar, &c);
+    RECT wr; GetWindowRect(g_win, &wr);
+    g_tdrag.off_dpi = GetDpiForWindow(g_win);
+    return { c.x - wr.left, c.y - wr.top };
+}
+static void float_follow(Window *f, POINT pt) {
+    if (GetDpiForWindow(f->hwnd) != g_tdrag.off_dpi) g_tdrag.off = grab_offset(f);   // (onto a screen of another scale)
+    SetWindowPos(f->hwnd, NULL, pt.x - g_tdrag.off.x, pt.y - g_tdrag.off.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+static void capture_to(Window *w) { WinScope ws(w); if (GetCapture() != g_bar) SetCapture(g_bar); }
+static void drag_in_strip(Window *w, POINT pt) {
+    WinScope ws(w);
+    g_press = { H_TAB, g_tdrag.tab };
+    g_drag_id = g_tdrag.tab;
+    g_drag_dx = g_tdrag.dx_dip * g_s;
+    g_dragging = true;
+    ScreenToClient(g_bar, &pt);
+    drag_update((float)pt.x);
+}
+static void drag_out_of_strip(Window *w) { WinScope ws(w); g_dragging = false; g_press = {}; ui_invalidate(); }
+static void bring_up(Window *w) {
+    // the window the tab goes into comes to the front (in tests, under the rest, without the focus)
+    if (g_test) SetWindowPos(w->hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    else SetForegroundWindow(w->hwnd);
+}
+static void drag_begin(POINT pt) {
+    (void)pt;
+    g_tdrag = TabDrag();
+    g_tdrag.on = true;
+    g_tdrag.tab = g_drag_id;
+    g_tdrag.dx_dip = g_drag_dx / g_s;
+    g_tdrag.dy_dip = g_press_y / g_s;
+    if (g_tabs.size() == 1) {   // the window's only tab: the window goes with it
+        if (IsZoomed(g_win)) ShowWindow(g_win, SW_RESTORE);
+        g_tdrag.floating = g_cw->id;
+        g_cw->dragged = true;
+        g_tdrag.off = grab_offset(g_cw);
+    } else g_dragging = true;
+}
+static void drag_end() {
+    if (!g_tdrag.on) return;
+    TabDrag d = g_tdrag;
+    g_tdrag = TabDrag();
+    for (auto &w : g_windows) { WinScope ws(w.get()); g_dragging = false; g_press = {}; ui_invalidate(); }
+    if (Window *f = win_by_id(d.floating)) { f->dragged = false; if (!g_test) SetForegroundWindow(f->hwnd); }
+    HWND cap = GetCapture();
+    if (cap && win_of_hwnd(cap)) ReleaseCapture();
+    session_save_soon();
+}
+static void drag_mouse(POINT pt) {
+    Tab *t = tab_by_id(g_tdrag.tab);
+    Window *in = win_of_tab(t);
+    if (!t || !in) { drag_end(); return; }
+    Window *fl = g_tdrag.floating ? win_by_id(g_tdrag.floating) : nullptr;
+    Window *target = strip_under(pt, fl);
+    if (fl) {
+        if (!target) { float_follow(fl, pt); return; }
+        // over another window's strip: the tab goes in there, and its own window goes
+        g_tdrag.floating = 0;
+        fl->dragged = false;
+        tab_move(t, target, slot_at(target, pt), true);
+        capture_to(target);
+        bring_up(target);
+        drag_in_strip(target, pt);
+        if (fl->tabs.empty()) {
+            ShowWindow(fl->hwnd, SW_HIDE);
+            int fid = fl->id;
+            ui_post([fid] { Window *w = win_by_id(fid); if (w && w->tabs.empty()) win_close(w); });   // (not under its own messages)
+        }
+        log_line(L"pestaña arrastrada a la ventana " + std::to_wstring(target->id));
+        return;
+    }
+    RECT strip = strip_on_screen(in);
+    if (PtInRect(&strip, pt) && IsWindowVisible(in->hwnd)) { drag_in_strip(in, pt); return; }
+    if (target && target != in) {   // straight from one strip into another
+        drag_out_of_strip(in);
+        tab_move(t, target, slot_at(target, pt), true);
+        capture_to(target);
+        bring_up(target);
+        drag_in_strip(target, pt);
+        return;
+    }
+    // out of every strip: a window of its own, under the mouse, as big as the one it left
+    drag_out_of_strip(in);
+    if (in->tabs.size() == 1) {
+        g_tdrag.floating = in->id;
+        in->dragged = true;
+        g_tdrag.off = grab_offset(in);
+        float_follow(in, pt);
+        return;
+    }
+    RECT r;
+    WINDOWPLACEMENT wp = { sizeof(wp) };
+    if (IsZoomed(in->hwnd) || in->fullscreen) { GetWindowPlacement(in->hwnd, &wp); r = in->fullscreen ? in->before_fs.rcNormalPosition : wp.rcNormalPosition; }
+    else GetWindowRect(in->hwnd, &r);
+    OffsetRect(&r, pt.x - r.left - (LONG)(g_tdrag.dx_dip * 2), pt.y - r.top - (LONG)(g_tdrag.dy_dip));
+    Window *nw = win_new(&r);
+    SetPropW(nw->hwnd, L"colocada", (HANDLE)1);   // (where the drag puts it, also in tests)
+    nw->dragged = true;
+    g_tdrag.floating = nw->id;
+    tab_move(t, nw, 0, true);
+    g_tdrag.off = grab_offset(nw);
+    float_follow(nw, pt);
+    win_show(nw, !g_test);
+    { WinScope ws(nw); tab_activate(g_active); }
+    capture_to(nw);
+    log_line(L"pestaña sacada a una ventana nueva");
+}
+static POINT event_point(HWND h, LPARAM lp) {
+    // where the mouse was, on the screen: from the message itself (a window following the mouse has moved since its
+    // client coordinates were taken); tests send their own coordinates
+    if (!g_test) { DWORD mp = GetMessagePos(); return { GET_X_LPARAM(mp), GET_Y_LPARAM(mp) }; }
+    POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+    ClientToScreen(h, &p);
+    return p;
+}
+void ui_test_drag(int step, int a, int b, int c) {
+    // tests (pluma-prueba:arrastre...): 0 grab tab a of the current window by its middle, 1 move by (b, c) pixels,
+    // 2 move to (b, c) of window a's bar, 3 drop
+    if (step == 0) {
+        if (a < 0 || a >= (int)g_tabs.size()) return;
+        int id = g_tabs[a]->id;
+        for (auto &s : tab_slots(now_ms(), true)) if (s.t->id == id) {
+            g_press = { H_TAB, id };
+            g_drag_id = id;
+            g_drag_dx = s.w / 2;
+            g_press_x = s.x + s.w / 2;
+            g_press_y = S(kTabY + kTabH / 2);
+        }
+        g_test_pointer = { (LONG)g_press_x, (LONG)g_press_y };
+        ClientToScreen(g_bar, &g_test_pointer);
+        return;
+    }
+    if (step == 1) { g_test_pointer.x += b; g_test_pointer.y += c; }
+    if (step == 2) {
+        Window *w = win_by_id(a);
+        if (!w) return;
+        POINT p = { b, c };
+        ClientToScreen(w->bar, &p);
+        g_test_pointer = p;
+    }
+    if (step == 3) { drag_end(); return; }
+    if (!g_tdrag.on) {
+        if (g_press.what != H_TAB) return;
+        drag_begin(g_test_pointer);
+    }
+    drag_mouse(g_test_pointer);
+}
+void ui_open_tab_menu_quietly() {
+    // tests: the active tab's menu, under it, without the focus
+    Tab *t = active_tab();
+    if (!t) return;
+    for (auto &s : tab_slots(now_ms(), true)) if (s.t == t) {
+        POINT pt = { (LONG)(s.x + s.w / 2), (LONG)S(kTabY + kTabH) };
+        ClientToScreen(g_bar, &pt);
+        open_menu_page(PAGE_TAB, { pt.x, pt.y, pt.x, pt.y }, t->id, true);
+    }
 }
 static void ntp_refresh() { g_ntp_filled = false; g_hover = HitInfo(); ui_layout(); }
 static void ntp_take_off(size_t i) {
@@ -1864,6 +2716,11 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_FWD: tab_go_forward(); break;
     case H_RELOAD: { Tab *t = active_tab(); if (t && t->loading) tab_stop(); else tab_reload(GetKeyState(VK_SHIFT) < 0 || GetKeyState(VK_CONTROL) < 0); break; }
     case H_MENU: if (g_menu.h && !g_menu.closing) menu_close(); else ui_open_menu(); break;
+    case H_PROFILE: {
+        if (g_menu_page_is_profiles() && !g_menu_quiet) { menu_close(); break; }
+        ui_open_profile_menu(false);
+        break;
+    }
     case H_ZOOM: tab_zoom(0); ui_invalidate(); break;
     case H_EXT: {
         D2D1_RECT_F r{};
@@ -1882,6 +2739,7 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
     case H_READER: reader_toggle(active_tab()); break;
+    case H_TRANSLATE: if (g_menu.h && !g_menu.closing && g_menu_page == PAGE_TRANSLATE && !g_menu_quiet) menu_close(); else ui_open_translate_menu(); break;
     case H_BM: {
         BmNode *n = bm_find(h.id);
         if (!n) break;
@@ -1900,6 +2758,9 @@ static void bar_click(HitInfo h, float x, float y) {
     }
 }
 static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    Window *self = win_of_hwnd(h);
+    if (!self) return DefWindowProcW(h, msg, wp, lp);   // (before its window knows it, or once it is closing)
+    WinScope ws(self);
     switch (msg) {
     case WM_NCHITTEST: {
         POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
@@ -1923,9 +2784,15 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         // (not in tests: they move the mouse with messages, and Windows, seeing the real one elsewhere, says it left)
         if (!g_tracking && !g_test) { TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, h, 0 }; TrackMouseEvent(&tme); g_tracking = true; }
         ui_caption_hover(0);
-        if (g_press.what == H_TAB && (wp & MK_LBUTTON)) {
-            if (!g_dragging && fabs(x - g_press_x) > S(5) && g_tabs.size() > 1) g_dragging = true;
-            if (g_dragging) { drag_update(x); return 0; }
+        if (g_tdrag.on) {
+            if (wp & MK_LBUTTON) drag_mouse(event_point(h, lp)); else drag_end();
+            return 0;
+        }
+        if (g_press.what == H_TAB && (wp & MK_LBUTTON) && hypotf(x - g_press_x, y - g_press_y) > S(5)) {
+            POINT p = event_point(h, lp);
+            drag_begin(p);
+            drag_mouse(p);
+            return 0;
         }
         set_hover(hit_test(x, y));
         if (g_frozen_w > 0 && y > S(kTabRowH + 10)) { g_frozen_w = 0; compute_geo(); ui_invalidate(); }
@@ -1942,9 +2809,11 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: {
         float x = (float)GET_X_LPARAM(lp), y = (float)GET_Y_LPARAM(lp);
         HitInfo hi = hit_test(x, y);
-        if (hi.what != H_MENU) ui_close_popups();
+        if (hi.what != H_MENU && hi.what != H_PROFILE) ui_close_popups();
+        tip_close();
         g_press = hi;
         g_press_x = x;
+        g_press_y = y;
         if (hi.what == H_TAB) {
             // a tab is chosen on press, as in every browser; dragging moves it
             int i = tab_index(hi.id);
@@ -1965,13 +2834,12 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONUP: {
         float x = (float)GET_X_LPARAM(lp), y = (float)GET_Y_LPARAM(lp);
+        if (g_tdrag.on) { drag_end(); return 0; }
         HitInfo hi = hit_test(x, y);
         HitInfo pressed = g_press;
         g_press = {};
-        bool was_drag = g_dragging;
         g_dragging = false;
         if (GetCapture() == h) ReleaseCapture();
-        if (was_drag) { Tab *t = tab_by_id(g_drag_id); if (t) { auto sl = tab_slots(now_ms()); (void)sl; } ui_invalidate(); return 0; }
         if (hi.what == pressed.what && hi.id == pressed.id && hi.what != H_TAB) bar_click(hi, x, y);
         ui_invalidate();
         return 0;
@@ -1999,7 +2867,15 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
-    case WM_CAPTURECHANGED: if (g_dragging) { g_dragging = false; ui_invalidate(); } return 0;
+    case WM_CAPTURECHANGED:
+        if (g_tdrag.on) {
+            Window *o = win_of_hwnd((HWND)lp);
+            if (o && (HWND)lp == o->bar) return 0;   // (the drag went on to another of our windows' bars)
+            drag_end();
+            return 0;
+        }
+        if (g_dragging) { g_dragging = false; ui_invalidate(); }
+        return 0;
     case WM_COMMAND:
         if ((HWND)lp == g_edit && HIWORD(wp) == EN_CHANGE && !g_in_change) {
             int n = GetWindowTextLengthW(g_edit);
@@ -2019,20 +2895,15 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return (LRESULT)g_edit_brush;
     }
     case WM_APP + 21: { auto f = (std::function<void()> *)lp; (*f)(); delete f; return 0; }
-    case WM_APP + 22: {   // one animation frame
-        g_frame_pending = false;
-        double now = now_ms();
-        bool busy = false;
-        if (g_bar_busy) { paint(); busy |= g_bar_busy; }
-        for (Panel *p : { &g_menu, &g_sug, &g_toast })
-            if (p->h && (p->fade.running(now) || p->slide.running(now) || p->closing)) { panel_render(*p); busy |= p->h != NULL; }
-        if (!busy) g_anim_on = false;
-        return 0;
-    }
     case WM_TIMER:
         if (wp == 34) {   // the mouse rests on a tab that was let go: it starts loading before the click
             KillTimer(h, 34);
             if (g_hover.what == H_TAB) tab_warm(tab_by_id(g_hover.id));
+        }
+        if (wp == 35) {   // the mouse rests on the avatar: the profile's name
+            KillTimer(h, 35);
+            if (g_hover.what == H_PROFILE && !g_incognito && !g_menu_page_is_profiles())
+                tip_show(bar_rect_on_screen(profile_rect()), profile_shown_name(profile_current()));
         }
         if (wp == 33) {   // the mouse rests on a site of the new tab page: it starts loading
             KillTimer(h, 33);
@@ -2059,7 +2930,8 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
     if (ctrl && !alt) {
         if (vk == 'T' && shift) { tab_reopen_closed(); return true; }
         if (vk == 'N' && shift) { app_open_incognito(); return true; }   // the incognito window, as in Chrome
-        if (vk == 'T' || vk == 'N') { tab_new(L"", true); return true; }
+        if (vk == 'N') { win_open_new(); return true; }   // a new window, as in every browser
+        if (vk == 'T') { tab_new(L"", true); return true; }
         if (vk == 'W' || vk == VK_F4) { tab_close(g_active); return true; }
         if (vk == VK_TAB || vk == VK_PRIOR || vk == VK_NEXT) {
             if (g_tabs.size() < 2) return true;
@@ -2118,12 +2990,8 @@ void ui_init() {
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, g_d2d.GetAddressOf());
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown **)g_dw.GetAddressOf());
     CoCreateInstance(CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&g_wic));
-    g_s = GetDpiForWindow(g_win) / 96.0f;
     load_fonts();
-    make_formats();
     g_theme.snap(dark_theme() ? 1.0f : 0.0f);
-    BOOL dark = dark_theme();
-    DwmSetWindowAttribute(g_win, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
 
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.style = CS_DBLCLKS;
@@ -2138,15 +3006,24 @@ void ui_init() {
     pc.lpszClassName = L"PlumaPanel";
     pc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     RegisterClassExW(&pc);
+    start_animation_thread();
+}
+void ui_window_init() {
+    // the current window's own: its bar, its address field, its scale and the text sizes for it
+    g_s = GetDpiForWindow(g_win) / 96.0f;
+    make_formats();
+    BOOL dark = dark_theme();
+    DwmSetWindowAttribute(g_win, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof(dark));
     RECT rc; GetClientRect(g_win, &rc);
     g_bar = CreateWindowExW(0, L"PlumaBarra", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, rc.right, rc.bottom, g_win, NULL, g_inst, NULL);
     g_edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 100, 20, g_bar, NULL, g_inst, NULL);
     SendMessageW(g_edit, WM_SETFONT, (WPARAM)g_edit_font, FALSE);
     SendMessageW(g_edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
     SendMessageW(g_edit, EM_SETLIMITTEXT, 8000, 0);
-    g_edit_proc = (WNDPROC)SetWindowLongPtrW(g_edit, GWLP_WNDPROC, (LONG_PTR)edit_proc);
+    WNDPROC old = (WNDPROC)SetWindowLongPtrW(g_edit, GWLP_WNDPROC, (LONG_PTR)edit_proc);
+    if (!g_edit_proc) g_edit_proc = old;   // (the same EDIT procedure for every window)
     compute_geo();
-    start_animation_thread();
+    if (g_windows.size() > 1) ui_taskbar_badge();
 }
 void ui_layout() {
     if (!g_bar) return;
@@ -2166,17 +3043,23 @@ void ui_layout() {
 void ui_theme_changed() {
     g_theme.go(dark_theme() ? 1.0f : 0.0f, 300);
     BOOL dark = dark_theme();
-    DwmSetWindowAttribute(g_win, 20, &dark, sizeof(dark));
-    InvalidateRect(g_win, NULL, FALSE);
-    if (g_edit) InvalidateRect(g_edit, NULL, TRUE);
-    ui_invalidate();
+    for (auto &w : g_windows) {
+        WinScope ws(w.get());
+        DwmSetWindowAttribute(g_win, 20, &dark, sizeof(dark));
+        InvalidateRect(g_win, NULL, FALSE);
+        if (g_edit) InvalidateRect(g_edit, NULL, TRUE);
+        ui_invalidate();
+    }
 }
 void ui_font_changed() {
     load_fonts();
-    make_formats();
-    SendMessageW(g_edit, WM_SETFONT, (WPARAM)g_edit_font, TRUE);
-    compute_geo();
-    ui_invalidate();
+    for (auto &w : g_windows) {
+        WinScope ws(w.get());
+        make_formats();
+        SendMessageW(g_edit, WM_SETFONT, (WPARAM)g_edit_font, TRUE);
+        compute_geo();
+        ui_invalidate();
+    }
 }
 void ui_dpi_changed() {
     g_s = GetDpiForWindow(g_win) / 96.0f;
@@ -2204,3 +3087,188 @@ void ui_tab_closing(Tab *t, bool from_mouse) {
 }
 void ui_tab_icon_changed(Tab *t) { g_icons.erase(t->id); ui_invalidate(); }
 void ui_release_icon(Tab *t) { g_icons.erase(t->id); }
+
+// ---------------------------------------------------------------- the taskbar: which profile a window is (as Edge's badge)
+void ui_taskbar_badge() {
+    static ComPtr<ITaskbarList3> tb;
+    if (!tb) {
+        if (FAILED(CoCreateInstance(__uuidof(TaskbarList), NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&tb)))) return;
+        tb->HrInit();
+    }
+    static HICON badge;
+    if (g_incognito || profiles_list().size() < 2) { for (auto &w : g_windows) tb->SetOverlayIcon(w->hwnd, NULL, NULL); return; }
+    // its avatar, drawn once into an icon
+    const int n = 32;
+    Profile p = profile_current();
+    ComPtr<IWICBitmap> bmp;
+    ComPtr<ID2D1RenderTarget> rt;
+    D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+    if (!g_wic || FAILED(g_wic->CreateBitmap(n, n, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) ||
+        FAILED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt))) return;
+    ComPtr<ID2D1SolidColorBrush> br;
+    rt->CreateSolidColorBrush(hex(0), &br);
+    auto f = make_format(false, 18, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+    rt->BeginDraw();
+    rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+    br->SetColor(hex(0xffffff));
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(n / 2.f, n / 2.f), n / 2.f, n / 2.f), br.Get());   // (a thin ring, over any icon)
+    br->SetColor(rgb_of(p.color));
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(n / 2.f, n / 2.f), n / 2.f - 1.5f, n / 2.f - 1.5f), br.Get());
+    text(rt.Get(), br.Get(), f.Get(), initial_of(profile_shown_name(p)), R(0, 0, (float)n, (float)n), hex(0xffffff));
+    rt->EndDraw();
+    std::vector<BYTE> px(n * n * 4);
+    if (FAILED(bmp->CopyPixels(NULL, n * 4, (UINT)px.size(), px.data()))) return;
+    for (size_t i = 0; i < px.size(); i += 4) {   // icons take straight alpha
+        BYTE a = px[i + 3];
+        if (a && a < 255) for (int k = 0; k < 3; k++) px[i + k] = (BYTE)std::min(255, px[i + k] * 255 / a);
+    }
+    BITMAPV5HEADER bh = {};
+    bh.bV5Size = sizeof(bh); bh.bV5Width = n; bh.bV5Height = -n; bh.bV5Planes = 1; bh.bV5BitCount = 32; bh.bV5Compression = BI_BITFIELDS;
+    bh.bV5RedMask = 0x00ff0000; bh.bV5GreenMask = 0x0000ff00; bh.bV5BlueMask = 0x000000ff; bh.bV5AlphaMask = 0xff000000;
+    void *bits = nullptr;
+    HDC dc = GetDC(NULL);
+    HBITMAP color = CreateDIBSection(dc, (BITMAPINFO *)&bh, DIB_RGB_COLORS, &bits, NULL, 0);
+    ReleaseDC(NULL, dc);
+    if (!color) return;
+    memcpy(bits, px.data(), px.size());
+    HBITMAP mask = CreateBitmap(n, n, 1, 1, NULL);
+    ICONINFO ii = { TRUE, 0, 0, mask, color };
+    HICON icon = CreateIconIndirect(&ii);
+    DeleteObject(color); DeleteObject(mask);
+    if (!icon) return;
+    std::wstring name = profile_shown_name(p);
+    for (auto &w : g_windows) tb->SetOverlayIcon(w->hwnd, icon, name.c_str());
+    if (badge) DestroyIcon(badge);
+    badge = icon;
+}
+
+// ---------------------------------------------------------------- the state of each window's bar
+// (one per window, made at its first use; the names above are these fields of the current window, g_cw)
+#undef g_s
+#undef g_rt
+#undef g_br
+#undef g_f
+#undef g_edit_font
+#undef g_ghosts
+#undef g_icons
+#undef g_host_icons
+#undef g_ext_icons
+#undef g_sheet_k
+#undef g_notice_h
+#undef g_addr_focus
+#undef g_menu_btn_open
+#undef g_sheet_from
+#undef g_sheet_to
+#undef g_frozen_w
+#undef g_hover
+#undef g_press
+#undef g_btn_hover
+#undef g_caption_hot
+#undef g_caption_down
+#undef g_tracking
+#undef g_dragging
+#undef g_active_window
+#undef g_drag_id
+#undef g_drag_dx
+#undef g_drag_x
+#undef g_press_x
+#undef g_press_y
+#undef g_notice
+#undef g_addr_text
+#undef g_ntp_rows
+#undef g_ntp_pins
+#undef g_ntp_filled
+#undef g_typed
+#undef g_geo
+#undef g_strip_end
+#undef g_bar_busy
+struct UiWin {
+    float g_s = 1;
+    ComPtr<ID2D1HwndRenderTarget> g_rt{};
+    ComPtr<ID2D1SolidColorBrush> g_br{};
+    Formats g_f{};
+    HFONT g_edit_font = NULL;
+    std::vector<Ghost> g_ghosts{};
+    std::unordered_map<int, ComPtr<ID2D1Bitmap>> g_icons{};
+    std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> g_host_icons{};
+    std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> g_ext_icons{};
+    Anim g_sheet_k{};
+    Anim g_notice_h{};
+    Anim g_addr_focus{};
+    Anim g_menu_btn_open{};
+    int g_sheet_from = 0;
+    int g_sheet_to = 0;
+    float g_frozen_w = 0;
+    HitInfo g_hover{};
+    HitInfo g_press{};
+    std::unordered_map<int, Anim> g_btn_hover{};
+    int g_caption_hot = 0;
+    int g_caption_down = 0;
+    bool g_tracking = false;
+    bool g_dragging = false;
+    bool g_active_window = true;
+    int g_drag_id = 0;
+    float g_drag_dx = 0;
+    float g_drag_x = 0;
+    float g_press_x = 0;
+    float g_press_y = 0;
+    Notice g_notice{};
+    std::wstring g_addr_text{};
+    std::vector<HistoryEntry> g_ntp_rows{};
+    bool g_ntp_pins = false;
+    bool g_ntp_filled = false;
+    std::wstring g_typed{};
+    Geo g_geo{};
+    float g_strip_end = 0;
+    bool g_bar_busy = false;
+};
+static UiWin *UI() { if (!g_cw->ui) g_cw->ui = new UiWin(); return (UiWin *)g_cw->ui; }
+static float &ui_g_s() { return UI()->g_s; }
+static ComPtr<ID2D1HwndRenderTarget> &ui_g_rt() { return UI()->g_rt; }
+static ComPtr<ID2D1SolidColorBrush> &ui_g_br() { return UI()->g_br; }
+static Formats &ui_g_f() { return UI()->g_f; }
+static HFONT &ui_g_edit_font() { return UI()->g_edit_font; }
+static std::vector<Ghost> &ui_g_ghosts() { return UI()->g_ghosts; }
+static std::unordered_map<int, ComPtr<ID2D1Bitmap>> &ui_g_icons() { return UI()->g_icons; }
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_host_icons() { return UI()->g_host_icons; }
+static std::unordered_map<std::wstring, ComPtr<ID2D1Bitmap>> &ui_g_ext_icons() { return UI()->g_ext_icons; }
+static Anim &ui_g_sheet_k() { return UI()->g_sheet_k; }
+static Anim &ui_g_notice_h() { return UI()->g_notice_h; }
+static Anim &ui_g_addr_focus() { return UI()->g_addr_focus; }
+static Anim &ui_g_menu_btn_open() { return UI()->g_menu_btn_open; }
+static int &ui_g_sheet_from() { return UI()->g_sheet_from; }
+static int &ui_g_sheet_to() { return UI()->g_sheet_to; }
+static float &ui_g_frozen_w() { return UI()->g_frozen_w; }
+static HitInfo &ui_g_hover() { return UI()->g_hover; }
+static HitInfo &ui_g_press() { return UI()->g_press; }
+static std::unordered_map<int, Anim> &ui_g_btn_hover() { return UI()->g_btn_hover; }
+static int &ui_g_caption_hot() { return UI()->g_caption_hot; }
+static int &ui_g_caption_down() { return UI()->g_caption_down; }
+static bool &ui_g_tracking() { return UI()->g_tracking; }
+static bool &ui_g_dragging() { return UI()->g_dragging; }
+static bool &ui_g_active_window() { return UI()->g_active_window; }
+static int &ui_g_drag_id() { return UI()->g_drag_id; }
+static float &ui_g_drag_dx() { return UI()->g_drag_dx; }
+static float &ui_g_drag_x() { return UI()->g_drag_x; }
+static float &ui_g_press_x() { return UI()->g_press_x; }
+static float &ui_g_press_y() { return UI()->g_press_y; }
+static Notice &ui_g_notice() { return UI()->g_notice; }
+static std::wstring &ui_g_addr_text() { return UI()->g_addr_text; }
+static std::vector<HistoryEntry> &ui_g_ntp_rows() { return UI()->g_ntp_rows; }
+static bool &ui_g_ntp_pins() { return UI()->g_ntp_pins; }
+static bool &ui_g_ntp_filled() { return UI()->g_ntp_filled; }
+static std::wstring &ui_g_typed() { return UI()->g_typed; }
+static Geo &ui_g_geo() { return UI()->g_geo; }
+static float &ui_g_strip_end() { return UI()->g_strip_end; }
+static bool &ui_g_bar_busy() { return UI()->g_bar_busy; }
+void ui_window_free() {
+    // the window goes (one of several): its panels, its drawing and what it measured
+    for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble, &g_tip })
+        if (p->h && GetWindow(p->h, GW_OWNER) == g_win) panel_free(*p);
+    UiWin *u = (UiWin *)g_cw->ui;
+    if (!u) return;
+    if (u->g_edit_font) DeleteObject(u->g_edit_font);
+    delete u;
+    g_cw->ui = nullptr;
+}

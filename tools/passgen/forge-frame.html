@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Otro sitio</title>
+<p id="r">...</p>
+<script>
+// another site's frame: asks Pluma for a password and reports it as sent (Pluma answers neither)
+const say = (path, body) => { const x = new XMLHttpRequest(); x.open('POST', location.origin + '/.well-known/pluma-passgen/' + path, false); try { x.send(JSON.stringify(body)); } catch (e) {} return [x.status, x.responseText]; };
+const made = say('new', { lo: 4, hi: 200, len: 15, pattern: false });
+let pass = 'Forjada-Marco-88';
+try { pass = Object.values(JSON.parse(made[1]))[0][0] || pass; } catch (e) {}
+say('sent', { user: 'forja@example.com', pass });
+document.getElementById('r').textContent = 'new ' + made[0];
+</script>

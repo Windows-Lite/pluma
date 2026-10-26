@@ -11,10 +11,10 @@ código y commits en inglés; nada de em dashes.
 ## Piezas
 - `Pluma.exe` (C++ + WebView2, el motor de Edge que trae Windows y que Microsoft parchea solo). Una sola instancia que
   se queda en memoria al cerrar la ventana (como Zas): `Pluma.exe [url]`, `--oculto` (arranque con Windows),
-  `--salir`; Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
+  `--salir`, `--perfil=<id>` (otro perfil, apartado de abajo); Ctrl+Mayús+Q cierra del todo. Ajustes en `%LOCALAPPDATA%\Pluma\ajustes.ini` (buscador, tema, fuente, idioma,
   actualizar (auto | avisar | no),
   dormir_s, descargar_s, recientes, descargar_min, reserva, residente, protocolos, `motor` = argumentos extra para el
-  motor), sesión en `sesion.tsv`,
+  motor, efecto, eq, graves, reverb, tono = efectos de sonido del reproductor), sesión en `sesion.tsv`,
   historial en `historial.tsv`, iconos de webs en `iconos\`, registro con tiempos en `pluma.log`.
 - `src/main.cpp`: ventana con marco propio (las pestañas son la barra de título; los botones de Windows 11 con su menú
   de acoplar vía HTMAXBUTTON), ajustes, historial y autocompletado, arranque.
@@ -52,8 +52,11 @@ código y commits en inglés; nada de em dashes.
   `%LOCALAPPDATA%\Pluma\extensiones`), instalar desde la Chrome Web Store o Edge Add-ons con «Añadir a Pluma»,
   ventanita de cada extensión (con un parche para que `tabs.query` vea la pestaña de verdad).
 - `src/video.cpp`: los vídeos de YouTube en el reproductor propio de Pluma (apartado de abajo).
-- `src/youtube.cpp` + `src/youtube.html`: YouTube ligero (apartado de abajo).
+- `src/lite.cpp` + `src/youtube.html`, `src/music.html`, `src/reddit.html`, `src/lite.html`: webs ligeras, YouTube, YouTube Music y Reddit
+  (apartados de abajo).
 - `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
+- `src/passgen.cpp` + `src/passgen.js`: «Usar contraseña segura» en los formularios de registro (apartado de abajo).
+- `src/downloads.cpp`: las descargas son de Pluma, no del panel del motor (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
 - `Pluma.exe` no va en git (25/10, el usuario: «no debería estar en el repo»): cada push a `main` lo compila una Action
@@ -67,7 +70,9 @@ código y commits en inglés; nada de em dashes.
 ```
 tools\prueba.ps1 [-Nombre t1] [-Url ...] [-Puerto 9401] [-Limpio] [-Salir]   instancia de prueba fuera de la pantalla
 tools\medir.ps1 [-Nombre t1] [-Detalle]      RAM como la cuenta el Administrador de tareas, por tipo de proceso
-tools\captura.exe <clase> <png> [click x y | mclick | rclick | key vk | char texto | wait ms]   foto de la ventana
+tools\captura.exe <clase> <png> [click x y | mclick | rclick | key vk | char texto | wait ms | drag x1 y1 x2 y2 pasos]
+                                              foto de la ventana; <clase>|<palabras>: la de esa clase con esas palabras
+                                              en el título (con varias ventanas, FindWindow da la de más arriba)
 node tools\cdp.js <puerto> <url> <expresión>  evalúa en una página (DevTools); tools\clic.js: clic de verdad
 tools\escenario.ps1 -Nombre x [-Ajustes 'clave=valor',...]   las 7 pestañas de la comparación con Firefox, medidas
 tools\tres.ps1 -Nombre x [-Ajustes ...]       3 pestañas (Wikipedia, GitHub, Google), medidas
@@ -104,8 +109,11 @@ Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada 
 - Lo que queda con una web delante: la gráfica 45-55 MB recortada (sin recortar se queda 90-120 con lo que dejan los
   vídeos y las webs pesadas, y no lo suelta sola), el motor 25-70, la página (Google ~45, YouTube 220-380, igual que en
   cualquier navegador), la interfaz 3-15, la red ~10.
-- Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja); soltadas al minuto salvo las 2 últimas
-  vistas (`recientes`), que aguantan 20 min; caché de imágenes de la gráfica con tope de 32 MB
+- Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja). Desde el 26/10 NUNCA se sueltan por
+  defecto (`descargar_s=0`, `descargar_min=0`; Ajustes > «Descargar las pestañas que no ves»): el usuario: «no me
+  gusta que pasado un tiempo las pestañas pierdan memoria, es un coñazo». Soltarlas al minuto (antes) dejaba las 7 en
+  118 MB frente a 214-271 congeladas; esa memoria es la de quedarse con todo. Solo con el PC al 85 % de memoria se
+  suelta la más antigua. Caché de imágenes de la gráfica con tope de 32 MB
   (`--force-gpu-mem-discardable-limit-mb`); sin vista de reserva (`reserva=0`: crear una vista son ~35 ms); procesos
   sin nada visible (y el motor, la red, la gráfica y la interfaz 4 s después de cada carga) devuelven su memoria con
   EmptyWorkingSet; al cerrar la ventana se congela todo (lo que suena se suelta) y todo devuelve su memoria.
@@ -182,10 +190,31 @@ ya tenga esa funcionalidad»).
   las calidades se bajan nada más empezar, para que el cambio no espere al servidor de listas (1-3 s cada una). El
   búfer es de ~10 s del vídeo elegido, como poco 4 MB: 4K a 60 fps (28 Mb/s, aquí bajan 24-30 Mb/s por conexión) se
   paraba a cargar con 4 MB; con 33 MB no se para. 4K: 196 MB en total, la gráfica Intel al 57 %, la CPU al 3 %.
+- Bucle (pedido el 26/10: «tengo el modo loop activado, estoy en otra tab y se queda pausado el video»): fila «Bucle»
+  del menú del reproductor (`loop-file=inf`), y el bucle de la página de YouTube pasa al reproductor y vuelve. En bucle
+  el final nunca devuelve el vídeo a la página. Una pestaña de fondo con el reproductor sonando no se congela ni se
+  suelta aunque esté en silencio (`video_playing`): soltarla cerraba el reproductor.
+- Efectos de sonido (pedido el 26/10: «equalizer para poner bass boost etc, configurable», «ajustar pitch, modo
+  nightcore, filtros»): `src/sound.cpp` arma el `af` de mpv. Presets (Desactivado, Más graves, Graves fuertes, Voces
+  claras, Más agudos, Nightcore, Slowed + reverb, 8D, Sala, Personalizado) en el menú del reproductor y en
+  Configuración > YouTube y vídeo > Sonido (ecualizador de 10 bandas, graves, reverberación); el tono (-6..+6
+  semitonos) va aparte y vale con cualquiera. El tono, con el `rubberband` de mpv (que entonces hace también la
+  velocidad); Nightcore y Slowed suben o bajan velocidad y tono juntos (velocidad de mpv = la elegida × la del
+  efecto: el menú enseña la elegida). El resto, un grafo de lavfi: `equalizer` por banda, `bass`, `apulsator` (8D),
+  `aecho` y `alimiter` al final (sin su nivel automático) tras quitar la mitad del mayor realce. Desactivado y tono 0:
+  ningún filtro. Se aplica al momento a todos los reproductores. Prueba de las cadenas: `tools\sonido-test.cpp`
+  (`c++ -std=c++17`; `--grafos` las saca para probarlas con `ffmpeg -af`).
 - Pruebas: `tools\foto.ps1 -Salida x.png [-Raton x,y]` (la foto la hace Pluma: desde fuera las capas salen opacas);
   en las instancias de prueba mpv escribe `mpv.log` en su carpeta de datos.
 
-## YouTube ligero (`src/youtube.cpp`, `src/youtube.html`)
+## Webs ligeras (`src/lite.cpp`)
+- Una tabla de webs (`kSites`): origen que se contesta, RCDATA de su página, ajuste, qué direcciones hace y el aviso de
+  «la versión normal en esta pestaña». La marca `pluma_normal=1|2`, la caída a la página normal y el aviso son los mismos
+  para todas. Lo que comparten las páginas (colores de los dos temas, la barra con el botón de la versión normal, `t()`,
+  `fallback`) va en `lite.html` (RCDATA 206) y Pluma lo pone en el sitio de `<!--PLUMA_COMUN-->` al servirlas; la de
+  YouTube lleva lo suyo. Configuración > Webs ligeras: un interruptor por web (`youtube_ligero`, `music_ligero`, `reddit_ligero`).
+
+## YouTube ligero (`src/lite.cpp`, `src/youtube.html`)
 Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos memoria, sin perder la cuenta.
 - Cuando la pestaña va a www.youtube.com (`/`, `/results`, `/feed/subscriptions`, `/feed/history`, `/playlist`,
   `/watch` y la portada o los vídeos de un canal), Pluma contesta ese documento (WebResourceRequested, solo
@@ -195,7 +224,7 @@ Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos me
   SAPISIDHASH + SAPISID1PHASH/3PHASH si hay sesión, como YouTube.js y la propia web) y pinta. Sugerencias de
   `suggestqueries-clients6.youtube.com` (`xhr=t&oe=utf-8`, CORS abierto a youtube.com).
 - Ninguna página habla con Pluma: tema, idioma y textos (`t('...')` en la página, traducidos con `T()`) se escriben en
-  el HTML al servirlo (`/*PLUMA_CFG*/`). Ajuste `youtube_ligero` (Configuración > YouTube y vídeo), encendido.
+  el HTML al servirlo (`/*PLUMA_CFG*/`). Ajuste `youtube_ligero` (Configuración > Webs ligeras), encendido.
 - Lo que no hace (directos, Shorts, Studio, compras, music.youtube.com, otras pestañas del canal) es el YouTube de
   siempre. Si una llamada o la lectura falla, la página va a la misma dirección con `pluma_normal=1` (esa dirección,
   en esa pestaña); el botón «YouTube normal», con `pluma_normal=2` (todo YouTube en esa pestaña hasta salir de
@@ -212,6 +241,31 @@ Plan aprobado el 25/10: que YouTube abra casi al instante y gaste mucha menos me
   `cver`, `cpn` como YouTube.js: `playback` al empezar y `watchtime` cada 30 s y al salir.
 - Pruebas de los lectores: `node tools\youtube-test.js` (respuestas reales recortadas en `tools\yt-respuestas`).
   Probar el flujo con sesión no se puede en la instancia de prueba: va sin cuenta.
+
+## Reddit ligero (`src/reddit.html`, RCDATA 205)
+Plan aprobado el 26/10. www.reddit.com y reddit.com (old.reddit.com no se toca): portada, subreddit y sus órdenes,
+publicación con comentarios, persona, búsqueda.
+- Reddit no da datos a una página sin su app (su `.json` da 403 sin sesión, desde aquí y desde el PC), pero su servidor
+  dibuja todo en HTML: la página pide ese HTML con las cookies (la misma dirección para una publicación; para las
+  listas, las piezas que carga su página: `/svc/shreddit/community-more-posts/<orden>/?name=`,
+  `feeds/home-feed?sort=` (sin sesión da la popular), `profiles/profile_overview-more-posts/new/?name=`,
+  `search/?q=`), lo lee con DOMParser (inerte) y pinta. La siguiente página es el `faceplate-partial` con `after=` o
+  `cursor=` del final. Sus partes llegan en `<template for=...>` (streaming): `unfold()` las pone en su sitio antes de
+  leer. Los comentarios se anidan por el DOM (el comentario más cercano), no por `depth`; «Más respuestas» y «Más
+  comentarios» son POST a `/svc/shreddit/more-comments/...` con sus campos ocultos y `csrf_token` de la cookie, como su
+  página. Votar, comentar y responder: la página normal de esa publicación (`pluma_normal=1`).
+- El HTML de los textos no es de fiar (la página corre en www.reddit.com con la sesión): `cleanBody()` deja una lista
+  corta de etiquetas y atributos, enlaces http(s) o del sitio, fotos solo de los servidores de Reddit.
+- Vídeos (v.redd.it, HLS) en el reproductor de Pluma, como en YouTube ligero (`__pluma.extract/tick`). Trampa (26/10):
+  la lista maestra va firmada para la página que la pidió (desde Pluma, 403 con cualquier cabecera); las listas de
+  cada calidad y los trozos son abiertos. Así que la página lee la maestra y se la da a Pluma (`master`), y Pluma solo
+  acepta calidades de v.redd.it. Si el vídeo no va, la publicación sigue ligera y el hueco ofrece el Reddit normal.
+- Trampas: un perfil sin cookies de Reddit puede recibir «Prove your humanity» (`blocked()`): la página normal, que la
+  resuelve, y la siguiente ya es ligera. Una vez en el Reddit normal, su app se queda con las navegaciones del mismo
+  origen (Navigation API) hasta una carga entera: Pluma no ve esos documentos. Su service worker no estorba (las
+  navegaciones llegan a Pluma igual, comprobado con uno registrado).
+- Pruebas: `node tools\reddit-test.js` (HTML real recortado en `tools\reddit-respuestas`; necesita linkedom fuera del
+  repo, en `%LOCALAPPDATA%\fp-tools\linkedom`); medidas con `node tools\lite-medir.js <puerto> <url> [cold]`.
 
 ## Modo lectura (`src/reader.cpp`, `src/reader.html`)
 Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como la vista de lectura de Firefox.
@@ -244,12 +298,149 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   Automático: la página se corta en DOMContentLoaded y el modo lectura sale a los 1,0-1,8 s; datos The Verge 1,9-2,0
   MB frente a 3,0, El País 1,4-1,5 frente a 1,75.
 
+## Traducción (`src/translate.cpp`, `src/translate.js`, `src/translate_core.h`)
+Pedido el 26/10: «necesito una opción para traducir», como Edge.
+- Página: icono en la barra (delante del libro o la estrella) y fila «Traducir página» / «Mostrar original» en ⋯.
+  Idioma de la página: su `lang` (o el meta), salvo que el texto diga claramente otro (`tr_guess_lang`: escritura y
+  palabras frecuentes, en Pluma; nada sale hasta que se pide traducir). Si no es el de destino (`traducir_a`, vacío = el
+  de Pluma), el icono se enciende y, una vez por sitio e idioma y sesión, la ventanita de la oferta (menú «quieto»: no
+  coge el foco, se va con un clic fuera, Esc, otra pestaña o 12 s sin tocarla): Traducir, Traducir a, Siempre, Nunca
+  este idioma, Nunca este sitio, Ahora no. `traducir_siempre` y `traducir_nunca` en `ajustes.ini`; sitios en
+  `traducir-nunca.tsv` (no se escribe desde incógnito). Un idioma traducido a mano se sigue traduciendo en esa pestaña.
+- Cómo (copiado de TWP, https://github.com/FilipePS/Traduzir-paginas-web `src/contentScript/pageTranslator.js`, y de
+  Firefox, `toolkit/components/translations/content/translations-document.sys.mjs`): `translate.js` (RCDATA 221) se
+  mete con ExecuteScript (pasa la CSP), junta en «trozos» los textos de cada bloque (`<a i=N>` por nodo, para que la
+  frase vaya entera), los de la pantalla primero, y Pluma los pide cada 700 ms (`take`), los manda a
+  `translate.googleapis.com/translate_a/t?client=gtx` (POST, varios `q`, `format=html`; WinHTTP en un hilo) y los
+  devuelve (`put`). Se escriben con `nodeValue`, nunca HTML: la maquetación, los enlaces y los scripts de la página no
+  cambian (prueba de la página de `tools\traducir-prueba.js`: el mismo número de elementos y, al mostrar el original, el
+  mismo HTML). Lo nuevo (MutationObserver, 250 ms) se traduce igual; caché por trozo. No se traduce script, style,
+  code, pre, textarea, inputs, contenteditable, `translate="no"`, `.notranslate`; sí `placeholder`, `title` y el título.
+  No copiado: el modelo local de Firefox (cientos de MB) ni el iframe de TWP.
+- Google mueve a veces el texto fuera de los marcadores: va al marcador anterior (`tr_split_markers`). Los espacios entre
+  nodos y la puntuación los arregla `apply` (sin «mantequilla .» ni dobles espacios).
+- Selección: «Traducir «…»» en el menú del clic derecho (tras Copiar) y una burbuja de Pluma junto a la selección,
+  con copiar. Fallos (sin red, 429/403/503): aviso y la página se queda como estaba.
+- Configuración > Idioma > Traducción: ofrecer sí/no, destino y las listas para quitar.
+- Pruebas: `tools\traducir-test.cpp` (marcadores y detección; `cl /EHsc /std:c++17`), `tools\traducir-prueba.ps1
+  -Salida <carpeta>` con `PLUMA_EXE` (de punta a punta: la página de prueba, Wikipedia en francés y japonés, YouTube,
+  Configuración, burbuja, menús; capturas hechas por Pluma). Órdenes de prueba: `Pluma.exe pluma-prueba:traducir|
+  original|seleccion|menu|menu-principal|oferta|clic-derecho|destino=xx|foto=<nombre>` (solo en instancias de prueba).
+- El menú del clic derecho es del motor: no sale en las capturas. `clic-derecho` hace que el siguiente no se enseñe:
+  sus filas van a `pluma.log` y se elige la de traducir, como un clic (`tools\clic.js ... right` para abrirlo).
+- RAM (26/10, 3 pestañas, `tres.ps1` a la vez): 151 MB sin esto, 156 con esto (dentro de lo que varía).
+## YouTube Music ligero (`src/music.html`, RCDATA 204)
+Plan aprobado el 26/10 (las webs que más visita: YouTube Music 1.590 visitas en 120 días).
+- music.youtube.com (`/`, `/search?q=`, `/browse/<id>`, `/channel/UC...`, `/playlist?list=`, `/library`, `/watch?v=`): la
+  página llama a su API como su web y ytmusicapi (cliente WEB_REMIX, versión = la fecha de ayer, firmada con SAPISIDHASH
+  si hay sesión). Inicio, búsqueda, artista, álbum, lista, biblioteca y «Canciones que me gustan» (con sesión).
+- No recarga nunca: los enlaces cambian la vista con `history.pushState`, así que la música sigue. Lo que no hace
+  (explorar, podcasts...) es un enlace normal y carga el YouTube Music de siempre.
+- La música suena en el reproductor de Pluma, solo sonido (`video.cpp`, «sound only»: un mpv sin ventana, `vid=no`, el
+  mejor audio de la lista HLS de visionOS, bajada a `cache-video\`). La cola, siguiente, aleatorio y repetir son de la
+  página; Pluma le pregunta 4 veces por segundo (1 si la pestaña no se ve) `__pluma.music(estado)` y hace lo que
+  devuelve (`play`, `pause`, `seek`, `volume`, `stop`). Mientras suena, la pestaña cuenta como audible y no se congela.
+  Silenciar la pestaña silencia ese mpv. Al ir a otro documento en esa pestaña (o cerrarla) la música para.
+- Trampa (26/10): sin sesión, visionOS da LOGIN_REQUIRED a casi todas las canciones (las «Art Track»); los vídeos
+  musicales sí van. IOS da enlaces directos que dan 403 pasado el primer MB (piden PO token); WEB/WEB_REMIX piden la
+  firma del reproductor. Una canción que no va pasa a la siguiente; tres seguidas, la abre el YouTube Music normal con
+  la cola. Con sesión no se pudo probar (la instancia de prueba va sin cuenta).
+- Sin teclas multimedia (el reproductor de Pluma no las tiene). Pruebas: `node tools\music-test.js`
+  (respuestas en `tools\ytm-respuestas`); medidas con `node tools\lite-medir.js <puerto> <url> [cold]`.
+
+## Sincronizar (`src/sync.cpp`, `src/backup.h`, `src/monocypher/`)
+Pedido el 26/10: «sincronizar todo por si el día de mañana reinstalamos Windows ... con contraseñas y todo»; destino
+elegido: «google drive mismo de la propia cuenta ... o onedrive o dropbox».
+- Una copia cifrada de todos los perfiles: ficheros de Pluma (`pluma_files`, `pluma_dirs`, `perfiles\`) y, en cada perfil
+  del motor (`Default`, `WV2Profile_pluma-<id>`), ajustes de extensiones, contraseñas (`Login Data`) y cookies
+  (`Network\Cookies`). Llave de la contraseña con Argon2id (Monocypher, 64 MB, 3 pasadas), AES-256-GCM, cabecera
+  autenticada; `bk::allowed_target` es la lista blanca de lo que una restauración puede escribir.
+- Contraseñas y cookies van cifradas con la llave del motor (`Local State`, os_crypt, DPAPI de esta cuenta: en un Windows
+  nuevo no se abre). La copia lleva esa llave (`meta/clave`) sellada con la contraseña de la copia y la restauración la
+  vuelve a proteger con DPAPI para la cuenta nueva (`engine_key_put`); mientras espera al reinicio, también con DPAPI.
+- El motor tiene las cookies bloqueadas mientras corre (ni leerlas se puede): cada arranque copia las bases del perfil
+  a `sync-motor\` antes de abrir el motor y la copia usa eso si el fichero vivo no se lee. Las cookies de la copia son
+  las del último arranque.
+- Un solo trabajador (en el proceso del perfil por defecto): cada hora si cambió el contenido y al cerrar; guarda las 5
+  últimas. Restaurar: se prepara en `restore-pending\`, Pluma se reinicia y lo aplica antes de abrir el motor; lo que
+  había va a `antes-de-restaurar-<fecha>`. Contraseña mal: no se toca nada.
+- Destinos: una carpeta (funciona), Google Drive appData, OneDrive App Folder, Dropbox App folder (OAuth con PKCE y
+  `state`, vuelta a `http://127.0.0.1:47615/`; los client ID, vacíos hasta registrar las apps, en `sync.cpp` o en
+  `ajustes.ini` `[sync]`).
+- Pruebas: `tools\sync-test.cpp` (vector de Argon2id, ida y vuelta, contraseña mal, copia alterada, nombres no
+  permitidos). Instancias de prueba: `PLUMA_SYNC_CARPETA` y `PLUMA_SYNC_FICHERO` saltan los diálogos,
+  `PLUMA_SYNC_PRIMERA=1` enseña la oferta de restaurar.
+
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en
   `paginas.tsv` (url, título). En cuanto hay una, salen solo las suyas. Sin ninguna, «Lo que más visitas» (se puede
   apagar en el menú: «Sugerir lo que más visito», `sugerir_visitadas`). La × de cada fila (al pasar el ratón) quita
   la página suya, o el sitio de las sugerencias para siempre (`ocultas.tsv`), con «Deshacer». Pedido el 25/10: «que
   solo aparezcan páginas que yo haya añadido, como YouTube... que las pueda añadir fácilmente como un marcador».
+
+## Contraseñas seguras (`src/passgen.cpp`, `src/passgen.js`)
+Pedido el 26/10: «Sugerir contraseñas seguras» como Chrome y Edge (la de Edge necesita la sincronización de Microsoft,
+que el motor no tiene).
+- `passgen.js` (RCDATA 220) va en cada página y marco (AddScriptToExecuteOnDocumentCreated, antes que los scripts de la
+  web) con sus textos (`T()`) y el ajuste escritos dentro (`/*PLUMA_CFG*/`). Un solo `focusin` en la ventana; nada más
+  corre hasta que una contraseña coge el foco. Nunca en `pluma.local`, en youtube.com ni en las páginas ligeras de
+  Pluma (las que tienen `__pluma`, `lite.cpp`).
+- Cuándo, las reglas locales de Chromium: `autocomplete="new-password"`, dos campos de contraseña (nueva y repetir; con
+  tres, el primero es la actual), nombres que lo dicen (new, confirm, repeat, nueva, regist...) o un formulario de
+  registro; nunca `current-password` ni un campo solo en un formulario de entrar.
+- La contraseña, como el generador de Chromium (`password_generator.cc`): 15 caracteres sin los que se confunden
+  (l I 1 O 0 o), minúscula, mayúscula, número y un símbolo de `-_.:!`, sin `--` ni `__`; respeta minlength, maxlength y
+  pattern. `crypto.getRandomValues` sin sesgo de módulo.
+- Se dibuja en una sombra cerrada en la capa de arriba (popover; dentro del `dialog` abierto si lo hay), estilos propios
+  (adoptedStyleSheets: sin `<style>` ni innerHTML, por Trusted Types y CSP), claro u oscuro con la página. Intro solo
+  con la fila marcada (Abajo), Esc la quita; rellena con el setter nativo y `input`/`change` (React lo ve).
+- Guardarla: la guarda el gestor del motor al enviar el formulario. OJO: `IsPasswordAutosaveEnabled` no guarda solo
+  (WebView2Feedback #4857): el motor PREGUNTA («¿Guardar la contraseña?», una ventana suya) y guarda al pulsar Guardar.
+  Comprobado: con Guardar, tras reiniciar el formulario de entrar se rellena con la generada. Pedido el 26/10 que no
+  se pierda si la pregunta se cierra: la pregunta sigue siendo de la persona (Pluma no pulsa nada: con UI Automation
+  funciona sin foco, pero enciende la accesibilidad del motor para toda la sesión, medido en edge://accessibility; un
+  Enter enviado no hace nada). Pluma ve la pregunta (WinEvent EVENT_OBJECT_SHOW del proceso del motor, ventana
+  `Chrome_WidgetWin_1` cuyo dueño es la de Pluma; por su título, guardar o actualizar), espera a que se vaya y, si
+  el motor no tiene ese usuario y el sitio no es de «nunca», escribe la fila con `passwords_keep` (el pendiente de
+  `passwords.cpp`, entra al siguiente arranque) y lo dice en el aviso. Sin pregunta vista no escribe nada; la de
+  actualizar no se toca.
+- Para saber que es una sugerida: la contraseña la hace Pluma (la página la pide al enfocar) y la página avisa al
+  enviar, ambas con XHR síncronos a `<su origen>/.well-known/pluma-passgen/new|sent`, que Pluma contesta en
+  WebResourceRequested sin que salga nada (mismo origen: la CSP del sitio lo deja pasar; `sendBeacon` no llega al
+  handler, ERR_BLOCKED_BY_CLIENT). Solo vale si la cabecera Origin y la url son el origen de la pestaña (ni marcos de
+  otro sitio ni opacos) y la contraseña es una que Pluma hizo para esa pestaña: una página no puede plantar un login.
+  Nada en `window` (la clave sigue en el cierre del script). Con una CSP sin 'self', la hace la página y queda solo la
+  pregunta del motor. Ni la contraseña, ni el usuario, ni el sitio van al log.
+  Probado sin efecto: la preferencia `credentials_enable_autosave` y un mundo aislado por CDP.
+- Ajuste `sugerir_contrasenas` (Configuración > Privacidad y datos), encendido. Al cambiarlo (o el idioma) cada vista
+  recibe el script nuevo y las páginas abiertas un evento cuyo nombre solo sabe Pluma (`ExecuteScript`); los marcos,
+  en su próxima página. En incógnito sale igual y dice que no se guarda.
+- Pruebas: `node tools\passgen-test.js` (el generador) y `tools\passgen\prueba.ps1` en la sesión interactiva con
+  `PLUMA_EXE` (páginas en `tools\passgen`, una con CSP estricta y Trusted Types, otra que se inventa el aviso con un
+  marco de otro sitio; `tools\passgen-e2e.js`): Guardar pulsado como la persona, la escrita a mano y la inventada sin
+  tocar, la pregunta cerrada deja la fila pendiente que entra al reiniciar, y un sitio con «nunca» (`nunca.py`) nada.
+  OJO: el motor pone su pregunta y su lista de autorrelleno en la pantalla más cercana aunque la ventana de prueba esté fuera; `tools\passgen\ventanas.ps1 -Watch` las saca al instante.
+
+## Descargas (`src/downloads.cpp`)
+Arreglado el 26/10 («el PDF descargado no se abre»): con Edge desinstalado (el motor 155 sigue), «Abrir archivo» del
+panel de descargas del motor tumbaba el motor entero (volcado: acceso a memoria ya liberada en msedge.dll, proceso
+del navegador; claves de Crashpad con el visor de PDF de Edge y Windhawk inyectado). WebView2 no deja entrar en ese
+botón, así que cada vista (pestañas, reserva, popups de extensiones) marca sus descargas como suyas en
+`DownloadStarting` (`Handled`: el panel del motor no sale); el motor sigue eligiendo el nombre, guardando y pasando
+SmartScreen. Salvo los tipos por los que el motor pregunta «¿conservar?» (programas, scripts...: la lista de Chromium
+`download_file_types.asciipb`, peligro DANGEROUS o ALLOW_ON_USER_GESTURE en Windows, en `engine_asks`): WebView2 no
+tiene cómo contestar eso y con `Handled` se quedaban al 100 % para siempre (.exe, .msi; probado también sin
+SmartScreen). Esos siguen con el panel del motor (su «Conservar» va en «Más acciones»; su «Abrir archivo», el de
+antes), y la lista de Pluma los sigue sin saltar. El panel es una página del menú (`PAGE_DOWNLOADS`, fila `kind 9`): nombre, barra mientras baja,
+estado, cancelar, mostrar en la carpeta, «Abrir carpeta de descargas»; sale solo (quieto, sin foco) al empezar y al
+acabar una, y con Ctrl+J y ⋯ > Descargas. Abrir: PDF, páginas, imágenes, SVG y texto en una pestaña (`file://`); lo
+demás con ShellExecute («Abrir con» si no hay programa). La lista solo vive en memoria (el historial del motor ya no se
+ve). Además de `StateChanged`, un sondeo cada 500 ms mientras baja algo (WebView2Feedback #5638). En las instancias de
+prueba abrir con Windows y mostrar en la carpeta solo se apuntan en `pluma.log`. Prueba: `tools\descargas\prueba.ps1`
+en la sesión interactiva con `PLUMA_EXE` (`pluma-prueba:descargas|descarga-abrir=n|descarga-carpeta=n|descarga-cancelar=n`;
+`tools\descargas\panel-motor.js` lee el panel del motor, `edge://downloads-hub`, que fuera de la pantalla solo se
+actualiza con `motor=--disable-features=CalculateNativeWinOcclusion`).
+RAM igual (3 pestañas a la vez, dos pasadas: interfaz 13 MB en las dos).
 
 ## Incógnito
 - Ventana de incógnito (⋯ > Nueva ventana de incógnito, Ctrl+Mayús+N, o «Abrir en una ventana de incógnito» en el menú
@@ -264,10 +455,49 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   ventana. El perfil de incógnito recibe las mismas extensiones activas (uBlock). Comprobado el 25/10 con un perfil
   limpio: marca.com en incógnito no quedó en ningún archivo; sus cookies, aparte de las de las pestañas normales.
 
+## Perfiles (`src/profiles.cpp`)
+Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. Plan aprobado: ventana propia por perfil.
+- Cada perfil, su perfil de WebView2 (`put_ProfileName`, `pluma-<id>`) en la misma carpeta y el mismo motor que los
+  demás: cookies, caché, extensiones y contraseñas aparte. Y sus archivos de Pluma en `g_data` = `perfiles\<id>\`
+  (historial, marcadores, sesión, pestaña nueva, extensiones.tsv, `lectura.tsv`, `cache-video`, contraseñas pendientes). Ajustes,
+  iconos de webs, scripts y `pluma.log` son de todos (`g_state`).
+- El de siempre es «Personal»: sus archivos y el perfil `Default` del motor siguen donde estaban (no se mueve nada).
+  `perfiles.tsv` (id, nombre, color); un id no se reutiliza nunca (el motor borra la carpeta de uno quitado al cerrarse).
+- Cada perfil que no es el de siempre es otro Pluma.exe (`--perfil=<id>`, ventana y mutex `.perfil.<id>`), como el
+  incógnito; no se queda en memoria al cerrarlo y no se actualiza (solo el de siempre, y no mientras haya otros abiertos).
+  Lo arranca el de siempre (`CreateProcess`, también si lo pide otro perfil por WM_COPYDATA) para que el Administrador
+  de tareas los agrupe. El motor rechaza una ventana con otras opciones que la primera: los hijos reciben las del padre
+  (`PLUMA_MOTOR_IDIOMA`, `PLUMA_MOTOR_ARGS`).
+- Avatar del perfil en la barra, justo después de la dirección (círculo con inicial y color; como Edge, que no lo pone
+  en las pestañas; pedido el 26/10), con su nombre de aviso al posar el ratón. Su panel, como el de Edge: el perfil en
+  grande, «Configuración del perfil», «Otros perfiles» (abre su ventana o la trae delante), «Añadir perfil» y «Nueva
+  ventana de incógnito». En incógnito, en su sitio, la etiqueta «Incógnito» (su panel: «Cerrar ventana de incógnito»).
+  Prueba: `Pluma.exe pluma-prueba:perfil` lo abre sin coger el foco. Configuración > Perfiles (nombre, color, quitar con confirmación,
+  que cierra su ventana, borra sus archivos y marca su perfil del motor para borrar con `ICoreWebView2Profile8::Delete`).
+  Con más de un perfil, el título dice cuál es y el botón de la barra de tareas lleva su círculo (`SetOverlayIcon`).
+- Los enlaces de otros programas van al último perfil usado (`perfil-ultimo.txt`, al activar una ventana); abrir Pluma
+  sin enlace abre el de siempre.
+- Recortar memoria: solo las páginas de la propia ventana (el motor es compartido; nunca la página que otro perfil tiene
+  a la vista).
+- Importar: «Todos los perfiles de Edge» crea (o reutiliza por nombre) un perfil de Pluma por cada uno de Edge (su
+  nombre, o el correo si Edge le dejó el nombre de serie) y le pone sus marcadores e historial, uno detrás de otro con
+  progreso. A un perfil cerrado se le escriben sus archivos cambiando `g_data` un momento; uno abierto guarda lo suyo
+  antes (WM_APP+41) y lo vuelve a leer después (WM_APP+40). Contraseñas: un CSV por perfil, en la ventana de ese perfil.
+  Pruebas: `PLUMA_EDGE_DIR=<copia de User Data>` (solo en instancias de prueba).
+
 ## Extensiones
 - La ventanita de una extensión (su popup) se crea a la vista antes de meterle su página: hecha en una ventana oculta,
   la página se quedaba «hidden» y no pintaba nada (salía vacía, 25/10). Se mide varias veces en su primer segundo
   (uBlock la rellena poco a poco y salía cortada).
+- Importar las de Edge (26/10, casilla «Extensiones (con sus ajustes)» del asistente, también en «Todos los perfiles»):
+  las que instaló la persona salen de `Secure Preferences` (`location` 1, no `was_installed_by_default`; las de Edge
+  son 5 y 10). Su carpeta `Extensions\<id>\<versión>` se copia a `extensiones\<id>` del perfil de Pluma (sin
+  `_metadata`: un nombre con «_» arriba impide cargarla) y se carga con `AddBrowserExtension`; el manifiesto trae la
+  `key` de la tienda, así que el id es el mismo (comprobado). Sus ajustes (`Local Extension Settings\<id>`, `Sync
+  Extension Settings\<id>`, su IndexedDB) se copian al perfil del motor antes de cargarla; si el motor los tiene
+  abiertos (ya estaba) esperan en `extensiones-ajustes\` al siguiente arranque. Las MV2 se intentan cargar; si no cargan, se
+  dice que es por eso; uBlock Origin (Lite o no) no se trae: Pluma ya lleva uBOL. Para otro perfil se carga con una vista oculta de
+  su perfil del motor. Las que no cargan se borran (si no, se reintentarían en cada arranque).
 - Clic derecho en el botón de una extensión: Opciones, Desactivar, Quitar de Pluma (como Chrome). Las que trae Pluma
   (uBlock) quitadas quedan marcadas en `extensiones.tsv` y ⋯ > Extensiones ofrece «Volver a poner uBlock Origin Lite».
 
@@ -286,6 +516,8 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   pintura pendiente): no se cerraba, no guardaba la sesión. Por eso las animaciones van por el hilo de DwmFlush.
 - `@match` con `*`: escapar todo menos el asterisco y luego `*` -> `.*` (antes quedaba `/*` y nunca casaba).
 - Desde PowerShell, `FindWindowW` con título nulo pide `[NullString]::Value`.
+- `tools\passgen\ventanas.ps1` solo mira procesos `msedgewebview2.exe`: con todos, un id de proceso reutilizado metió en
+  el árbol el Administrador de tareas del usuario (26/10; Windows no dejó moverlo).
 - El motor se apaga solo cuando se cierra su última vista (todas las pestañas soltadas, una pestaña nueva, una
   precarga cancelada) y la siguiente página espera un arranque en frío de más de 1 s: por eso existe `g_keeper`, una
   vista que no carga nada, de tamaño cero. Pasó el 25/10 con la reserva quitada («el motor se ha cerrado»).
@@ -324,3 +556,41 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   Pluma cree que se ve.
 - Abrir Pluma justo mientras el anterior se cierra del todo no hacía nada (le pasaba la url a una ventana que se
   iba): ahora la ventana que sale lleva la propiedad `saliendo` y el nuevo espera a que se vaya el mutex y arranca.
+
+## Ventanas (`src/main.cpp`, `tabs_move` y el arrastre en `src/ui.cpp`)
+Pedido el 26/10: «abrir pestañas diferentes, sacar una pestaña a ventana diferente, juntar una pestaña a otra ventana»,
+como Edge. Plan aprobado: todas las ventanas en el mismo proceso (uno por perfil).
+- `Window` (pluma.h): sus pestañas, la activa, pantalla completa. `g_cw` es la ventana «actual» y `g_win`, `g_bar`,
+  `g_edit`, `g_tabs`, `g_active`, `g_fullscreen` son macros sobre ella: el código de siempre trabaja en la actual.
+  `WinScope ws(w)` la cambia mientras dura; cada procedimiento de ventana, el bucle de mensajes y cada respuesta del
+  motor (`tab_by_id` + `WinScope ws(win_of_tab(t))`) ponen la suya. Lo de toda la app (temporizadores de historial,
+  sesión, actualizaciones, recortes, precarga; `ui_post`; los fotogramas de animación) va en `g_app`, una ventana solo
+  de mensajes. Un TIMERPROC mata su temporizador con el HWND que recibe. El estado de la barra (escala, dibujo, iconos,
+  ratón, aviso) es de cada ventana (`UiWin`, al final de ui.cpp); los paneles (menú, sugerencias, burbuja) son de
+  todas y se abren sobre la ventana actual.
+- Una pestaña pasa a otra ventana VIVA (`tab_move`: `put_ParentWindow` de su vista y `SetParent` de la ventana de mpv):
+  nada se recarga, un vídeo sigue sonando (comprobado: 15,8 -> 19,9 s movido, 34,2 -> 38,2 s tras volver arrastrado)
+  y lo escrito en un formulario sigue ahí. Los controles del reproductor y la foto de la página son uno para todas:
+  van a la ventana cuya pestaña a la vista tiene el reproductor (`g_ctl_win`).
+- Nueva ventana: Ctrl+N, ⋯ > Nueva ventana, «Abrir en una ventana nueva» en el menú de un enlace, y abrir Pluma (su
+  icono, clic central en la barra de tareas) con una ventana ya a la vista, como Edge. Si no hay ninguna a la vista,
+  vuelve la de antes. Otro perfil que pide traer la ventana usa `WM_APP+4` (delante), no `WM_APP+1` (abriría otra).
+- Cerrar una de varias: se cierra y sus pestañas van a «Reabrir pestaña cerrada». La última: residente como siempre
+  (las demás que quedaran ocultas se cierran). Ctrl+Mayús+Q guarda todas.
+- Menú de la pestaña: «Mover a una ventana nueva» y «Mover a Ventana N: <título>» por cada otra.
+- Arrastre, copiado de `TabDragController` de Chromium: más de 5 px empieza; dentro de la tira (15 DIP de margen arriba
+  y abajo) solo reordena; fuera, la pestaña pasa a una ventana nueva del tamaño de la de antes que sigue al ratón;
+  sobre la tira de otra ventana entra en el hueco de debajo. La única pestaña de una ventana mueve la ventana entera
+  y, si entra en otra, esa ventana se cierra. Soltada fuera de todo, la ventana nueva se queda ahí. Todo en píxeles de
+  pantalla de `GetMessagePos` (la ventana que sigue al ratón ya se movió cuando llega el mensaje); con escala distinta
+  en otra pantalla, el agarre se recalcula y `WM_DPICHANGED` no mueve la ventana arrastrada.
+- Sesión: un bloque por ventana; desde la segunda, una línea `ventana <izq> <arriba> <der> <abajo> <maximizada>` sin
+  tabulador (un Pluma anterior la salta y abre todo en una). La primera sigue en `ventana.bin`.
+- Pruebas: `Pluma.exe pluma-prueba:ventana=<id>` (sobre cuál van las siguientes), `ventana-nueva`, `ventanas` (lista en
+  `pluma.log`), `mover-nueva`, `mover=<id>`, `menu-pestana`, `cerrar`, `pos` (segundo del vídeo),
+  `arrastre-empieza=<n>`, `arrastre=dx,dy`, `arrastre-a=<id>,x,y`, `arrastre-suelta`; y el arrastre con mensajes de
+  ratón de verdad, `captura.exe "PlumaVentana.<nombre>|<título>" x.png drag x1 y1 x2 y2 pasos`. Las ventanas de prueba
+  van una debajo de otra fuera de la pantalla (la segunda 960 px más abajo).
+- Medido el 26/10 (example.com y example.org): 136 MB con una ventana, 134 con dos (la interfaz, 13 MB en los dos casos).
+- Sin probar en las pruebas (todo fuera de la pantalla): el cambio de escala al pasar de una pantalla a otra
+  arrastrando, la captura del ratón real y el clic central en la barra de tareas.

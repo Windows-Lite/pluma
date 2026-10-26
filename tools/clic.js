@@ -1,4 +1,4 @@
-// node tools/clic.js <port> <part of the page's url> <css selector> [left|middle] [ctrl]
+// node tools/clic.js <port> <part of the page's url> <css selector> [left|middle|right] [ctrl]
 // A real (trusted) click on an element of a page of a test instance, through the DevTools protocol.
 const [port, part, selector, button = 'left', mod] = process.argv.slice(2);
 (async () => {
@@ -20,7 +20,7 @@ const [port, part, selector, button = 'left', mod] = process.argv.slice(2);
   if (!v) { console.error('no element', selector); process.exit(1); }
   const modifiers = mod === 'ctrl' ? 2 : 0;
   for (const type of ['mousePressed', 'mouseReleased'])
-    await call('Input.dispatchMouseEvent', { type, x: v[0], y: v[1], button, buttons: button === 'middle' ? 4 : 1, clickCount: 1, modifiers });
+    await call('Input.dispatchMouseEvent', { type, x: v[0], y: v[1], button, buttons: button === 'middle' ? 4 : button === 'right' ? 2 : 1, clickCount: 1, modifiers });
   console.log('clic', button, 'en', v[2]);
   process.exit(0);
 })();

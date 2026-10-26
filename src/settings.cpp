@@ -35,11 +35,20 @@ static int page_resource(const std::wstring &u) {
     if (path.empty() || path == L"settings") return 200;
     return 0;
 }
-void settings_open() {
+void settings_open(const std::wstring &section) {
+    std::wstring u = std::wstring(kPage) + (section.empty() ? L"" : L"#" + section);
     for (size_t i = 0; i < g_tabs.size(); i++)
-        if (settings_page_url(g_tabs[i]->url) && page_resource(g_tabs[i]->url) == 200) { tab_activate((int)i); return; }
-    tab_new(kPage, true);
+        if (settings_page_url(g_tabs[i]->url) && page_resource(g_tabs[i]->url) == 200) {
+            tab_activate((int)i);
+            if (!section.empty() && g_tabs[i]->view) {
+                std::wstring js = L"location.hash=" + json_escape(L"#" + section) + L";var s=document.getElementById(" + json_escape(section) + L");if(s)s.scrollIntoView();";
+                g_tabs[i]->view->ExecuteScript(js.c_str(), nullptr);
+            }
+            return;
+        }
+    tab_new(u, true);
 }
+void settings_open_sync() { settings_open(L"sincronizar"); }
 
 static std::string page_html(int id) {
     HRSRC r = FindResourceW(g_inst, MAKEINTRESOURCEW(id), RT_RCDATA);
@@ -80,18 +89,37 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"update\":" + std::to_wstring(g_set.update);
     o += L",\"version\":" + json_escape(update_version());
     o += L",\"suggest\":" + std::wstring(b(g_set.suggest_top));
+    o += L",\"passgen\":" + std::wstring(b(g_set.suggest_passwords));
     o += L",\"video\":" + std::wstring(b(g_set.native_video));
     o += L",\"ytlite\":" + std::wstring(b(g_set.youtube_lite));
+    o += L",\"musiclite\":" + std::wstring(b(g_set.music_lite));
+    o += L",\"redditlite\":" + std::wstring(b(g_set.reddit_lite));
     o += L",\"videoAvailable\":" + std::wstring(b(video_available()));
+    // the sound effects: what is chosen, the person's own values, and what each preset does (the sliders show it)
+    auto fx_json = [](const SoundFx &f) {
+        std::wstring e = L"{\"eq\":[";
+        for (int i = 0; i < kEqBands; i++) e += (i ? L"," : L"") + std::to_wstring(f.eq[i]);
+        return e + L"],\"bass\":" + std::to_wstring(f.bass) + L",\"reverb\":" + std::to_wstring(f.reverb) + L"}";
+    };
+    o += L",\"sound\":{\"preset\":" + json_escape(g_set.sound.preset) + L",\"pitch\":" + std::to_wstring(g_set.sound.pitch) +
+         L",\"custom\":" + fx_json(g_set.sound.custom) + L",\"presets\":[";
+    for (int i = 0; i < kSoundPresetCount; i++)
+        o += (i ? L"," : L"") + std::wstring(L"[") + json_escape(kSoundPresets[i].id) + L"," + json_escape(T(kSoundPresets[i].name)) + L"," +
+             fx_json(kSoundPresets[i].fx) + L"]";
+    o += L"]}";
     o += L",\"resident\":" + std::wstring(b(g_set.resident));
     o += L",\"startup\":" + std::wstring(b(startup_on()));
     o += L",\"spare\":" + std::wstring(b(g_set.spare));
     o += L",\"sleep\":" + std::to_wstring(g_set.sleep_s);
+    o += L",\"discard\":" + std::to_wstring(g_set.discard_s);
     o += L",\"defaultBrowser\":" + std::wstring(b(default_browser()));
     o += L",\"memory\":" + std::to_wstring(engine_memory_mb());
     o += L",\"readerSites\":[";
     { bool f = true; for (auto &s : reader_sites()) { o += (f ? L"" : L",") + json_escape(s); f = false; } }
     o += L"]";
+    o += translate_state_json();
+    o += L",\"sync\":" + sync_state_json();
+    o += L",\"profiles\":" + profiles_state_json();
     size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
     size_t son = 0; for (auto &s : g_scripts) if (s.enabled) son++;
     o += L",\"extensions\":" + std::to_wstring(on) + L",\"scripts\":" + std::to_wstring(son);
@@ -130,23 +158,50 @@ void settings_page_refresh_soon() {
 }
 void settings_page_refresh() {
     // something changed elsewhere (the menu, another settings tab): the open pages show it
-    for (auto &t : g_tabs) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) post_state(t->view.Get(), Json());
+    for (Tab *t : all_tabs()) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) post_state(t->view.Get(), Json());
 }
 
 static void apply(const std::wstring &key, const Json &val) {
+    if (translate_apply(key, val)) return;
     if (key == L"theme") { g_set.theme = (int)val.n; settings_save(); ui_theme_changed(); tabs_apply_theme(); }
     else if (key == L"font") { g_set.font = val.s; settings_save(); ui_font_changed(); }
     else if (key == L"engine") { g_set.engine = val.s; settings_save(); }
-    else if (key == L"idioma") { g_set.lang = val.s; settings_save(); ui_invalidate(); }
+    else if (key == L"idioma") { g_set.lang = val.s; settings_save(); ui_invalidate(); passgen_settings_changed(); }
     else if (key == L"update") { g_set.update = (int)val.n; settings_save(); }
+    else if (key == L"passgen") { g_set.suggest_passwords = val.b; settings_save(); passgen_settings_changed(); }
     else if (key == L"suggest") { g_set.suggest_top = val.b; settings_save(); ui_ntp_changed(); }
     else if (key == L"video") { g_set.native_video = val.b; settings_save(); video_settings_changed(); }
-    else if (key == L"ytlite") { g_set.youtube_lite = val.b; settings_save(); youtube_settings_changed(); }
+    else if (key == L"ytlite") { g_set.youtube_lite = val.b; settings_save(); lite_settings_changed(); }
+    else if (key == L"musiclite") { g_set.music_lite = val.b; settings_save(); lite_settings_changed(); }
+    else if (key == L"redditlite") { g_set.reddit_lite = val.b; settings_save(); lite_settings_changed(); }
     else if (key == L"resident") { g_set.resident = val.b; settings_save(); }
     else if (key == L"spare") { g_set.spare = val.b; settings_save(); }
     else if (key == L"sleep") { g_set.sleep_s = std::max(10, (int)val.n); settings_save(); }
+    else if (key == L"discard") {
+        // let go of the tabs out of sight after that long (0: never); the last two looked at, after 20 min at least
+        g_set.discard_s = std::max(0, (int)val.n);
+        if (g_set.discard_s > 0 && g_set.discard_s < 10) g_set.discard_s = 10;
+        g_set.recent_discard_min = g_set.discard_s > 0 ? std::max(20, g_set.discard_s / 60) : 0;
+        settings_save();
+    }
     else if (key == L"startup") startup_set(val.b);
     else if (key == L"readerSiteOff") reader_site_set(val.s, false);
+    else if (key == L"sound") {
+        // the whole block at once: the preset, the person's own values and the pitch; the player plays it now
+        SoundSettings &snd = g_set.sound;
+        if (val[L"preset"].is_str()) snd.preset = val[L"preset"].s;
+        if (val[L"pitch"].kind == Json::NUM) snd.pitch = (int)lround(val[L"pitch"].n);
+        const Json &c = val[L"custom"];
+        if (c.kind == Json::OBJ) {
+            const Json &eq = c[L"eq"];
+            if (eq.kind == Json::ARR) for (int i = 0; i < kEqBands && i < (int)eq.arr.size(); i++) snd.custom.eq[i] = (int)lround(eq.arr[i].n);
+            if (c[L"bass"].kind == Json::NUM) snd.custom.bass = (int)lround(c[L"bass"].n);
+            if (c[L"reverb"].kind == Json::NUM) snd.custom.reverb = (int)lround(c[L"reverb"].n);
+        }
+        sound_clamp(snd);
+        settings_save();
+        video_sound_changed();
+    }
 }
 static void act(const std::wstring &what) {
     if (what == L"clearHistory") { history_clear(); ui_toast(T(L"Historial borrado")); }
@@ -162,6 +217,31 @@ static void act(const std::wstring &what) {
     else if (what == L"repo") tab_new(L"https://github.com/Windows-Lite/pluma", true);
 }
 
+static void handle_sync(ICoreWebView2 *v, const Json &j) {
+    std::wstring cmd = j[L"cmd"].s;
+    if (cmd == L"auto") sync_set_auto(j[L"on"].b);
+    else if (cmd == L"password") sync_set_password(j[L"pw"].s, j[L"hint"].s);
+    else if (cmd == L"dest") sync_set_destination(j[L"value"].s);
+    else if (cmd == L"folder") sync_pick_folder();
+    else if (cmd == L"now") sync_backup_now();
+    else if (cmd == L"connect") sync_connect(j[L"provider"].s);
+    else if (cmd == L"disconnect") sync_disconnect();
+    else if (cmd == L"pickRestore") {
+        std::wstring p = sync_pick_restore_file();
+        if (!p.empty()) {
+            std::wstring info = sync_inspect_json(p);
+            // the file's header plus its path, so the page can ask for the password and send it back
+            std::wstring msg = L"{\"op\":\"restoreInfo\",\"path\":" + json_escape(p) + L",\"info\":" + info + L"}";
+            v->PostWebMessageAsJson(msg.c_str());
+        }
+    } else if (cmd == L"restore") {
+        sync_restore(j[L"path"].s, j[L"password"].s);   // off the UI thread; it posts restoreResult when done
+    }
+}
+void settings_broadcast(const std::wstring &msg) {
+    for (Tab *t : all_tabs()) if (t->view && settings_page_url(t->url) && page_resource(t->url) == 200) t->view->PostWebMessageAsJson(msg.c_str());
+}
+
 void settings_attach(ICoreWebView2 *v) {
     // every view: Pluma's own page is served from the exe, and only it may talk to Pluma
     v->AddWebResourceRequestedFilter(L"https://pluma.local/*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
@@ -172,7 +252,7 @@ void settings_attach(ICoreWebView2 *v) {
             LPWSTR uri = NULL;
             if (FAILED(a->get_Request(&req)) || FAILED(req->get_Uri(&uri))) return S_OK;
             std::wstring u = uri; CoTaskMemFree(uri);
-            if (!settings_page_url(u)) return S_OK;   // (another filter's request: youtube.cpp)
+            if (!settings_page_url(u)) return S_OK;   // (another filter's request: lite.cpp)
             int id = settings_page_url(u) ? page_resource(u) : 0;
             std::string body = id ? page_html(id) : "";
             bool page = id != 0;
@@ -207,9 +287,11 @@ void settings_attach(ICoreWebView2 *v) {
             CoTaskMemFree(msg);
             if (page_resource(from) != 200) { bm_page_do(v, from, j); return S_OK; }   // the bookmarks and import pages
             std::wstring op = j[L"op"].s;
+            if (op == L"sync") { handle_sync(v, j); return S_OK; }
             if (op == L"get") { post_state(v, j[L"texts"]); return S_OK; }
             if (op == L"set") { apply(j[L"key"].s, j[L"value"]); if (j[L"key"].s == L"startup") settings_page_refresh(); }
             else if (op == L"do") act(j[L"what"].s);
+            else if (op == L"profile") profiles_page_do(j);
             return S_OK;
         }).Get(), &tok);
 }

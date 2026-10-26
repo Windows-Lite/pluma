@@ -1,0 +1,5 @@
+:root { color-scheme: light dark; }
+body { font: 15px system-ui, sans-serif; margin: 40px; }
+form { display: grid; gap: 10px; width: 320px; }
+input { font: inherit; padding: 8px 10px; border: 1px solid #8889; border-radius: 6px; }
+button { font: inherit; padding: 8px; border-radius: 6px; }

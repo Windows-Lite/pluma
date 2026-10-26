@@ -4,8 +4,6 @@
 #include <psapi.h>
 #include <thread>
 
-std::vector<std::unique_ptr<Tab>> g_tabs;
-int g_active = -1;
 static int g_next_id = 1;
 struct Closed { std::wstring url, title; std::string icon; int index; };
 static std::vector<Closed> g_closed;
@@ -30,7 +28,8 @@ Tab *active_tab() { return g_active >= 0 && g_active < (int)g_tabs.size() ? g_ta
 static std::unique_ptr<Tab> g_pre;   // a page loading before it is asked for (typed, or under the mouse)
 static std::wstring g_pre_asked;      // the address it was asked with (a redirect changes its url)
 Tab *tab_by_id(int id) {
-    for (auto &t : g_tabs) if (t->id == id) return t.get();
+    // (any window's: a tab's events come by its id, and its window is made current with WinScope(win_of_tab(t)))
+    for (auto &w : g_windows) for (auto &t : w->tabs) if (t->id == id) return t.get();
     if (g_pre && g_pre->id == id) return g_pre.get();
     return nullptr;
 }
@@ -93,12 +92,21 @@ static void on_browser_exited();
 static void trim_after_load();
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done);
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done, bool incognito);
+// Every Pluma.exe on this data folder shares one engine, and the engine refuses a second window whose options differ
+// from the first one's: a window started from another Pluma (incognito, another profile) takes the very options its
+// parent started the engine with, even if the language or "motor" changed since (they apply when Pluma starts again)
+static std::wstring g_engine_lang, g_engine_args;
+void engine_options(std::wstring &lang, std::wstring &args) { lang = g_engine_lang; args = g_engine_args; }
 void env_create(std::function<void()> ready) {
     auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
     opts->put_AreBrowserExtensionsEnabled(TRUE);
     opts->put_ScrollBarStyle(COREWEBVIEW2_SCROLLBAR_STYLE_FLUENT_OVERLAY);
-    opts->put_Language(lang_code());   // the engine's own menus and the pages' Accept-Language, as Pluma's
-    std::wstring args = browser_args();
+    wchar_t inh[2048];
+    std::wstring lang = lang_code(), args = browser_args();
+    if (GetEnvironmentVariableW(L"PLUMA_MOTOR_IDIOMA", inh, 2048) > 0) lang = inh;
+    if (GetEnvironmentVariableW(L"PLUMA_MOTOR_ARGS", inh, 2048) > 0) args = inh;
+    g_engine_lang = lang; g_engine_args = args;
+    opts->put_Language(lang.c_str());   // the engine's own menus and the pages' Accept-Language, as Pluma's
     opts->put_AdditionalBrowserArguments(args.c_str());
     std::wstring data = g_state + L"\\webview2";
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(NULL, data.c_str(), opts.Get(),
@@ -145,10 +153,16 @@ void env_create(std::function<void()> ready) {
 static void on_browser_exited() {
     // the engine died (it happens with a broken update or a crash): start it again and bring the page back
     log_line(L"se arranca el motor de nuevo");
-    for (auto &t : g_tabs) { video_destroy(t.get()); t->ctrl.Reset(); t->view.Reset(); t->suspended = false; t->loading = false; t->creating = false; t->scripts_ids.clear(); }
+    for (auto &w : g_windows) {
+        WinScope ws(w.get());
+        for (auto &t : g_tabs) { video_destroy(t.get()); t->ctrl.Reset(); t->view.Reset(); t->suspended = false; t->loading = false; t->creating = false; t->scripts_ids.clear(); }
+    }
     g_spare.Reset(); g_spare_making = false; g_profile.Reset(); g_keeper.Reset();
     g_env.Reset();
-    env_create([] { if (active_tab()) tab_activate(g_active); spare_prepare(); });
+    env_create([] {
+        for (auto &w : g_windows) { WinScope ws(w.get()); if (active_tab()) tab_activate(g_active); }
+        spare_prepare();
+    });
 }
 
 static RECT page_rect() {
@@ -187,6 +201,7 @@ static void setup_view(ICoreWebView2Controller *c, bool incognito) {
     if (SUCCEEDED(st.As(&st4))) { st4->put_IsPasswordAutosaveEnabled(TRUE); st4->put_IsGeneralAutofillEnabled(TRUE); }
     ComPtr<ICoreWebView2Settings8> st8;
     if (SUCCEEDED(st.As(&st8))) st8->put_IsReputationCheckingRequired(TRUE);   // SmartScreen on pages and downloads
+    downloads_watch(v.Get());   // downloads are Pluma's: the engine's flyout only for the types it asks about (downloads.cpp)
     ComPtr<ICoreWebView2_9> v9;
     if (SUCCEEDED(v.As(&v9))) {
         v9->put_DefaultDownloadDialogCornerAlignment(COREWEBVIEW2_DEFAULT_DOWNLOAD_DIALOG_CORNER_ALIGNMENT_TOP_RIGHT);
@@ -234,10 +249,24 @@ static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done,
         } else done(nullptr);   // (never an ordinary view instead)
         return;
     }
-    g_env->CreateCoreWebView2Controller(g_win, handler.Get());
+    create_controller(g_win, handler.Get());
+}
+void create_controller(HWND parent, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler *h) {
+    // another profile's window: its views in that profile (cookies, cache, extensions, passwords of its own)
+    if (!g_profile_id.empty()) {
+        ComPtr<ICoreWebView2Environment10> e10;
+        ComPtr<ICoreWebView2ControllerOptions> o;
+        if (SUCCEEDED(g_env.As(&e10)) && SUCCEEDED(e10->CreateCoreWebView2ControllerOptions(&o))) {
+            o->put_ProfileName(wv_profile_name().c_str());
+            o->put_IsInPrivateModeEnabled(FALSE);
+            e10->CreateCoreWebView2ControllerWithOptions(parent, o.Get(), h);
+        } else h->Invoke(E_NOINTERFACE, nullptr);   // (never the default profile instead)
+        return;
+    }
+    g_env->CreateCoreWebView2Controller(parent, h);
 }
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done) { make_view(done, false); }
-static void CALLBACK spare_timer(HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); spare_prepare(); }
+static void CALLBACK spare_timer(HWND h, UINT, UINT_PTR id, DWORD) { KillTimer(h, id); spare_prepare(); }
 void spare_prepare() {
     if (g_incognito) return;   // (a spare view is an ordinary one)
     if (!g_set.spare && !g_profile_waiters.empty() && !g_profile && !g_spare_making) {
@@ -255,9 +284,11 @@ static void take_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done,
     if (g_spare) {
         auto c = g_spare;
         g_spare.Reset();
+        HWND parent = NULL;
+        if (SUCCEEDED(c->get_ParentWindow(&parent)) && parent != g_win) c->put_ParentWindow(g_win);   // (made in another window)
         RECT r = page_rect(); c->put_Bounds(r);
         done(c);
-        SetTimer(g_win, 0x51A3, 1500, spare_timer);   // the next spare, once this page is on its way
+        SetTimer(g_app, 0x51A3, 1500, spare_timer);   // the next spare, once this page is on its way
         return;
     }
     make_view(done);
@@ -274,6 +305,7 @@ static void on_icon(int id) {
         [id](HRESULT hr, IStream *s) -> HRESULT {
             Tab *t = tab_by_id(id);
             if (!t || FAILED(hr) || !s) return S_OK;
+            WinScope ws(win_of_tab(t));
             std::string png;
             char buf[16384]; ULONG got = 0;
             while (SUCCEEDED(s->Read(buf, sizeof(buf), &got)) && got > 0 && png.size() < (1 << 20)) png.append(buf, got);
@@ -295,12 +327,18 @@ static std::string cached_icon(const std::wstring &url) {
     return png;
 }
 static void open_link_in_tab(int from_id, const std::wstring &url, bool activate, bool incognito = false) {
-    int i = tab_index(from_id);
     Tab *from = tab_by_id(from_id);
+    WinScope ws(win_of_tab(from));   // (by the tab it came from, in its window)
+    int i = tab_index(from_id);
     tab_new(url, activate, i >= 0 ? i + 1 : -1, incognito || (from && from->incognito));   // (an incognito tab's links stay incognito)
 }
 static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     int id = t->id;
+    // (asked for in one window, the tab may be in another by now: the view goes where the tab is)
+    if (Window *w = win_of_tab(t)) {
+        HWND parent = NULL;
+        if (SUCCEEDED(c->get_ParentWindow(&parent)) && parent != w->hwnd) c->put_ParentWindow(w->hwnd);
+    }
     t->ctrl = c;
     t->view.Reset();
     c->get_CoreWebView2(&t->view);
@@ -309,13 +347,16 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     EventRegistrationToken tok;
     ICoreWebView2 *v = t->view.Get();
     settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
-    youtube_attach(t);    // and its light YouTube
+    lite_attach(t);       // and the light pages (YouTube, YouTube Music, Reddit)
     reader_attach(t);     // and the reader view
+    translate_attach(t);  // and the translator
+    passgen_attach(t);    // and the strong password on sign-up forms
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
+            WinScope ws(win_of_tab(t));
             t->loading = true;
             t->progress = 0;
             t->load_started = now_ms();
@@ -327,6 +368,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
         [id](ICoreWebView2 *, ICoreWebView2ContentLoadingEventArgs *) -> HRESULT {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
+            WinScope ws(win_of_tab(t));
             set_progress(t, 0.5f);
             ComPtr<ICoreWebView2Controller2> c2;
             if (t->ctrl && SUCCEEDED(t->ctrl.As(&c2))) c2->put_DefaultBackgroundColor({ 255, 255, 255, 255 });   // as every browser
@@ -336,6 +378,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
         [id](ICoreWebView2 *v, ICoreWebView2SourceChangedEventArgs *) -> HRESULT {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
+            WinScope ws(win_of_tab(t));
             LPWSTR s = NULL; v->get_Source(&s);
             std::wstring u = s ? s : L"";
             CoTaskMemFree(s);
@@ -359,6 +402,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
         [id](ICoreWebView2 *v, IUnknown *) -> HRESULT {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
+            WinScope ws(win_of_tab(t));
             BOOL b = FALSE, f = FALSE; v->get_CanGoBack(&b); v->get_CanGoForward(&f);
             t->can_back = b != FALSE; t->can_fwd = f != FALSE;
             ui_invalidate();
@@ -368,6 +412,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
         [id](ICoreWebView2 *v, IUnknown *) -> HRESULT {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
+            WinScope ws(win_of_tab(t));
             LPWSTR s = NULL; v->get_DocumentTitle(&s);
             t->title = s ? s : L"";
             CoTaskMemFree(s);
@@ -381,7 +426,11 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
         [id](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *a) -> HRESULT {
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
+            WinScope ws(win_of_tab(t));
             BOOL ok = FALSE; a->get_IsSuccess(&ok);
+            COREWEBVIEW2_WEB_ERROR_STATUS es = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+            if (!ok) a->get_WebErrorStatus(&es);
+            t->cert_error = !ok && es >= COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT && es <= COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID;
             t->loading = false;
             t->progress = 1;
             t->load_done = now_ms();
@@ -445,6 +494,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             ComPtr<ICoreWebView2Deferral> def;
             a->GetDeferral(&def);
             ComPtr<ICoreWebView2NewWindowRequestedEventArgs> args = a;
+            WinScope ws(win_of_tab(tab_by_id(id)));   // (in the opener's window)
             int at = tab_index(id);
             auto nt = std::make_unique<Tab>();
             nt->id = g_next_id++;
@@ -466,6 +516,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             take_view([nid, args, def](ComPtr<ICoreWebView2Controller> c) {
                 Tab *t = tab_by_id(nid);
                 if (!t || !c) { if (c) c->Close(); def->Complete(); return; }
+                WinScope ws(win_of_tab(t));
                 attach(t, c);
                 args->put_NewWindow(t->view.Get());
                 args->put_Handled(TRUE);
@@ -477,6 +528,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
         }).Get(), &tok);
     v->add_WindowCloseRequested(Callback<ICoreWebView2WindowCloseRequestedEventHandler>(
         [id](ICoreWebView2 *, IUnknown *) -> HRESULT {
+            WinScope ws(win_of_tab(tab_by_id(id)));
             int i = tab_index(id);
             if (i >= 0) tab_close(i);
             return S_OK;
@@ -485,6 +537,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
         [id](ICoreWebView2 *v, IUnknown *) -> HRESULT {
             BOOL fs = FALSE; v->get_ContainsFullScreenElement(&fs);
             Tab *t = tab_by_id(id);
+            WinScope ws(win_of_tab(t));
             if (t && t == active_tab() && !t->video_mode) set_fullscreen(fs != FALSE);   // (Pluma's player has its own)
             return S_OK;
         }).Get(), &tok);
@@ -494,7 +547,8 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             [id](ICoreWebView2 *v, IUnknown *) -> HRESULT {
                 Tab *t = tab_by_id(id);
                 ComPtr<ICoreWebView2_8> v8;
-                if (!t || t->video_mode || FAILED(v->QueryInterface(IID_PPV_ARGS(&v8)))) return S_OK;   // (then the player says)
+                if (!t || t->video_mode || audio_on(t) || FAILED(v->QueryInterface(IID_PPV_ARGS(&v8)))) return S_OK;   // (then the player says)
+                WinScope ws(win_of_tab(t));
                 BOOL a = FALSE; v8->get_IsDocumentPlayingAudio(&a);
                 t->audible = a != FALSE;
                 ui_invalidate();
@@ -523,6 +577,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             COREWEBVIEW2_PROCESS_FAILED_KIND k; a->get_ProcessFailedKind(&k);
             Tab *t = tab_by_id(id);
             if (!t) return S_OK;
+            WinScope ws(win_of_tab(t));
             if (k == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED || k == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE) {
                 log_line(L"la página de una pestaña se ha cerrado (" + std::to_wstring((int)k) + L"): " + (t->incognito ? std::wstring(L"(incógnito)") : t->url));
                 t->loading = false;
@@ -534,7 +589,8 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     if (SUCCEEDED(t->view.As(&v11)))
         v11->add_ContextMenuRequested(Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
             [id](ICoreWebView2 *, ICoreWebView2ContextMenuRequestedEventArgs *a) -> HRESULT {
-                // "open link in a new window" becomes "in a new tab": there is one window
+                translate_context_menu(tab_by_id(id), a);   // "Traducir «...»" for a selection, "Traducir página" on the page
+                // the engine's "open link in a new window" becomes Pluma's: in a new tab, in a new window, in incognito
                 ComPtr<ICoreWebView2ContextMenuTarget> target;
                 ComPtr<ICoreWebView2ContextMenuItemCollection> items;
                 ComPtr<ICoreWebView2Environment9> e9;
@@ -552,23 +608,36 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                     bool is_new_window = name && !wcscmp(name, L"openLinkInNewWindow");
                     CoTaskMemFree(name);
                     if (!is_new_window) continue;
+                    auto make = [&](const wchar_t *label, wchar_t glyph, ComPtr<ICoreWebView2ContextMenuItem> &out) {
+                        IStream *icon = ui_glyph_png(glyph);
+                        HRESULT hr = e9->CreateContextMenuItem(label, icon, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &out);
+                        if (icon) icon->Release();
+                        return SUCCEEDED(hr);
+                    };
                     ComPtr<ICoreWebView2ContextMenuItem> mine;
-                    if (FAILED(e9->CreateContextMenuItem(T(L"Abrir en una pestaña nueva"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &mine))) break;
+                    if (!make(T(L"Abrir en una pestaña nueva"), 0xEC6C, mine)) break;
                     EventRegistrationToken tk;
                     mine->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
                         [id, link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { open_link_in_tab(id, link, false); return S_OK; }).Get(), &tk);
                     items->RemoveValueAtIndex(i);
                     items->InsertValueAtIndex(i, mine.Get());
+                    UINT32 added = 1;
+                    // in a new window of this Pluma, as Edge's
+                    ComPtr<ICoreWebView2ContextMenuItem> nw;
+                    if (make(T(L"Abrir en una ventana nueva"), 0xE78B, nw)) {
+                        nw->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
+                            [link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { ui_post([link] { win_open_new(link); }); return S_OK; }).Get(), &tk);
+                        items->InsertValueAtIndex(i + added++, nw.Get());
+                    }
                     // and in an incognito tab (Edge's "InPrivate window" item, if any, does nothing here)
                     Tab *from = tab_by_id(id);
                     ComPtr<ICoreWebView2ContextMenuItem> ip;
-                    if (from && !from->incognito &&
-                        SUCCEEDED(e9->CreateContextMenuItem(T(L"Abrir en una ventana de incógnito"), NULL, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &ip))) {
+                    if (from && !from->incognito && make(T(L"Abrir en una ventana de incógnito"), 0xE727, ip)) {
                         ip->add_CustomItemSelected(Callback<ICoreWebView2CustomItemSelectedEventHandler>(
                             [link](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT { app_open_incognito(link); return S_OK; }).Get(), &tk);
-                        items->InsertValueAtIndex(i + 1, ip.Get());
+                        items->InsertValueAtIndex(i + added++, ip.Get());
                     }
-                    for (UINT32 k = 0; k < n + 1; k++) {
+                    for (UINT32 k = 0; k < n + added; k++) {
                         ComPtr<ICoreWebView2ContextMenuItem> x;
                         LPWSTR nm = NULL;
                         if (FAILED(items->GetValueAtIndex(k, &x)) || FAILED(x->get_Name(&nm))) continue;
@@ -580,8 +649,10 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
                 }
                 return S_OK;
             }).Get(), &tok);
+    // (a page's keys, focus and zoom are its window's: by the tab, wherever it is now)
     c->add_AcceleratorKeyPressed(Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
-        [](ICoreWebView2Controller *, ICoreWebView2AcceleratorKeyPressedEventArgs *a) -> HRESULT {
+        [id](ICoreWebView2Controller *, ICoreWebView2AcceleratorKeyPressedEventArgs *a) -> HRESULT {
+            WinScope ws(win_of_tab(tab_by_id(id)));
             COREWEBVIEW2_KEY_EVENT_KIND k; a->get_KeyEventKind(&k);
             if (k != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && k != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN) return S_OK;
             UINT vk = 0; a->get_VirtualKey(&vk);
@@ -589,9 +660,9 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
             return S_OK;
         }).Get(), &tok);
     c->add_GotFocus(Callback<ICoreWebView2FocusChangedEventHandler>(
-        [](ICoreWebView2Controller *, IUnknown *) -> HRESULT { ui_close_popups(); return S_OK; }).Get(), &tok);
+        [id](ICoreWebView2Controller *, IUnknown *) -> HRESULT { WinScope ws(win_of_tab(tab_by_id(id))); ui_close_popups(); return S_OK; }).Get(), &tok);
     c->add_ZoomFactorChanged(Callback<ICoreWebView2ZoomFactorChangedEventHandler>(
-        [](ICoreWebView2Controller *, IUnknown *) -> HRESULT { ui_invalidate(); return S_OK; }).Get(), &tok);
+        [id](ICoreWebView2Controller *, IUnknown *) -> HRESULT { WinScope ws(win_of_tab(tab_by_id(id))); ui_invalidate(); return S_OK; }).Get(), &tok);
 
     v->AddScriptToExecuteOnDocumentCreated(base_script().c_str(), NULL);
     for (auto &src : scripts_sources())
@@ -611,9 +682,9 @@ bool user_away(double ms) {
     LASTINPUTINFO li = { sizeof(li) };
     return GetLastInputInfo(&li) && GetTickCount() - li.dwTime >= (DWORD)ms;
 }
-static void CALLBACK trim_after_load_tick(HWND, UINT, UINT_PTR id, DWORD) {
-    if (!user_away(3000)) { SetTimer(g_win, id, 3000, trim_after_load_tick); return; }
-    KillTimer(g_win, id);
+static void CALLBACK trim_after_load_tick(HWND h, UINT, UINT_PTR id, DWORD) {
+    if (!user_away(3000)) { SetTimer(h, id, 3000, trim_after_load_tick); return; }
+    KillTimer(h, id);
     tabs_trim(TRIM_IDLE);
 }
 static void trim_after_load() {
@@ -622,7 +693,7 @@ static void trim_after_load() {
     static double last = -1e9;
     if (now_ms() - last < 20000) return;
     last = now_ms();
-    SetTimer(g_win, 0x51A6, 4000, trim_after_load_tick);
+    SetTimer(g_app, 0x51A6, 4000, trim_after_load_tick);
 }
 
 static void ensure_view(Tab *t) {
@@ -633,6 +704,7 @@ static void ensure_view(Tab *t) {
     take_view([id](ComPtr<ICoreWebView2Controller> c) {
         Tab *t = tab_by_id(id);
         if (!t || !c) { if (c) c->Close(); if (t) t->creating = false; return; }
+        WinScope ws(win_of_tab(t));
         attach(t, c);
         std::wstring url = t->pending.empty() ? t->url : t->pending;
         bool back = t->pending.empty() && (t->saved_y > 0 || t->saved_x > 0 || t->saved_media > 3);
@@ -779,7 +851,7 @@ void tab_activate(int i) {
 // Only for new tabs: an existing tab keeps its own view and its history.
 void tabs_preload(const std::wstring &url) {
     if (g_pre && url == g_pre_asked) return;
-    if (g_pre) { release_view(g_pre.get()); g_pre.reset(); g_pre_asked.clear(); KillTimer(g_win, 0x51A7); }
+    if (g_pre) { release_view(g_pre.get()); g_pre.reset(); g_pre_asked.clear(); KillTimer(g_app, 0x51A7); }
     if (url.empty() || !g_env || g_quitting) return;
     // (not from an incognito tab: the page would load in the ordinary profile, with its cookies)
     if (active_tab() && active_tab()->incognito) return;
@@ -797,6 +869,7 @@ void tabs_preload(const std::wstring &url) {
     take_view([id](ComPtr<ICoreWebView2Controller> c) {
         Tab *t = tab_by_id(id);   // still waiting, or already a tab
         if (!t || !c) { if (c) c->Close(); return; }
+        WinScope ws(win_of_tab(t));
         attach(t, c);
         // silent until it is asked for: a video loading out of sight must not start sounding
         ComPtr<ICoreWebView2_8> v8;
@@ -806,16 +879,18 @@ void tabs_preload(const std::wstring &url) {
         t->view->Navigate(u.c_str());
         if (t == active_tab()) tab_activate(g_active);
     });
-    SetTimer(g_win, 0x51A7, 30000, [](HWND, UINT, UINT_PTR tid, DWORD) { KillTimer(g_win, tid); tabs_preload(L""); });
+    SetTimer(g_app, 0x51A7, 30000, [](HWND h, UINT, UINT_PTR tid, DWORD) { KillTimer(h, tid); tabs_preload(L""); });
 }
 static bool use_preload(Tab *t, const std::wstring &url) {
     if (!g_pre || g_pre_asked != url || t->view || t->creating || t->incognito) return false;
     int i = tab_index(t->id);
     if (i < 0) return false;
-    KillTimer(g_win, 0x51A7);
+    KillTimer(g_app, 0x51A7);
     std::unique_ptr<Tab> p = std::move(g_pre);
     g_pre_asked.clear();
     p->hidden_since = 0;
+    HWND parent = NULL;   // (asked for from another window)
+    if (p->ctrl && SUCCEEDED(p->ctrl->get_ParentWindow(&parent)) && parent != g_win) p->ctrl->put_ParentWindow(g_win);
     ui_release_icon(t);
     g_tabs[i] = std::move(p);   // the empty tab gives its place to the page already on its way
     Tab *n = g_tabs[i].get();
@@ -859,6 +934,7 @@ void tab_reload(bool hard) {
 void tab_stop() { Tab *t = active_tab(); if (t && t->view) t->view->Stop(); }
 void tab_mute(Tab *t) {
     if (video_on(t)) { video_toggle_mute(t); t->muted = !t->muted; ui_invalidate(); return; }
+    if (audio_on(t)) { audio_toggle_mute(t); t->muted = !t->muted; ui_invalidate(); return; }
     ComPtr<ICoreWebView2_8> v8;
     if (!t || !t->view || FAILED(t->view.As(&v8))) return;
     BOOL m = FALSE; v8->get_IsMuted(&m);
@@ -898,14 +974,10 @@ void tab_print() {
     if (t && t->view && SUCCEEDED(t->view.As(&v16))) v16->ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER);
 }
 void tab_devtools() { Tab *t = active_tab(); if (t && t->view) t->view->OpenDevToolsWindow(); }
-void tab_downloads() {
-    Tab *t = active_tab();
-    ComPtr<ICoreWebView2_9> v9;
-    if (t && t->view && SUCCEEDED(t->view.As(&v9))) v9->OpenDefaultDownloadDialog();
-}
+void tab_downloads() { ui_open_downloads(false); }   // (Pluma's panel: the engine's crashed on "Open file")
 void tabs_set_scripts() {
     auto sources = scripts_sources();
-    for (auto &t : g_tabs) {
+    for (Tab *t : all_tabs()) {
         if (!t->view) continue;
         for (auto &sid : t->scripts_ids) t->view->RemoveScriptToExecuteOnDocumentCreated(sid.c_str());
         t->scripts_ids.clear();
@@ -923,14 +995,16 @@ void tabs_tick() {
     static double last_full_trim = 0, last_idle_trim = 0, last_test_trim = 0;
     static int test_every = [] { wchar_t v[8] = L""; return GetEnvironmentVariableW(L"PLUMA_RECORTE_CADA", v, 8) ? _wtoi(v) : 0; }();
     if (test_every > 0 && now - last_test_trim > test_every * 1000.0) { last_test_trim = now; tabs_trim(TRIM_IDLE); }
-    if ((!IsWindowVisible(g_win) || IsIconic(g_win)) && now - last_full_trim > 30000) { last_full_trim = now; tabs_trim(TRIM_ALL); }
+    bool on_screen = false;   // (any window: the engine and its processes are the same for all of them)
+    for (auto &w : g_windows) if (IsWindowVisible(w->hwnd) && !IsIconic(w->hwnd)) on_screen = true;
+    if (!on_screen && now - last_full_trim > 30000) { last_full_trim = now; tabs_trim(TRIM_ALL); }
     // on screen but nobody has touched the PC for a minute: the engine's own processes give back what they do not
     // use too (not the graphics, nor the tab on screen: nothing to notice when the person comes back)
     LASTINPUTINFO li = { sizeof(li) };
     static DWORD idle_ms = [] { wchar_t v[16] = L""; return GetEnvironmentVariableW(L"PLUMA_REPOSO_S", v, 16) ? (DWORD)_wtoi(v) * 1000 : 60000; }();
     bool idle = GetLastInputInfo(&li) && GetTickCount() - li.dwTime > idle_ms;
     if (idle_ms < 60000) idle = now > idle_ms;   // tests: as if nobody touched the PC
-    if (IsWindowVisible(g_win) && !IsIconic(g_win) && idle && (last_idle_trim == 0 || now - last_idle_trim > 120000)) {
+    if (on_screen && idle && (last_idle_trim == 0 || now - last_idle_trim > 120000)) {
         last_idle_trim = now;
         tabs_trim(TRIM_IDLE);
     }
@@ -938,9 +1012,12 @@ void tabs_tick() {
     GlobalMemoryStatusEx(&ms);
     bool pressure = ms.dwMemoryLoad >= 85;   // the PC is short of memory: let go of the oldest hidden tab now
     Tab *oldest = nullptr;
-    for (auto &up : g_tabs) {
-        Tab *t = up.get();
-        if (!t->view || t->hidden_since == 0 || t->audible || t->creating) continue;
+    std::vector<Tab *> tabs = all_tabs();
+    for (Tab *t : tabs) {
+        WinScope ws(win_of_tab(t));
+        // (nor one whose video plays in Pluma's player: the light page's tab is not "audible" itself, and muted no tab
+        // is; frozen or let go, its player would stop with it)
+        if (!t->view || t->hidden_since == 0 || t->audible || video_playing(t) || t->creating) continue;
         double hidden = now - t->hidden_since;
         if (!t->suspended && hidden > g_set.sleep_s * 1000.0) {
             ComPtr<ICoreWebView2_19> v19;
@@ -961,19 +1038,20 @@ void tabs_tick() {
         // (incognito tabs are never let go: their page, logins and all, would be gone for good)
         if (t->incognito) continue;
         int newer = 0;
-        for (auto &o : g_tabs) if (o.get() != t && o->view && o->hidden_since > t->hidden_since && !o->audible) newer++;
+        for (Tab *o : tabs) if (o != t && o->view && o->hidden_since > t->hidden_since && !o->audible) newer++;
         double limit = newer < g_set.keep_recent ? g_set.recent_discard_min * 60.0 : g_set.discard_s;
         if (limit > 0 && hidden > limit * 1000.0) { release_view(t); trim_after_load(); continue; }   // and what it left behind goes too
         if (!oldest || t->hidden_since < oldest->hidden_since) oldest = t;
     }
     if (pressure && oldest && now - oldest->hidden_since > 10000) {
         log_line(L"poca memoria en el PC (" + std::to_wstring(ms.dwMemoryLoad) + L" %): se descarga una pestaña escondida");
+        WinScope ws(win_of_tab(oldest));
         release_view(oldest);
     }
-    ui_invalidate();
+    for (auto &w : g_windows) { WinScope ws(w.get()); ui_invalidate(); }
 }
 void tabs_discard_all() {
-    for (auto &t : g_tabs) release_view(t.get());
+    for (Tab *t : all_tabs()) { WinScope ws(win_of_tab(t)); release_view(t); }
 }
 
 // Memory a process holds but is not using goes back to Windows (EmptyWorkingSet): it stays the process's, and comes
@@ -1009,15 +1087,20 @@ void tabs_trim(int mode) {
     if (!g_env || FAILED(g_env.As(&e13))) return;
     // the frames that must keep their memory: the tab on screen, tabs playing sound, tabs not frozen yet
     std::vector<UINT32> keep;
-    for (auto &t : g_tabs) {
-        if (!t->view) continue;
-        if (t->video_mode && t->suspended) continue;   // asleep behind Pluma's player: it can give everything back
-        bool on_screen = !everything && t.get() == active_tab();
-        bool sounding = t->audible && mode != TRIM_IDLE;
-        if (on_screen || sounding || (!everything && !t->suspended && !t->audible)) keep.push_back(main_frame(t.get()));
-    }
+    for (auto &w : g_windows)   // (each window has a tab on screen)
+        for (int i = 0; i < (int)w->tabs.size(); i++) {
+            Tab *t = w->tabs[i].get();
+            if (!t->view) continue;
+            if (t->video_mode && t->suspended) continue;   // asleep behind Pluma's player: it can give everything back
+            bool on_screen = !everything && i == w->active;
+            bool sounding = t->audible && mode != TRIM_IDLE;
+            if (on_screen || sounding || (!everything && !t->suspended && !t->audible)) keep.push_back(main_frame(t));
+        }
+    std::vector<UINT32> mine;
+    for (Tab *t : all_tabs()) if (t->view) mine.push_back(main_frame(t));
+    if (g_pre && g_pre->view) mine.push_back(main_frame(g_pre.get()));
     e13->GetProcessExtendedInfos(Callback<ICoreWebView2GetProcessExtendedInfosCompletedHandler>(
-        [mode, everything, keep](HRESULT hr, ICoreWebView2ProcessExtendedInfoCollection *list) -> HRESULT {
+        [mode, everything, keep, mine](HRESULT hr, ICoreWebView2ProcessExtendedInfoCollection *list) -> HRESULT {
             UINT n = 0;
             std::vector<DWORD> pids;
             if (FAILED(hr) || !list) return S_OK;
@@ -1033,7 +1116,7 @@ void tabs_trim(int mode) {
                 // measured), without a single extra stutter in 25 s of scrolling at 144 Hz (tools/tirones.js)
                 if (mode == TRIM_FROZEN && kind != COREWEBVIEW2_PROCESS_KIND_RENDERER) continue;
 
-                bool needed = false;
+                bool needed = false, foreign = false;
                 ComPtr<ICoreWebView2FrameInfoCollection> frames;
                 if (SUCCEEDED(x->get_AssociatedFrameInfos(&frames)) && frames) {
                     ComPtr<ICoreWebView2FrameInfoCollectionIterator> it;
@@ -1044,8 +1127,11 @@ void tabs_trim(int mode) {
                             if (FAILED(it->GetCurrent(&f))) break;
                             UINT32 r = root_frame(f.Get());
                             needed = std::find(keep.begin(), keep.end(), r) != keep.end();
+                            // (a page of another window on the same engine, another profile's: not this one's to trim)
+                            if (std::find(mine.begin(), mine.end(), r) == mine.end()) foreign = true;
                         }
                 }
+                if (kind == COREWEBVIEW2_PROCESS_KIND_RENDERER && foreign && !needed) continue;
                 if (!needed) pids.push_back((DWORD)pid);
             }
             // the trimming itself takes a while (tens of ms for a big process): never on the window's thread, which
@@ -1097,42 +1183,170 @@ void tabs_on_hide() {
                 return S_OK;
             }).Get());
     }
-    SetTimer(g_win, 0x51A4, 2500, [](HWND, UINT, UINT_PTR id, DWORD) {
-        KillTimer(g_win, id);
-        if (IsWindowVisible(g_win) && !IsIconic(g_win)) return;
+    SetTimer(g_app, 0x51A4, 2500, [](HWND h, UINT, UINT_PTR id, DWORD) {
+        KillTimer(h, id);
+        for (auto &w : g_windows) if (IsWindowVisible(w->hwnd) && !IsIconic(w->hwnd)) return;
         tabs_trim(TRIM_ALL);
-        SetTimer(g_win, 0x51A5, 1500, [](HWND, UINT, UINT_PTR id2, DWORD) {
-            KillTimer(g_win, id2);
+        SetTimer(h, 0x51A5, 1500, [](HWND h2, UINT, UINT_PTR id2, DWORD) {
+            KillTimer(h2, id2);
             log_line(L"cerrado y en memoria: " + std::to_wstring(engine_memory_mb()) + L" MB");
         });
     });
 }
 
+// ---------------------------------------------------------------- windows: a tab moving between them, alive
+// The page goes with its view (put_ParentWindow): nothing reloads, a video keeps playing, what was typed stays.
+void tab_move(Tab *t, Window *to, int at, bool activate) {
+    Window *from = win_of_tab(t);
+    if (!t || !from || !win_alive(to) || from == to) return;
+    std::unique_ptr<Tab> up;
+    {
+        WinScope ws(from);
+        int i = tab_index(t->id);
+        if (i < 0) return;
+        ui_notice_drop(t->id);
+        ui_release_icon(t);
+        bool was_active = i == g_active;
+        up = std::move(g_tabs[i]);
+        g_tabs.erase(g_tabs.begin() + i);
+        if (was_active) { g_active = -1; if (!g_tabs.empty()) tab_activate(std::min(i, (int)g_tabs.size() - 1)); }
+        else if (g_active > i) g_active--;
+        ui_layout();
+        ui_invalidate();
+    }
+    WinScope ws(to);
+    if (at < 0 || at > (int)g_tabs.size()) at = (int)g_tabs.size();
+    g_tabs.insert(g_tabs.begin() + at, std::move(up));
+    if (g_active >= at && g_active >= 0) g_active++;
+    if (t->ctrl) {
+        t->ctrl->put_IsVisible(FALSE);
+        t->ctrl->put_ParentWindow(g_win);
+    }
+    video_tab_moved(t);
+    ui_tab_icon_changed(t);
+    if (activate || g_active < 0) {
+        tab_activate(at);
+        // (the window it goes to may not be in front yet: its address field, if it had the focus, gives it to the page)
+        if (!t->url.empty() && t->ctrl && ui_address_focused()) t->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    } else hide_view(t);
+    ui_layout();
+    ui_invalidate();
+    log_line(L"pestaña movida a la ventana " + std::to_wstring(to->id));
+    session_save_soon();
+}
+Window *tab_to_new_window(Tab *t, const RECT *where) {
+    Window *from = win_of_tab(t);
+    if (!t || !from) return nullptr;
+    Window *w = win_new(where);
+    if (where) SetPropW(w->hwnd, L"colocada", (HANDLE)1);   // (where the drag put it, also in tests)
+    tab_move(t, w, 0, true);
+    win_show(w, true);
+    {
+        WinScope ws(w);
+        tab_activate(g_active);   // (its view shown now that the window is)
+    }
+    if (from->tabs.empty()) win_close(from);
+    return w;
+}
+void tabs_close_window() {
+    // the window closes, one of several: its tabs go to the recently closed (last of all, the one that was active)
+    std::vector<int> order;
+    for (int i = 0; i < (int)g_tabs.size(); i++) if (i != g_active) order.push_back(i);
+    if (g_active >= 0 && g_active < (int)g_tabs.size()) order.push_back(g_active);
+    for (int i : order) {
+        Tab *t = g_tabs[i].get();
+        if (!t->url.empty() && !t->incognito) {
+            g_closed.push_back({ t->url, t->title, t->icon_png, i });
+            if (g_closed.size() > 25) g_closed.erase(g_closed.begin());
+        }
+    }
+    for (auto &t : g_tabs) { ui_release_icon(t.get()); release_view(t.get()); }
+    g_tabs.clear();
+    g_active = -1;
+}
+void views_leave_window(HWND gone) {
+    // the views that are no tab's (the keeper, the spare, a preload) and the players stay in a window that stays
+    HWND to = NULL;
+    for (auto &w : g_windows) if (w->hwnd != gone && !GetPropW(w->hwnd, L"saliendo")) { to = w->hwnd; break; }
+    if (!to) return;
+    auto move = [&](ICoreWebView2Controller *c) {
+        HWND parent = NULL;
+        if (c && SUCCEEDED(c->get_ParentWindow(&parent)) && parent == gone) c->put_ParentWindow(to);
+    };
+    move(g_keeper.Get());
+    move(g_spare.Get());
+    if (g_pre) move(g_pre->ctrl.Get());
+    video_leave_window(gone, to);
+}
+
 // ---------------------------------------------------------------- session (sesion.tsv)
+// One block per window: "activa\tN" and its tabs; the second window on starts with "ventana <left> <top> <right>
+// <bottom> <maximized>" (no tab in that line: an older Pluma skips it and opens everything in one window).
+// The first window's place is ventana.bin, as always.
 void session_save() {
     if (g_incognito) return;   // (the incognito window keeps nothing, and must not overwrite the ordinary session)
-    // (incognito tabs are not kept: the active one counts among the others)
-    int active = 0, n = 0;
-    for (int i = 0; i < (int)g_tabs.size(); i++) { if (g_tabs[i]->incognito) continue; if (i <= g_active) active = n; n++; }
-    std::wstring out = L"activa\t" + std::to_wstring(active) + L"\n";
-    for (auto &t : g_tabs) {
-        if (t->incognito) continue;
-        std::wstring title = t->title;
-        for (auto &c : title) if (c == L'\t' || c == L'\n' || c == L'\r') c = L' ';
-        out += t->url + L"\t" + title + L"\n";
+    std::wstring out;
+    bool first = true;
+    for (auto &w : g_windows) {
+        // (incognito tabs are not kept: the active one counts among the others)
+        int active = 0, n = 0;
+        for (int i = 0; i < (int)w->tabs.size(); i++) { if (w->tabs[i]->incognito) continue; if (i <= w->active) active = n; n++; }
+        if (n == 0) continue;
+        if (!first) {
+            WINDOWPLACEMENT wp = { sizeof(wp) };
+            RECT r{};
+            if (w->fullscreen) r = w->before_fs.rcNormalPosition;
+            else if (IsZoomed(w->hwnd) || IsIconic(w->hwnd)) { GetWindowPlacement(w->hwnd, &wp); r = wp.rcNormalPosition; }
+            else GetWindowRect(w->hwnd, &r);
+            bool max = IsZoomed(w->hwnd) || (w->fullscreen && w->before_fs.showCmd == SW_SHOWMAXIMIZED);
+            out += L"ventana " + std::to_wstring(r.left) + L" " + std::to_wstring(r.top) + L" " + std::to_wstring(r.right) + L" " +
+                   std::to_wstring(r.bottom) + L" " + (max ? L"1" : L"0") + L"\n";
+        }
+        first = false;
+        out += L"activa\t" + std::to_wstring(active) + L"\n";
+        for (auto &t : w->tabs) {
+            if (t->incognito) continue;
+            std::wstring title = t->title;
+            for (auto &c : title) if (c == L'\t' || c == L'\n' || c == L'\r') c = L' ';
+            out += t->url + L"\t" + title + L"\n";
+        }
     }
-    write_file(g_state + L"\\sesion.tsv", utf8(out));
+    if (out.empty()) out = L"activa\t0\n";
+    write_file(g_data + L"\\sesion.tsv", utf8(out));
+}
+static void session_finish(Window *w, int active) {
+    WinScope ws(w);
+    if (g_tabs.empty()) return;
+    g_active = std::min(std::max(active, 0), (int)g_tabs.size() - 1);
+    g_tabs[g_active]->hidden_since = 0;
+    for (auto &t : g_tabs) ui_tab_icon_changed(t.get());
+    SetWindowTextW(g_win, (g_tabs[g_active]->title.empty() ? app_name() : g_tabs[g_active]->title + L" - " + app_name()).c_str());
+    ui_set_address_text(g_tabs[g_active]->url);
+    ui_layout();
 }
 void session_restore() {
     std::string data;
-    if (!read_file(g_state + L"\\sesion.tsv", data)) return;
+    if (!read_file(g_data + L"\\sesion.tsv", data)) return;
     std::wstring w = wide(data);
+    Window *into = g_cw;   // (the current window gets the first block; the others, a window each)
     int active = 0;
     size_t pos = 0;
     while (pos < w.size()) {
         size_t nl = w.find(L'\n', pos);
         std::wstring line = w.substr(pos, nl == std::wstring::npos ? std::wstring::npos : nl - pos);
         pos = nl == std::wstring::npos ? w.size() : nl + 1;
+        if (starts_with(line, L"ventana ")) {
+            RECT r{}; int max = 0;
+            if (swscanf_s(line.c_str() + 8, L"%ld %ld %ld %ld %d", &r.left, &r.top, &r.right, &r.bottom, &max) != 5) continue;
+            if (into->tabs.empty()) continue;   // (a window without tabs: its tabs come to the one before)
+            session_finish(into, active);
+            active = 0;
+            bool fits = r.right - r.left > 200 && r.bottom - r.top > 150 && MonitorFromRect(&r, MONITOR_DEFAULTTONULL);
+            WinScope ws(into);
+            into = win_new(fits ? &r : nullptr);
+            if (max) SetPropW(into->hwnd, L"max", (HANDLE)1);
+            continue;
+        }
         size_t tab = line.find(L'\t');
         if (tab == std::wstring::npos) continue;
         std::wstring a = line.substr(0, tab), b = line.substr(tab + 1);
@@ -1142,15 +1356,9 @@ void session_restore() {
         t->url = a; t->title = b;
         t->icon_png = cached_icon(a);
         t->hidden_since = now_ms();
-        g_tabs.push_back(std::move(t));
+        into->tabs.push_back(std::move(t));
     }
-    if (g_tabs.empty()) return;
-    g_active = std::min(std::max(active, 0), (int)g_tabs.size() - 1);
-    g_tabs[g_active]->hidden_since = 0;
-    for (auto &t : g_tabs) ui_tab_icon_changed(t.get());
-    SetWindowTextW(g_win, (g_tabs[g_active]->title.empty() ? app_name() : g_tabs[g_active]->title + L" - " + app_name()).c_str());
-    ui_set_address_text(g_tabs[g_active]->url);
-    ui_layout();
+    session_finish(into, active);
 }
 
 // ---------------------------------------------------------------- memory in use (private working set, as the Task Manager)
