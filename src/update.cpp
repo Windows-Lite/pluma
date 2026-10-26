@@ -21,8 +21,11 @@
 #endif
 static const wchar_t *kVersion = L"" PLUMA_VERSION;
 static const wchar_t *kLatest = L"https://api.github.com/repos/Windows-Lite/pluma/releases/latest";
+static const wchar_t *kPage = L"https://github.com/Windows-Lite/pluma/releases/latest";
+static const wchar_t *kDownload = L"https://github.com/Windows-Lite/pluma/releases/download/";
 
 static std::atomic<bool> g_busy{ false };
+static std::atomic<bool> g_asked_by_hand{ false };   // someone clicked while a check was already on its way: it answers them
 static std::wstring g_ready;        // the version waiting in actualizacion\ to go in (window thread)
 static std::wstring g_announced;    // the version the note was shown for, once per version
 
@@ -58,7 +61,7 @@ static void delete_tree(const std::wstring &dir) {
 }
 
 // a GET (worker thread), up to max bytes; GitHub's redirects to its download servers are followed by WinHTTP
-static bool fetch(const std::wstring &url, std::string &out, size_t max) {
+static bool fetch(const std::wstring &url, std::string &out, size_t max, std::wstring *moved = nullptr) {
     URL_COMPONENTS uc = { sizeof(uc) };
     wchar_t host[256] = L"";
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
@@ -74,10 +77,18 @@ static bool fetch(const std::wstring &url, std::string &out, size_t max) {
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                          uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0) : NULL;
+    if (r && moved) { DWORD off = WINHTTP_OPTION_REDIRECT_POLICY_NEVER; WinHttpSetOption(r, WINHTTP_OPTION_REDIRECT_POLICY, &off, sizeof(off)); }
     const wchar_t *hdr = L"Accept: application/vnd.github+json\r\n";
     if (r && WinHttpSendRequest(r, hdr, (DWORD)-1L, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(r, NULL)) {
         DWORD code = 0, len = sizeof(code);
         WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &len, WINHTTP_NO_HEADER_INDEX);
+        if (moved && code >= 300 && code < 400) {
+            // (only where it goes: the address of the redirect)
+            wchar_t loc[1024]; DWORD ll = sizeof(loc);
+            if (WinHttpQueryHeaders(r, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX, loc, &ll, WINHTTP_NO_HEADER_INDEX)) { *moved = loc; ok = true; }
+            WinHttpCloseHandle(r); WinHttpCloseHandle(c); WinHttpCloseHandle(s);
+            return ok;
+        }
         char buf[65536]; DWORD got = 0;
         while (WinHttpReadData(r, buf, sizeof(buf), &got) && got > 0 && out.size() <= max) out.append(buf, got);
         ok = code == 200 && !out.empty() && out.size() <= max;
@@ -96,9 +107,25 @@ static std::wstring sha256_hex(const std::string &data) {
 }
 
 struct Release { std::wstring tag, zip_url, sha256, page; };
+static bool latest_from_page(Release &rel) {
+    // GitHub's API allows 60 questions an hour per address (403 after): the release page's redirect has no such
+    // limit, and its tag gives the zip's and the .sha256's addresses
+    std::string none; std::wstring to;
+    if (!fetch(kPage, none, 1 << 16, &to)) return false;
+    size_t at = to.find(L"/releases/tag/");
+    if (at == std::wstring::npos) return false;
+    rel.tag = to.substr(at + 14);
+    rel.page = to;
+    std::wstring base = std::wstring(kDownload) + rel.tag + L"/pluma-" + rel.tag + L".zip";
+    rel.zip_url = base;
+    std::string sum;
+    if (fetch(base + L".sha256", sum, 4096) && sum.size() >= 64) rel.sha256 = lower(wide(sum.substr(0, 64)));
+    return !rel.tag.empty();
+}
 static bool latest(Release &rel) {
     std::string body;
-    if (!fetch(latest_url(), body, 1 << 20)) return false;
+    wchar_t test[8];
+    if (!fetch(latest_url(), body, 1 << 20)) return GetEnvironmentVariableW(L"PLUMA_ACTUALIZAR_URL", test, 8) == 0 && latest_from_page(rel);
     Json j = json_parse(wide(body));
     rel.tag = j[L"tag_name"].s;
     rel.page = j[L"html_url"].s;
@@ -177,18 +204,28 @@ static void CALLBACK tick(HWND h, UINT, UINT_PTR id, DWORD) {
 }
 static void retry_soon() { SetTimer(g_win, 70, 30 * 60 * 1000, tick); }   // no answer (offline...): again in 30 min
 static void check(bool by_hand) {
+    if (by_hand) {
+        if (!wcscmp(kVersion, L"dev")) { ui_toast(T(L"Esta copia de Pluma no se actualiza sola")); return; }
+        ui_toast(T(L"Buscando actualizaciones..."));
+        g_asked_by_hand = true;
+    }
     if (g_busy.exchange(true)) return;
-    std::thread([by_hand] {
+    std::thread([] {
         Release rel;
         bool asked = latest(rel);
         log_line(asked ? L"actualización: la última es " + rel.tag + L" (esta, " + kVersion + L")" : L"actualización: no se pudo consultar");
         bool found = asked && newer(rel.tag, kVersion);
         bool can = found && writable(g_root);
         bool staged = found && can && g_set.update == 2 && stage(rel);
-        ui_post([rel, asked, found, can, staged, by_hand] {
+        ui_post([rel, asked, found, can, staged] {
             g_busy = false;
-            if (!asked && !by_hand) retry_soon();
-            if (!found) { if (by_hand) ui_toast(wcscmp(kVersion, L"dev") ? T(L"Pluma está al día") : T(L"Esta copia de Pluma no se actualiza sola")); return; }
+            bool by_hand = g_asked_by_hand.exchange(false);
+            if (!asked) {
+                if (by_hand) ui_toast(T(L"No se pudo comprobar: sin respuesta de GitHub"));
+                else retry_soon();
+                return;
+            }
+            if (!found) { if (by_hand) ui_toast(std::wstring(T(L"Pluma está al día")) + L" (" + kVersion + L")"); return; }
             if (staged) { ready(rel); return; }
             if (g_announced == rel.tag && !by_hand) return;
             g_announced = rel.tag;
