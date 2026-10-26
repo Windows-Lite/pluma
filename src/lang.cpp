@@ -287,6 +287,17 @@ static const Text kTexts[] = {
     { L"comentarios", L"comments", L"comentários", L"commentaires", L"Kommentare", L"commenti" },
     { L"ligero", L"lite", L"leve", L"léger", L"leicht", L"leggero" },
     { L"respuestas", L"replies", L"respostas", L"réponses", L"Antworten", L"risposte" },
+    // the reader view (reader.cpp, reader.html, settings.html)
+    { L"Modo lectura", L"Reader view", L"Modo de leitura", L"Mode lecture", L"Leseansicht", L"Modalità lettura" },
+    { L"Letra más pequeña", L"Smaller text", L"Letra menor", L"Texte plus petit", L"Kleinere Schrift", L"Testo più piccolo" },
+    { L"Letra más grande", L"Larger text", L"Letra maior", L"Texte plus grand", L"Größere Schrift", L"Testo più grande" },
+    { L"Abrir siempre en modo lectura", L"Always open in reader view", L"Abrir sempre no modo de leitura", L"Toujours ouvrir en mode lecture", L"Immer in der Leseansicht öffnen", L"Apri sempre in modalità lettura" },
+    { L"Salir del modo lectura", L"Close reader view", L"Sair do modo de leitura", L"Quitter le mode lecture", L"Leseansicht schließen", L"Esci dalla modalità lettura" },
+    { L"min de lectura", L"min read", L"min de leitura", L"min de lecture", L"Min. Lesezeit", L"min di lettura" },
+    { L"Esta página no se puede mostrar en modo lectura.", L"This page can't be shown in reader view.", L"Esta página não pode ser mostrada no modo de leitura.", L"Cette page ne peut pas s'afficher en mode lecture.", L"Diese Seite kann nicht in der Leseansicht angezeigt werden.", L"Questa pagina non può essere mostrata in modalità lettura." },
+    { L"Sitios que se abren siempre en modo lectura", L"Sites that always open in reader view", L"Sites que sempre abrem no modo de leitura", L"Sites toujours ouverts en mode lecture", L"Websites, die immer in der Leseansicht öffnen", L"Siti che si aprono sempre in modalità lettura" },
+    { L"Se añaden desde el modo lectura: F9 o el libro de la barra de direcciones en un artículo", L"Add them from reader view: F9 or the book in the address bar on an article", L"Adicione-os pelo modo de leitura: F9 ou o livro da barra de endereços num artigo", L"Ajoutez-les depuis le mode lecture : F9 ou le livre de la barre d'adresse sur un article", L"Füge sie in der Leseansicht hinzu: F9 oder das Buch in der Adressleiste bei einem Artikel", L"Aggiungili dalla modalità lettura: F9 o il libro nella barra degli indirizzi in un articolo" },
+    { L"Ninguno todavía", L"None yet", L"Nenhum ainda", L"Aucun pour l'instant", L"Noch keine", L"Ancora nessuno" },
 };
 
 // the language's code: the one chosen, else Windows's (if Pluma has it), else English

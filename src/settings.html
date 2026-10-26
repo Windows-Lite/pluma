@@ -88,6 +88,7 @@ button.danger { color: var(--danger); }
     <a href="#idioma"><svg viewBox="0 0 20 20"><path d="M3 5h8M7 3v2M5 5c0 3 2 6 5 7M9 5c0 3-2 6-5 7M11 17l3-8 3 8M12 14.5h4"/></svg><span data-t="Idioma">Idioma</span></a>
     <a href="#descargas"><svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span data-t="Descargas">Descargas</span></a>
     <a href="#video"><svg viewBox="0 0 20 20"><rect x="2.5" y="4.5" width="15" height="11" rx="2.5"/><path d="m8.5 8 4 2-4 2Z"/></svg><span data-t="YouTube y vídeo">YouTube y vídeo</span></a>
+    <a href="#lectura"><svg viewBox="0 0 20 20"><path d="M10 5.5C8.5 4.3 6 4 3 4.5v10c3-.5 5.5-.2 7 1 1.5-1.2 4-1.5 7-1v-10c-3-.5-5.5-.2-7 1Zm0 0v10"/></svg><span data-t="Modo lectura">Modo lectura</span></a>
     <a href="#sistema"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M7 17h6M10 14v3"/></svg><span data-t="Sistema y rendimiento">Sistema y rendimiento</span></a>
     <hr>
     <a href="#extensiones"><svg viewBox="0 0 20 20"><path d="M8 3.5a1.5 1.5 0 0 1 3 0V5h3a1 1 0 0 1 1 1v3h-1.5a1.5 1.5 0 0 0 0 3H15v3a1 1 0 0 1-1 1h-3v-1.5a1.5 1.5 0 0 0-3 0V16H5a1 1 0 0 1-1-1v-3h1.5a1.5 1.5 0 0 0 0-3H4V6a1 1 0 0 1 1-1h3Z"/></svg><span data-t="Extensiones y scripts">Extensiones y scripts</span></a>
@@ -204,6 +205,16 @@ button.danger { color: var(--danger); }
       </div>
     </section>
 
+    <section id="lectura">
+      <h2 data-t="Modo lectura">Modo lectura</h2>
+      <div class="card" id="lectura-card">
+        <div class="row" data-k="modo lectura articulo lector siempre sitios">
+          <div class="txt"><div class="name" data-t="Sitios que se abren siempre en modo lectura">Sitios que se abren siempre en modo lectura</div><div class="desc" data-t="Se añaden desde el modo lectura: F9 o el libro de la barra de direcciones en un artículo">Se añaden desde el modo lectura: F9 o el libro de la barra de direcciones en un artículo</div></div>
+          <span class="badge" id="lectura-none" data-t="Ninguno todavía">Ninguno todavía</span>
+        </div>
+      </div>
+    </section>
+
     <section id="sistema">
       <h2 data-t="Sistema y rendimiento">Sistema y rendimiento</h2>
       <div class="card">
@@ -315,6 +326,15 @@ function render() {
   $('scriptdesc').textContent = S.scripts === 1 ? tr('1 activo') : S.scripts + tr(' activos');
   $('defname').textContent = tr(S.defaultBrowser ? 'Pluma es tu navegador predeterminado' : 'Pluma no es tu navegador predeterminado');
   $('defbtn').style.display = S.defaultBrowser ? 'none' : '';
+  // the reader view's sites, each with its "Quitar"
+  document.querySelectorAll('#lectura-card .site').forEach(r => r.remove());
+  $('lectura-none').style.display = S.readerSites.length ? 'none' : '';
+  for (const h of S.readerSites) {
+    const r = document.createElement('div'); r.className = 'row site'; r.dataset.k = 'modo lectura ' + h;
+    const n = document.createElement('div'); n.className = 'txt'; n.textContent = h;
+    const b = document.createElement('button'); b.textContent = tr('Quitar'); b.onclick = () => set('readerSiteOff', h);
+    r.append(n, b); $('lectura-card').append(r);
+  }
 }
 // the search: rows by their words (shown, in the language, and their keywords); sections with none left go
 function filter() {
@@ -361,7 +381,7 @@ function ask() {
   document.querySelectorAll('[data-t]').forEach(e => all.add(e.dataset.t));
   document.querySelectorAll('[data-tp]').forEach(e => all.add(e.dataset.tp));
   ['La de Windows', '1 activa', ' activas', '1 activo', ' activos', 'Pluma es tu navegador predeterminado', 'Pluma no es tu navegador predeterminado',
-   'Falta el motor de vídeo de Pluma (motor-video)'].forEach(s => all.add(s));
+   'Falta el motor de vídeo de Pluma (motor-video)', 'Quitar'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {

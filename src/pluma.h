@@ -86,6 +86,7 @@ struct Settings {
     bool youtube_lite = true;          // YouTube answered with Pluma's own light page (youtube.cpp)
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
+    int reader_size = 20;              // the reader view's font size, px (reader.cpp)
     std::vector<std::wstring> schemes = { L"ytmp3" };   // external apps opened without asking
 };
 extern Settings g_set;
@@ -114,6 +115,12 @@ std::wstring lang_name(const wchar_t *code);         // a language by its own na
 struct Tab;
 void youtube_attach(Tab *t);              // every view: YouTube's pages answered with Pluma's light one
 void youtube_settings_changed();          // the setting went off: the light pages go back to YouTube's
+
+// ---------------------------------------------------------------- the reader view (reader.cpp)
+void reader_attach(Tab *t);               // every view: is it an article? and Pluma's reader page for it
+void reader_toggle(Tab *t);               // the book in the address bar or F9: into the reader view or out of it
+std::vector<std::wstring> reader_sites(); // the sites opened straight in the reader view (lectura.tsv)
+void reader_site_set(const std::wstring &site, bool on);
 
 // ---------------------------------------------------------------- languages (lang.cpp)
 const wchar_t *T(const wchar_t *es);   // a text of the interface, written in Spanish, in the person's language
@@ -235,6 +242,9 @@ struct Tab {
     std::wstring video_declined;       // the video the person went back to the page for: it stays on the page
     bool incognito = false;            // InPrivate: nothing of it is kept (history, cookies, session); gone with the window
     bool yt_lite = false;              // its page is Pluma's light YouTube (youtube.cpp): Pluma's player goes straight in
+    bool readerable = false;           // its page is an article: the address bar offers the reader view (reader.cpp)
+    bool reader = false;               // ... and it is on screen
+    std::wstring reader_declined;      // the address the person left the reader view at (no automatic reader view there)
     // the bar's geometry, animated
     Anim x, w, hover, close_hover;
     bool placed = false;

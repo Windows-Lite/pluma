@@ -89,6 +89,9 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"sleep\":" + std::to_wstring(g_set.sleep_s);
     o += L",\"defaultBrowser\":" + std::wstring(b(default_browser()));
     o += L",\"memory\":" + std::to_wstring(engine_memory_mb());
+    o += L",\"readerSites\":[";
+    { bool f = true; for (auto &s : reader_sites()) { o += (f ? L"" : L",") + json_escape(s); f = false; } }
+    o += L"]";
     size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
     size_t son = 0; for (auto &s : g_scripts) if (s.enabled) son++;
     o += L",\"extensions\":" + std::to_wstring(on) + L",\"scripts\":" + std::to_wstring(son);
@@ -143,6 +146,7 @@ static void apply(const std::wstring &key, const Json &val) {
     else if (key == L"spare") { g_set.spare = val.b; settings_save(); }
     else if (key == L"sleep") { g_set.sleep_s = std::max(10, (int)val.n); settings_save(); }
     else if (key == L"startup") startup_set(val.b);
+    else if (key == L"readerSiteOff") reader_site_set(val.s, false);
 }
 static void act(const std::wstring &what) {
     if (what == L"clearHistory") { history_clear(); ui_toast(T(L"Historial borrado")); }

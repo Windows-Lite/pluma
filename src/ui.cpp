@@ -27,7 +27,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
-                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895 };
+                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -215,7 +215,7 @@ static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
 static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
 static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo g_hover, g_press;
 static std::unordered_map<int, Anim> g_btn_hover;  // per control
@@ -355,9 +355,15 @@ static D2D1_RECT_F star_rect() {
     D2D1_RECT_F a = addr_rect();
     return R(a.right - S(34), a.top + S(4), a.right - S(6), a.bottom - S(4));
 }
+// the book before it: the page is an article, and the reader view is a click (or F9) away (reader.cpp)
+static bool reader_shown() { Tab *t = active_tab(); return star_shown() && (t->readerable || t->reader); }
+static D2D1_RECT_F reader_rect() {
+    D2D1_RECT_F s = star_rect();
+    return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
+}
 static D2D1_RECT_F zoom_rect() {
     D2D1_RECT_F a = addr_rect();
-    float r = star_shown() ? star_rect().left - S(4) : a.right - S(6);
+    float r = reader_shown() ? reader_rect().left - S(4) : star_shown() ? star_rect().left - S(4) : a.right - S(6);
     return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
@@ -454,6 +460,7 @@ static HitInfo hit_test(float x, float y) {
             k++;
         }
         if (star_shown() && inside(star_rect(), x, y)) { h.what = H_STAR; return h; }
+        if (reader_shown() && inside(reader_rect(), x, y)) { h.what = H_READER; return h; }
         if (zoom_shown() && inside(zoom_rect(), x, y)) { h.what = H_ZOOM; return h; }
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
@@ -759,6 +766,17 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         bool on = pins_has(t->url);
         glyph(rt, g_br.Get(), g_f.icon_sm.Get(), on ? G_STAR_FILL : G_STAR, s, on ? p.accent : mix(p.sub, p.text, sh));
         right = s.left - S(4);
+    }
+    if (reader_shown()) {
+        // the book: in the accent while the reader view is on screen
+        D2D1_RECT_F r = reader_rect();
+        auto &ra = g_btn_hover[hover_key(H_READER, 0)];
+        busy |= ra.running(now);
+        float rh = ra.at(now);
+        if (t->reader) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
+        else if (rh > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, rh * 1.3f));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_READER, r, t->reader ? p.accent : mix(p.sub, p.text, rh));
+        right = r.left - S(4);
     }
     if (zoom_shown()) {
         D2D1_RECT_F z = zoom_rect();
@@ -1077,7 +1095,7 @@ static LRESULT CALLBACK edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (ctrl && wp == VK_BACK) { delete_word_left(); return 0; }
         if (wp == VK_TAB) return 0;
         // the browser's own keys still work while typing (not the edit's: copy, paste, undo, arrows)
-        if ((ctrl && wcschr(L"TWNJQ1234567890\x09\x21\x22", (wchar_t)wp)) || wp == VK_F5 || wp == VK_F6 || wp == VK_F11 || wp == VK_F12 ||
+        if ((ctrl && wcschr(L"TWNJQ1234567890\x09\x21\x22", (wchar_t)wp)) || wp == VK_F5 || wp == VK_F6 || wp == VK_F9 || wp == VK_F11 || wp == VK_F12 ||
             (alt && (wp == VK_LEFT || wp == VK_RIGHT)))
             if (handle_shortcut((UINT)wp, ctrl, shift, alt)) return 0;
         break;
@@ -1863,6 +1881,7 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_ROW: if (h.id < (int)g_ntp_rows.size()) { Tab *t = active_tab(); std::wstring u = g_ntp_rows[h.id].url; if (t) tab_navigate(t, u); else tab_new(u, true); } break;
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
+    case H_READER: reader_toggle(active_tab()); break;
     case H_BM: {
         BmNode *n = bm_find(h.id);
         if (!n) break;
@@ -2081,6 +2100,7 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
     if (!ctrl && !alt) {
         if (vk == VK_F5) { tab_reload(false); return true; }
         if (vk == VK_F6) { ui_focus_address(true); return true; }
+        if (vk == VK_F9) { reader_toggle(active_tab()); return true; }
         if (vk == VK_F11) { set_fullscreen(!g_fullscreen); return true; }
         if (vk == VK_F12) { tab_devtools(); return true; }
         if (vk == VK_ESCAPE && g_fullscreen) {
