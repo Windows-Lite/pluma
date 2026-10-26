@@ -2130,6 +2130,15 @@ static void video_try(Tab *t) {
         if (!v || v->stage != ST_WAITING || v->mpv) return;
         auto give_up = [&](const std::wstring &why) { log_line(L"vídeo propio: no (" + why + L")"); if (v->lite) lite_fail(t, why); t->video = nullptr; delete v; };
         if (r[L"quiet"].b) { t->video = nullptr; delete v; return; }   // (the light page wants no player now: its video ended)
+        if (v->lite && r[L"error"].s == L"sin página ligera") {
+            // the tab has YouTube's own page after all (it came back from memory, or without passing through Pluma):
+            // its player goes as on YouTube's page
+            log_line(L"YouTube ligero: la pestaña tiene la página normal; el vídeo, como en ella");
+            t->yt_lite = false;
+            t->video = nullptr; delete v;
+            video_try(t);
+            return;
+        }
         if (r.kind != Json::OBJ) { give_up(L"sin respuesta"); return; }
         if (r[L"error"].is_str()) { give_up(r[L"error"].s); return; }
         if (r[L"id"].s != v->id) { give_up(L"la página ya está en otro vídeo"); return; }

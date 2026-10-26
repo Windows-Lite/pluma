@@ -188,7 +188,11 @@ void youtube_attach(Tab *t) {
             req->get_Method(&method);
             bool get = method && !wcscmp(method, L"GET");
             CoTaskMemFree(method);
-            if (get && no_fragment(u) == it->second) serve(a);
+            if (get && no_fragment(u) == it->second) {
+                serve(a);
+                static int told = 0;   // (a few lines: to know, next time, whether a page that stayed YouTube's passed through here)
+                if (told++ < 20) log_line(L"YouTube ligero: servida " + u.substr(0, u.find_first_of(L"?#")));
+            }
             return S_OK;
         }).Get(), &tok);
     v->add_NavigationCompleted(Callback<ICoreWebView2NavigationCompletedEventHandler>(
