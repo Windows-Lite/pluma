@@ -46,6 +46,7 @@ section h2 { font-size: 20px; font-weight: 600; margin: 0 0 14px; }
 .row .name { font-weight: 500; }
 .row .desc { color: var(--sub); font-size: 12.5px; margin-top: 2px; }
 .row.hidden, section.hidden { display: none; }
+.off { display: none !important; }   /* state the page controls, apart from the search's .hidden */
 select, button { font: inherit; color: var(--text); }
 select { height: 32px; min-width: 190px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); padding: 0 8px; }
 button { height: 32px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); cursor: default; }
@@ -104,6 +105,7 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
     <a href="#marcadores"><svg viewBox="0 0 20 20"><path d="m10 3 2.1 4.6 5 .5-3.8 3.3 1.2 4.9L10 13.8 5.5 16.3l1.2-4.9L2.9 8.1l5-.5Z"/></svg><span data-t="Marcadores">Marcadores</span></a>
     <a href="#privacidad"><svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span data-t="Privacidad y datos">Privacidad y datos</span></a>
     <a href="#predeterminado"><svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M3 7h14"/></svg><span data-t="Navegador predeterminado">Navegador predeterminado</span></a>
+    <a href="#sincronizar"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 0 1 10-4.5M16 10a6 6 0 0 1-10 4.5M14 3v2.5h-2.5M6 17v-2.5h2.5"/></svg><span data-t="Sincronizar">Sincronizar</span></a>
     <hr>
     <a href="#idioma"><svg viewBox="0 0 20 20"><path d="M3 5h8M7 3v2M5 5c0 3 2 6 5 7M9 5c0 3-2 6-5 7M11 17l3-8 3 8M12 14.5h4"/></svg><span data-t="Idioma">Idioma</span></a>
     <a href="#descargas"><svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span data-t="Descargas">Descargas</span></a>
@@ -203,6 +205,69 @@ input[type=range] { accent-color: var(--accent); margin: 0; }
         <div class="row" data-k="predeterminado navegador">
           <div class="txt"><div class="name" id="defname" data-t="Pluma no es tu navegador predeterminado">Pluma no es tu navegador predeterminado</div><div class="desc" data-t="Los enlaces de otros programas se abren en tu navegador predeterminado">Los enlaces de otros programas se abren en tu navegador predeterminado</div></div>
           <button class="primary" id="defbtn" data-do="defaultBrowser" data-t="Hacer predeterminado">Hacer predeterminado</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="sincronizar">
+      <h2 data-t="Sincronizar">Sincronizar</h2>
+      <p class="desc" style="margin:-6px 0 14px" data-t="Una copia cifrada con tu contraseña de todos tus perfiles (marcadores, historial, pestañas, ajustes, scripts, extensiones, contraseñas y sesiones iniciadas). Si reinstalas Windows, la recuperas con tu contraseña.">Una copia cifrada con tu contraseña de todos tus perfiles (marcadores, historial, pestañas, ajustes, scripts, extensiones, contraseñas y sesiones iniciadas). Si reinstalas Windows, la recuperas con tu contraseña.</p>
+      <div class="card">
+        <div class="row" data-k="sincronizar donde copia nube carpeta cuenta">
+          <div class="txt"><div class="name" data-t="Dónde se guarda la copia">Dónde se guarda la copia</div><div class="desc" id="sync-dest-desc" data-t="En una carpeta (OneDrive, Google Drive, Dropbox, un disco), o conecta tu cuenta">En una carpeta (OneDrive, Google Drive, Dropbox, un disco), o conecta tu cuenta</div></div>
+          <select id="sync-dest">
+            <option value="" data-t="Desactivado">Desactivado</option>
+            <option value="carpeta" data-t="Una carpeta">Una carpeta</option>
+            <option value="gdrive">Google Drive</option>
+            <option value="onedrive">OneDrive</option>
+            <option value="dropbox">Dropbox</option>
+          </select>
+        </div>
+        <div class="row off" id="sync-folder-row" data-k="sincronizar carpeta elegir">
+          <div class="txt"><div class="name" data-t="Carpeta de la copia">Carpeta de la copia</div><div class="desc" id="sync-folder-path">—</div></div>
+          <button data-sync="folder" data-t="Elegir carpeta">Elegir carpeta</button>
+        </div>
+        <div class="row off" id="sync-account-row" data-k="sincronizar cuenta conectar">
+          <div class="txt"><div class="name" data-t="Cuenta">Cuenta</div><div class="desc" id="sync-account">—</div></div>
+          <button class="primary" id="sync-connect" data-t="Conectar">Conectar</button>
+          <button id="sync-disconnect" data-t="Desconectar">Desconectar</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="row col" data-k="sincronizar contraseña copia cifrado pista">
+          <div class="txt"><div class="name" data-t="Contraseña de la copia">Contraseña de la copia</div><div class="desc" id="sync-pw-desc" data-t="Sin ella nadie puede abrir la copia, tampoco nosotros. Apúntala: no se puede recuperar.">Sin ella nadie puede abrir la copia, tampoco nosotros. Apúntala: no se puede recuperar.</div></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="sync-pw" type="password" data-tp="Contraseña" placeholder="Contraseña" autocomplete="new-password" style="height:32px;border-radius:6px;border:1px solid var(--line);background:var(--field);color:var(--text);padding:0 10px">
+            <input id="sync-hint" type="text" data-tp="Pista (opcional)" placeholder="Pista (opcional)" style="height:32px;border-radius:6px;border:1px solid var(--line);background:var(--field);color:var(--text);padding:0 10px">
+            <button class="primary" data-sync="password" data-t="Guardar">Guardar</button>
+            <button class="danger off" id="sync-pw-clear" data-sync="clearpw" data-t="Quitar">Quitar</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="row" data-k="sincronizar automatica cada hora">
+          <div class="txt"><div class="name" data-t="Copia automática">Copia automática</div><div class="desc" data-t="Cada hora si hay cambios, y al cerrar">Cada hora si hay cambios, y al cerrar</div></div>
+          <label class="toggle"><input type="checkbox" id="sync-auto"><span></span></label>
+        </div>
+        <div class="row" data-k="sincronizar copiar ahora ultima tamaño">
+          <div class="txt"><div class="name" data-t="Copiar ahora">Copiar ahora</div><div class="desc" id="sync-last">—</div></div>
+          <span class="badge" id="sync-status"></span>
+          <button data-sync="now" data-t="Copiar ahora">Copiar ahora</button>
+        </div>
+      </div>
+      <h3 class="sub" data-t="Restaurar">Restaurar</h3>
+      <div class="card">
+        <div class="row col" data-k="restaurar copia recuperar contraseña">
+          <div class="txt"><div class="name" data-t="¿Tienes una copia de Pluma?">¿Tienes una copia de Pluma?</div><div class="desc" data-t="Elige el fichero de copia y escribe su contraseña. Se guarda aparte lo que haya ahora.">Elige el fichero de copia y escribe su contraseña. Se guarda aparte lo que haya ahora.</div></div>
+          <div><button data-sync="pickRestore" data-t="Elegir copia">Elegir copia</button></div>
+          <div id="sync-restore-box" class="off" style="width:100%">
+            <div class="desc" id="sync-restore-info" style="margin:6px 0"></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <input id="sync-restore-pw" type="password" data-tp="Contraseña de la copia" placeholder="Contraseña de la copia" autocomplete="off" style="height:32px;border-radius:6px;border:1px solid var(--line);background:var(--field);color:var(--text);padding:0 10px">
+              <button class="primary" data-sync="restore" data-t="Restaurar">Restaurar</button>
+            </div>
+            <div class="desc" id="sync-restore-msg" style="margin-top:6px"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -462,7 +527,41 @@ function render() {
     r.append(n, b); $('lectura-card').append(r);
   }
   renderSound();
+  renderSync();
 }
+// ---- sync / backup
+let restorePath = '';
+function renderSync() {
+  const s = S.sync; if (!s) return;
+  $('sync-dest').value = s.dest;
+  $('sync-folder-row').classList.toggle('off', s.dest !== 'carpeta');
+  $('sync-account-row').classList.toggle('off', !(s.dest === 'gdrive' || s.dest === 'onedrive' || s.dest === 'dropbox'));
+  $('sync-folder-path').textContent = s.folder || tr('Sin elegir');
+  $('sync-account').textContent = s.account || tr('Sin conectar');
+  $('sync-connect').textContent = s.account ? tr('Volver a conectar') : tr('Conectar');
+  $('sync-disconnect').classList.toggle('off', !s.account);
+  $('sync-auto').checked = s.auto;
+  $('sync-pw-clear').classList.toggle('off', !s.hasPassword);
+  if (s.hasPassword && !$('sync-pw').value) $('sync-pw').placeholder = '••••••••';
+  $('sync-hint').value = $('sync-hint').value || s.hint || '';
+  $('sync-status').textContent = s.status || '';
+  const kb = s.size > 0 ? ' · ' + (s.size < 1048576 ? Math.round(s.size / 1024) + ' KB' : (s.size / 1048576).toFixed(1) + ' MB') : '';
+  $('sync-last').textContent = s.last ? tr('Última copia') + ': ' + s.last + kb : tr('Todavía no hay ninguna copia');
+}
+const sync = o => W && W.postMessage(Object.assign({ op: 'sync' }, o));
+$('sync-dest').onchange = e => { sync({ cmd: 'dest', value: e.target.value }); };
+$('sync-auto').onchange = e => sync({ cmd: 'auto', on: e.target.checked });
+$('sync-connect').onclick = () => sync({ cmd: 'connect', provider: S.sync.dest });
+$('sync-disconnect').onclick = () => sync({ cmd: 'disconnect' });
+document.querySelectorAll('[data-sync]').forEach(b => b.addEventListener('click', () => {
+  const c = b.dataset.sync;
+  if (c === 'password') { const pw = $('sync-pw').value; if (!pw) return; sync({ cmd: 'password', pw, hint: $('sync-hint').value }); $('sync-pw').value = ''; }
+  else if (c === 'clearpw') sync({ cmd: 'password', pw: '', hint: '' });
+  else if (c === 'folder') sync({ cmd: 'folder' });
+  else if (c === 'now') sync({ cmd: 'now' });
+  else if (c === 'pickRestore') sync({ cmd: 'pickRestore' });
+  else if (c === 'restore') { const pw = $('sync-restore-pw').value; if (!pw || !restorePath) return; $('sync-restore-msg').textContent = tr('Restaurando...'); sync({ cmd: 'restore', path: restorePath, password: pw }); }
+}));
 // ---- the sound block: a preset fills the sliders with what it does; moving one makes it the person's own
 const FREQ = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
 let dragged = null, sendTimer = 0, sentAt = 0;
@@ -555,12 +654,33 @@ function ask() {
   document.querySelectorAll('[data-tp]').forEach(e => all.add(e.dataset.tp));
   ['La de Windows', '1 activa', ' activas', '1 activo', ' activos', 'Pluma es tu navegador predeterminado', 'Pluma no es tu navegador predeterminado',
    'Falta el motor de vídeo de Pluma (motor-video)', 'Esta ventana', 'Abierto', 'Abrir', 'Quitar', 'Cancelar', 'Quitar el perfil', 'Normal',
-   'Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.'].forEach(s => all.add(s));
+   'Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.',
+   'Sin elegir', 'Sin conectar', 'Conectar', 'Volver a conectar', 'Última copia', 'Todavía no hay ninguna copia',
+   'Copia del', 'Pista', 'Ese fichero no es una copia de Pluma.', 'Restaurando...', 'Contraseña incorrecta.',
+   'La copia está dañada.', 'No se pudo restaurar.'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {
   const m = e.data;
-  if (!m || m.op !== 'state') return;
+  if (!m) return;
+  if (m.op === 'restoreInfo') {
+    restorePath = m.path;
+    $('sync-restore-box').classList.remove('off');
+    $('sync-restore-msg').textContent = '';
+    if (m.info && m.info.ok) {
+      let t = tr('Copia del') + ' ' + (m.info.when || '?');
+      if (m.info.equipo) t += ' · ' + m.info.equipo;
+      if (m.info.hint) t += ' · ' + tr('Pista') + ': ' + m.info.hint;
+      $('sync-restore-info').textContent = t;
+    } else $('sync-restore-info').textContent = tr('Ese fichero no es una copia de Pluma.');
+    return;
+  }
+  if (m.op === 'restoreResult') {
+    const msg = { 1: tr('Contraseña incorrecta.'), 2: tr('La copia está dañada.'), 3: tr('Ese fichero no es una copia de Pluma.'), 4: tr('No se pudo restaurar.') };
+    $('sync-restore-msg').textContent = m.code === 0 ? tr('Restaurando...') : (msg[m.code] || '');
+    return;
+  }
+  if (m.op !== 'state') return;
   if (m.t) { texts = m.t; translate(); }
   S = m; render(); filter(); mark();
 });

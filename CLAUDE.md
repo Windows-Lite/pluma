@@ -311,6 +311,29 @@ Plan aprobado el 26/10 (las webs que más visita: YouTube Music 1.590 visitas en
 - Sin teclas multimedia (el reproductor de Pluma no las tiene). Pruebas: `node tools\music-test.js`
   (respuestas en `tools\ytm-respuestas`); medidas con `node tools\lite-medir.js <puerto> <url> [cold]`.
 
+## Sincronizar (`src/sync.cpp`, `src/backup.h`, `src/monocypher/`)
+Pedido el 26/10: «sincronizar todo por si el día de mañana reinstalamos Windows ... con contraseñas y todo»; destino
+elegido: «google drive mismo de la propia cuenta ... o onedrive o dropbox».
+- Una copia cifrada de todos los perfiles: ficheros de Pluma (`pluma_files`, `pluma_dirs`, `perfiles\`) y, en cada perfil
+  del motor (`Default`, `WV2Profile_pluma-<id>`), ajustes de extensiones, contraseñas (`Login Data`) y cookies
+  (`Network\Cookies`). Llave de la contraseña con Argon2id (Monocypher, 64 MB, 3 pasadas), AES-256-GCM, cabecera
+  autenticada; `bk::allowed_target` es la lista blanca de lo que una restauración puede escribir.
+- Contraseñas y cookies van cifradas con la llave del motor (`Local State`, os_crypt, DPAPI de esta cuenta: en un Windows
+  nuevo no se abre). La copia lleva esa llave (`meta/clave`) sellada con la contraseña de la copia y la restauración la
+  vuelve a proteger con DPAPI para la cuenta nueva (`engine_key_put`); mientras espera al reinicio, también con DPAPI.
+- El motor tiene las cookies bloqueadas mientras corre (ni leerlas se puede): cada arranque copia las bases del perfil
+  a `sync-motor\` antes de abrir el motor y la copia usa eso si el fichero vivo no se lee. Las cookies de la copia son
+  las del último arranque.
+- Un solo trabajador (en el proceso del perfil por defecto): cada hora si cambió el contenido y al cerrar; guarda las 5
+  últimas. Restaurar: se prepara en `restore-pending\`, Pluma se reinicia y lo aplica antes de abrir el motor; lo que
+  había va a `antes-de-restaurar-<fecha>`. Contraseña mal: no se toca nada.
+- Destinos: una carpeta (funciona), Google Drive appData, OneDrive App Folder, Dropbox App folder (OAuth con PKCE y
+  `state`, vuelta a `http://127.0.0.1:47615/`; los client ID, vacíos hasta registrar las apps, en `sync.cpp` o en
+  `ajustes.ini` `[sync]`).
+- Pruebas: `tools\sync-test.cpp` (vector de Argon2id, ida y vuelta, contraseña mal, copia alterada, nombres no
+  permitidos). Instancias de prueba: `PLUMA_SYNC_CARPETA` y `PLUMA_SYNC_FICHERO` saltan los diálogos,
+  `PLUMA_SYNC_PRIMERA=1` enseña la oferta de restaurar.
+
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en
   `paginas.tsv` (url, título). En cuanto hay una, salen solo las suyas. Sin ninguna, «Lo que más visitas» (se puede

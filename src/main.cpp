@@ -581,6 +581,7 @@ static void hide_window() {
     ShowWindow(g_win, SW_HIDE);
     tabs_on_hide();
     update_on_hide();
+    if (!g_incognito) sync_on_close();   // back up now if due (the session and history are already saved)
 }
 static void open_urls(const std::vector<std::wstring> &urls) {
     if (!g_env_ready) { for (auto &u : urls) g_waiting_urls.push_back(u); show_window(); return; }
@@ -601,6 +602,7 @@ static void quit_now() {
     if (IsWindowVisible(g_win)) { save_placement(); session_save(); }
     history_flush();
     update_on_quit();
+    if (!g_incognito) sync_on_close();   // a last backup if due; wWinMain waits for it before leaving
     SetTimer(g_win, kTimerQuit, 150, NULL);
 }
 
@@ -894,6 +896,7 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_state = std::wstring(local ? local : L".") + L"\\Pluma" + (state_suffix.empty() ? L"" : L"\\prueba" + state_suffix);
     CoTaskMemFree(local);
     SHCreateDirectoryExW(NULL, g_state.c_str(), NULL);
+    bool restored = !g_incognito && sync_apply_restore();   // a staged restore: the old data aside, the new in, before anything is read
     if (!g_profile_id.empty()) {
         bool known = false;
         for (auto &p : profiles_list()) if (p.id == g_profile_id) known = true;
@@ -901,11 +904,13 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     }
     g_data = profile_data_dir(g_profile_id);
     SHCreateDirectoryExW(NULL, g_data.c_str(), NULL);
+    if (!g_incognito) sync_snapshot_engine();   // the engine has not opened its cookies yet: the backup reads this copy
     wchar_t port[16] = L"";
     if (GetEnvironmentVariableW(L"PLUMA_DEPURAR", port, 16) > 0) g_dev = true;
     BOOL anim = TRUE;
     SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0);
     g_motion = anim != FALSE;
+    bool first_run = !restored && !PathFileExistsW((g_state + L"\\ajustes.ini").c_str());   // before settings_load: offer to restore
     settings_load();
     // a link from another app, with nothing in memory: it goes to the profile used last (as in Edge)
     std::vector<std::wstring> for_profile;
@@ -946,6 +951,10 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     bookmarks_load();
     scripts_load();
     passwords_apply_pending();   // imported passwords waiting from last time: in before the engine opens Login Data
+    if (!g_incognito && g_profile_id.empty()) sync_init();   // one worker, in the default profile's process: it backs up every profile   // the backup worker (hourly if changed, and on close)
+    // first time: offer to bring a backup back (test instances only with PLUMA_SYNC_PRIMERA=1)
+    if (first_run && !g_incognito && !g_start_hidden && (!g_test || GetEnvironmentVariableW(L"PLUMA_SYNC_PRIMERA", NULL, 0) > 0))
+        ui_notice(T(L"¿Tienes una copia de Pluma? Puedes restaurarla."), T(L"Restaurar"), [] { settings_open_sync(); }, 0);
     ext_settings_apply_pending();   // and imported extensions' settings
     env_create([] {
         g_env_ready = true;
@@ -962,5 +971,6 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     // everything is saved by now: leave at once. Tearing the engine down politely made quitting take seconds, and a
     // Pluma opened meanwhile could find this one still there; the engine closes itself when its host is gone
     if (mutex) CloseHandle(mutex);
+    if (!g_incognito) { sync_wait_idle(8000); sync_shutdown(); }   // let a backup in progress finish before leaving
     ExitProcess((UINT)m.wParam);
 }
