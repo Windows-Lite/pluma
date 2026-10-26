@@ -1,14 +1,29 @@
 // Pluma: checks the backup file (src/backup.h): the one place where a slip loses someone's passwords, or lets a
 // crafted file write outside Pluma's folder on restore.
 //   cl /nologo /std:c++17 /EHsc /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX tools\sync-test.cpp src\monocypher\monocypher.c bcrypt.lib cabinet.lib
-//   sync-test.exe
+//   sync-test.exe                      the checks
+//   sync-test.exe <file> <password>    opens a backup (tools\sync\nube.ps1: what reached the fake cloud): its entry count
 #include "../src/backup.h"
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 
 static int fails = 0;
 static void check(bool ok, const char *what) { if (!ok) { fails++; printf("FALLA: %s\n", what); } }
 
-int main() {
+static int open_file(const char *path, const char *password) {
+    std::ifstream f(path, std::ios::binary);
+    std::string file((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    bk::Header h;
+    uint8_t key[32];
+    std::vector<bk::Entry> out;
+    if (!bk::read_header(file, h) || !bk::derive(password, h.kdf, key) || bk::open(file, h, key, out) != bk::OPEN_OK) { printf("no abre\n"); return 1; }
+    printf("abre: %zu entradas\n", out.size());
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 3) return open_file(argv[1], argv[2]);
     // 1. Argon2id as RFC 9106 (5.3): Monocypher as vendored gives the reference tag
     {
         uint8_t pass[32], salt[16], secret[8], ad[12], tag[32];

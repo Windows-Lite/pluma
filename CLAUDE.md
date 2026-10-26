@@ -440,32 +440,53 @@ info: contraseñas, historial, cookies, etc. etc., todo del navegador», y todo 
 - Un solo trabajador (en el proceso del perfil por defecto): cada hora si cambió algo (huella de nombres, tamaños y
   horas; el contenido solo de los ficheros pequeños de Pluma), al cerrar la ventana como mucho cada 10 minutos y al
   salir del todo siempre (Pluma espera hasta 2 min a que acabe, ya sin ventana ni mutex); guarda las 5 últimas.
-  Restaurar: se prepara en `restore-pending\` (dentro de la carpeta de Pluma) y Pluma se reinicia y lo aplica antes de
-  abrir el motor: cada perfil del motor de la copia sustituye entero al que había (que va, cachés incluidas, a
-  `antes-de-restaurar-<fecha>`, igual que los ficheros de Pluma). Una copia de antes (sin `Preferences`) solo pone lo
-  que traía (`engine_paths_v1`) y deja el resto (sin probar de punta a punta; `APLICAR` lleva el formato). Contraseña mal: no se toca nada.
+- Volumen (26/10; antes eran unos 62 MB por cada hora de uso, porque cookies e historial cambian siempre): hay dos
+  huellas, la de todo y la de lo importante (`important()`: contraseñas, extensiones y su estado, `Secure Preferences`,
+  y los ficheros de Pluma salvo `sesion.tsv`, `historial.tsv` e `iconos\`). Si solo cambió lo demás (cookies, sesiones,
+  historial, datos de webs, `Preferences`, `Web Data`) y la última copia tiene menos de 6 h (`cuando_s` en
+  `sync-estado.json`), la de cada hora y la de cerrar la ventana esperan; salir de Pluma y «Copiar ahora» copian
+  siempre. `Web Data` (autorrelleno, tarjetas, direcciones) va con lo que cambia solo: medido el 26/10, 4 min navegando
+  por 6 webs sin rellenar nada lo reescriben (palabras clave, autocompletado) y es lo único de lo importante que cambió
+  (32 ficheros). Sin probar en un perfil de verdad cuántas copias ahorra.
+- Restaurar: se comprueba la contraseña y la copia, y `restore-pending\` (dentro de la carpeta de Pluma) recibe solo el
+  fichero tal cual, cifrado (`copia.plumabk`), su llave protegida con DPAPI (`llave.bin`) y `APLICAR` (el formato).
+  Pluma se reinicia y, antes de abrir el motor, lo abre, saca los ficheros a `restore-pendingiles` solo para moverlos
+  (mismo disco) y borra `restore-pending\` pase lo que pase: nada de la copia se queda en claro. Si no se puede abrir,
+  no se toca nada y el registro solo dice «no se pudo aplicar». Cada perfil del motor de la copia sustituye entero al
+  que había; lo de antes (perfiles y ficheros de Pluma) va a `antes-de-restaurar-<fecha>` sin las cachés (las mismas
+  listas que la copia: `prune_regenerable`) y se quedan las 2 últimas (Configuración lo dice al restaurar). Una copia
+  de antes (sin `Preferences`) solo pone lo que traía (`engine_paths_v1`) y deja el resto (sin probar de punta a
+  punta). Contraseña mal: no se toca nada.
 - Destinos: una carpeta (funciona), Google Drive appData, OneDrive App Folder, Dropbox App folder (OAuth con PKCE y
   `state`, vuelta a `http://127.0.0.1:47615/`). Google Drive: cliente «App de escritorio» del proyecto «Pluma» de la
   cuenta del usuario (solo `drive.appdata`); su ID y secreto en los secretos del repo (`GOOGLE_CLIENT_ID`,
   `GOOGLE_CLIENT_SECRET`) y release.yml los escribe en `src/secrets.h` (fuera de git) antes de compilar; una build
   local va sin ellos salvo que se cree ese fichero o se pongan en `ajustes.ini` `[sync]`. OneDrive y Dropbox, vacíos.
-  Google Drive sube en una sola petición multipart (unos 62 MB con su perfil; Google la documenta para hasta 5 MB y
-  pide la subida reanudable para más: si falla con copias grandes, ese es el cambio); Dropbox, si un día se activa,
-  no pasa de 150 MB por petición. Volumen: la huella cambia casi cada hora que se navega, así que son unos 62 MB por
-  hora de uso, más al cerrar la ventana (como mucho cada 10 min) y al salir.
+- Subidas por piezas, cada una reintentada (esperas de 1, 2, 4, 8, 16 s) y, tras una cortada, siguiendo desde lo que el
+  servicio dice que tiene, nunca desde 0. Google Drive, siempre reanudable
+  (https://developers.google.com/workspace/drive/api/guides/manage-uploads#resumable): sesión, piezas de 8 MB
+  (múltiplo de 256 KB), 308 + `Range`, tras un corte `Content-Range: bytes */total`; sesión caducada (404/410), otra
+  una vez. OneDrive: hasta 4 MB un PUT; más, sesión de subida
+  (https://learn.microsoft.com/graph/api/driveitem-createuploadsession) con piezas de 10 MB (múltiplo de 320 KB),
+  `nextExpectedRanges` y un GET de la sesión tras un corte (su URL va sin token). Dropbox: hasta 8 MB `upload`; más,
+  `upload_session` start/append_v2/finish con el offset, y un `incorrect_offset` dice dónde seguir. OJO: WinHTTP toma
+  el 308 de Drive por una redirección (sin `Location`) y falla: las peticiones que no son GET van sin redirecciones.
 - Pruebas: `tools\sync-test.cpp` (vector de Argon2id, ida y vuelta en formato 1 y 2, contraseña mal, copia alterada,
-  bloques con longitudes que mienten, nombres no permitidos: cachés, `..`, fuera de un perfil). De punta a punta:
-  `tools\sync\prueba.ps1 [-GrandeMB 100]` en la sesión interactiva con `PLUMA_EXE` (un sitio local, `servidor.js`, que
-  inicia sesión con cookie persistente HttpOnly, localStorage e IndexedDB, y una extensión con `chrome.storage`; copia a
-  una carpeta, comprueba que la copia no contiene la marca, el sitio ni nombres de ficheros, en UTF-8 ni UTF-16, cuando
-  el perfil sí; y restaura en una instancia limpia, que vuelve con la sesión iniciada y la extensión con lo suyo).
+  bloques con longitudes que mienten, nombres no permitidos: cachés, `..`, fuera de un perfil; `sync-test.exe <fichero>
+  <contraseña>` abre una copia). De punta a punta, en la sesión interactiva con `PLUMA_EXE`:
+  `tools\sync\prueba.ps1 [-GrandeMB 100]` (un sitio local, `servidor.js`, que inicia sesión con cookie persistente
+  HttpOnly, localStorage e IndexedDB, y una extensión con `chrome.storage`; copia a una carpeta, comprueba que la copia
+  no contiene la marca, el sitio ni nombres de ficheros, en UTF-8 ni UTF-16, cuando el perfil sí; restaura en una
+  instancia limpia, que vuelve con la sesión iniciada y la extensión con lo suyo, deja 2 `antes-de-restaurar-*` de 4 y
+  ninguno con caché; y una restauración que no abre se borra, lo dice el registro y el perfil sigue igual) y
+  `tools\sync\nube.ps1` (con `sync-test.exe` junto a `PLUMA_EXE`): `nube-falsa.js` hace de Google Drive, OneDrive y
+  Dropbox con sus reglas (inicio de sesión, cuenta, lista, borrar, piezas) y corta la segunda pieza de cada subida; 30 MB
+  que no se comprimen, una copia a cada uno, cada una sigue tras el corte y lo subido abre con la contraseña.
   Instancias de prueba: `PLUMA_SYNC_CARPETA` y `PLUMA_SYNC_FICHERO` saltan los diálogos, `PLUMA_SYNC_PRIMERA=1` enseña la
-  oferta de restaurar.
-- Sin probar aquí (un solo Windows): que `Secure Preferences` sobreviva en otro equipo (sus firmas llevan el id de la
-  máquina: el motor puede reponer los ajustes protegidos) y la subida a Google Drive de una copia grande.
-- `antes-de-restaurar-<fecha>` guarda ahora el perfil del motor entero de antes, caché incluida (hasta ~600 MB en el
-  suyo), y nada lo borra. Si una restauración falla a medias, `restore-pending\` se queda (descifrado, dentro de la
-  carpeta de Pluma) para mirarlo.
+  oferta de restaurar, `PLUMA_SYNC_NUBE_PRUEBA=http://127.0.0.1:<puerto>` manda toda llamada a la nube a la falsa.
+- Sin probar aquí (un solo Windows y sin cuentas de verdad): que `Secure Preferences` sobreviva en otro equipo (sus
+  firmas llevan el id de la máquina: el motor puede reponer los ajustes protegidos) y las subidas contra los servicios
+  de verdad (solo contra la falsa, que sigue su documentación).
 
 ## Pestaña nueva
 - «Tus páginas»: las que el usuario añade con la estrella al final de la barra de direcciones (o Ctrl+D), en

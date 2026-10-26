@@ -55,6 +55,8 @@ struct SyncConfig {
     std::wstring last_iso;    // when the last backup finished
     long long last_size = 0;  // its size in bytes
     std::wstring signature;   // the last backed-up content's signature (to skip when nothing changed)
+    std::wstring sig_important;   // ... of its important part (passwords, bookmarks, settings, extensions)
+    long long last_epoch = 0;     // when the last backup was written (Unix seconds)
 };
 static SyncConfig g_cfg;
 static std::mutex g_cfg_mtx;
@@ -150,6 +152,8 @@ static void config_load() {
     g_cfg.last_iso = j[L"ultima"].s;
     g_cfg.last_size = (long long)j[L"tam"].n;
     g_cfg.signature = j[L"firma"].s;
+    g_cfg.sig_important = j[L"firma_importante"].s;
+    g_cfg.last_epoch = (long long)j[L"cuando_s"].n;
 }
 static void config_save_locked() {
     std::wstring o = L"{";
@@ -161,6 +165,8 @@ static void config_save_locked() {
     o += L",\"ultima\":" + json_escape(g_cfg.last_iso);
     o += L",\"tam\":" + std::to_wstring(g_cfg.last_size);
     o += L",\"firma\":" + json_escape(g_cfg.signature);
+    o += L",\"firma_importante\":" + json_escape(g_cfg.sig_important);
+    o += L",\"cuando_s\":" + std::to_wstring(g_cfg.last_epoch);
     o += L"}";
     write_file(estado_file(), utf8(o));
 }
@@ -335,33 +341,57 @@ static std::vector<Unit> list_units() {
         list_dir(engine_base() + L"\\" + wide(prof), "motor/" + prof, "", prof, true, out);
     return out;
 }
-// what the backup would hold, in one hash: the contents of Pluma's own small files (quitting rewrites the session
-// with the same bytes), and the names, sizes and times of everything else (reading the whole profile every hour to
-// find nothing changed would cost more than it saves)
-static std::string fingerprint(const std::vector<Unit> &units) {
-    BCRYPT_ALG_HANDLE alg = NULL; BCRYPT_HASH_HANDLE hh = NULL; BYTE dg[32] = {};
+// what changes on its own all the time while browsing (cookies, history, sessions, site data, the engine's own
+// preferences) against what the person changes on purpose: passwords, autofill, bookmarks, settings, scripts,
+// extensions. The hourly backup waits up to 6 h for the first kind alone (upload volume); quitting never waits.
+static bool important(const std::string &name) {
+    if (name.compare(0, 6, "pluma/") == 0) {
+        std::string leaf = name.substr(name.find_last_of('/') + 1);
+        return leaf != "sesion.tsv" && leaf != "historial.tsv" && name.compare(0, 13, "pluma/iconos/") != 0;
+    }
+    if (name.compare(0, 6, "motor/") != 0) return true;
+    size_t cut = name.find('/', 6);
+    if (cut == std::string::npos) return true;
+    std::string r = name.substr(cut + 1), top = r.substr(0, r.find('/'));
+    if (top == r) top = db_base(top);
+    // (not Web Data: plain browsing rewrites it, its keywords and autocomplete, measured 26/10; its cards and addresses
+    // wait up to 6 h like the rest, and quitting always backs up)
+    static const char *const keep[] = { "Login Data", "Login Data For Account", "Extensions", "Local Extension Settings",
+                                        "Sync Extension Settings", "Managed Extension Settings", "Extension State", "Extension Rules",
+                                        "Extension Scripts", "Secure Preferences" };
+    for (auto *k : keep) if (top == k) return true;
+    return false;
+}
+// what the backup would hold, in two hashes (all of it, and the important part): the contents of Pluma's own small
+// files (quitting rewrites the session with the same bytes), and the names, sizes and times of everything else
+// (reading the whole profile every hour to find nothing changed would cost more than it saves)
+static void fingerprint(const std::vector<Unit> &units, std::string &all, std::string &imp) {
+    BCRYPT_ALG_HANDLE alg = NULL; BCRYPT_HASH_HANDLE h[2] = {}; BYTE dg[2][32] = {};
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) == 0) {
-        if (BCryptCreateHash(alg, &hh, NULL, 0, NULL, 0, 0) == 0) {
+        if (BCryptCreateHash(alg, &h[0], NULL, 0, NULL, 0, 0) == 0 && BCryptCreateHash(alg, &h[1], NULL, 0, NULL, 0, 0) == 0) {
             for (auto &u : units)
                 for (auto &f : u.files) {
-                    BCryptHashData(hh, (PUCHAR)f.name.data(), (ULONG)f.name.size() + 1, 0);   // with its NUL, so names can't run into data
+                    std::string piece = f.name;
+                    piece += '\0';   // so names can't run into data
                     bool small_own = f.name.compare(0, 6, "pluma/") == 0 && f.name.find('/', 6) == std::string::npos;
                     std::string data;
                     if (small_own && read_file(f.live, data)) {
-                        std::string d = sha256_raw(data);
+                        piece += sha256_raw(data);
                         bk::wipe(data);
-                        BCryptHashData(hh, (PUCHAR)d.data(), (ULONG)d.size(), 0);
                     } else {
-                        BCryptHashData(hh, (PUCHAR)&f.size, sizeof(f.size), 0);
-                        BCryptHashData(hh, (PUCHAR)&f.time, sizeof(f.time), 0);
+                        piece.append((const char *)&f.size, sizeof(f.size));
+                        piece.append((const char *)&f.time, sizeof(f.time));
                     }
+                    BCryptHashData(h[0], (PUCHAR)piece.data(), (ULONG)piece.size(), 0);
+                    if (important(f.name)) BCryptHashData(h[1], (PUCHAR)piece.data(), (ULONG)piece.size(), 0);
                 }
-            BCryptFinishHash(hh, dg, 32, 0);
-            BCryptDestroyHash(hh);
+            for (int i = 0; i < 2; i++) BCryptFinishHash(h[i], dg[i], 32, 0);
         }
+        for (int i = 0; i < 2; i++) if (h[i]) BCryptDestroyHash(h[i]);
         BCryptCloseAlgorithmProvider(alg, 0);
     }
-    return bk::hex(std::string((char *)dg, 32));
+    all = bk::hex(std::string((char *)dg[0], 32));
+    imp = bk::hex(std::string((char *)dg[1], 32));
 }
 static const unsigned long long kMaxFile = 256ull << 20;   // a bigger single file is not browser data we can carry
 static bool read_handle(HANDLE f, unsigned long long size, std::string &out) {
@@ -453,10 +483,20 @@ void sync_snapshot_engine() {
                          std::to_wstring((int)(now_ms() - t0)) + L" ms");
 }
 
-// ---------------------------------------------------------------- WinHTTP (one request, returns status and body)
-static bool http(const std::wstring &method, const std::wstring &url, const std::wstring &headers,
-                 const std::string &body, DWORD &status, std::string &resp) {
+// ---------------------------------------------------------------- WinHTTP (one request: status, body, headers)
+// tests: PLUMA_SYNC_NUBE_PRUEBA=http://127.0.0.1:<port> (test instances only) sends every cloud call to a local fake
+// (tools\sync\nube-falsa.js): "https://host/path" becomes "<base>/host/path"
+static std::wstring g_fake_cloud;
+static std::wstring api(const std::wstring &url) {
+    if (g_fake_cloud.empty() || url.compare(0, 8, L"https://") != 0) return url;
+    return g_fake_cloud + L"/" + url.substr(8);
+}
+// false = no answer at all (no connection, dropped, timed out); else status, body and the raw headers
+static bool http_raw(const std::wstring &method, const std::wstring &url_in, const std::wstring &headers, const char *body,
+                     size_t body_n, DWORD &status, std::string &resp, std::wstring *resp_headers = nullptr, int timeout_ms = 30000) {
     status = 0; resp.clear();
+    if (resp_headers) resp_headers->clear();
+    std::wstring url = api(url_in);
     URL_COMPONENTS uc{ sizeof(uc) };
     wchar_t host[256] = L"", path[8192] = L"", extra[8192] = L"";
     uc.lpszHostName = host; uc.dwHostNameLength = 256;
@@ -466,25 +506,38 @@ static bool http(const std::wstring &method, const std::wstring &url, const std:
     std::wstring object = std::wstring(path) + extra;   // path plus ?query
     HINTERNET s = WinHttpOpen(L"Pluma", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) return false;
+    WinHttpSetTimeouts(s, 10000, 15000, timeout_ms, timeout_ms);
     bool ok = false;
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
     if (c) {
         DWORD flags = uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
         HINTERNET r = WinHttpOpenRequest(c, method.c_str(), object.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         if (r) {
+            // Drive answers a piece with 308 "Resume Incomplete" (no Location): WinHTTP would take it for a redirect
+            // and fail. Only a GET follows redirects (the test sign-in goes back to the loopback that way)
+            if (method != L"GET") { DWORD off = WINHTTP_DISABLE_REDIRECTS; WinHttpSetOption(r, WINHTTP_OPTION_DISABLE_FEATURE, &off, sizeof(off)); }
             if (WinHttpSendRequest(r, headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(), headers.empty() ? 0 : (DWORD)-1L,
-                                   body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data(), (DWORD)body.size(), (DWORD)body.size(), 0) &&
+                                   body_n ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA, (DWORD)body_n, (DWORD)body_n, 0) &&
                 WinHttpReceiveResponse(r, NULL)) {
                 DWORD code = 0, len = sizeof(code);
                 WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &code, &len, NULL);
                 status = code;
+                if (resp_headers) {
+                    DWORD hl = 0;
+                    WinHttpQueryHeaders(r, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, NULL, &hl, WINHTTP_NO_HEADER_INDEX);
+                    if (hl) {
+                        std::wstring h(hl / sizeof(wchar_t) + 1, 0);
+                        if (WinHttpQueryHeaders(r, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, &h[0], &hl, WINHTTP_NO_HEADER_INDEX))
+                            resp_headers->assign(h.c_str());
+                    }
+                }
                 DWORD avail = 0;
+                ok = true;
                 while (WinHttpQueryDataAvailable(r, &avail) && avail) {
                     std::string chunk(avail, 0); DWORD got = 0;
-                    if (!WinHttpReadData(r, &chunk[0], avail, &got)) break;
+                    if (!WinHttpReadData(r, &chunk[0], avail, &got)) { ok = false; break; }
                     resp.append(chunk.data(), got);
                 }
-                ok = true;
             }
             WinHttpCloseHandle(r);
         }
@@ -493,7 +546,27 @@ static bool http(const std::wstring &method, const std::wstring &url, const std:
     WinHttpCloseHandle(s);
     return ok;
 }
+static bool http(const std::wstring &method, const std::wstring &url, const std::wstring &headers,
+                 const std::string &body, DWORD &status, std::string &resp) {
+    return http_raw(method, url, headers, body.data(), body.size(), status, resp);
+}
 static std::wstring json_str(const std::string &body, const wchar_t *key) { return json_parse(wide(body))[key].s; }
+// one response header's value (names are case-insensitive)
+static std::wstring header_value(const std::wstring &raw, const std::wstring &name) {
+    size_t a = 0;
+    while (a < raw.size()) {
+        size_t e = raw.find(L"\r\n", a);
+        std::wstring line = raw.substr(a, e == std::wstring::npos ? std::wstring::npos : e - a);
+        size_t colon = line.find(L':');
+        if (colon != std::wstring::npos && _wcsicmp(line.substr(0, colon).c_str(), name.c_str()) == 0) {
+            size_t v = line.find_first_not_of(L' ', colon + 1);
+            return v == std::wstring::npos ? L"" : line.substr(v);
+        }
+        if (e == std::wstring::npos) break;
+        a = e + 2;
+    }
+    return L"";
+}
 
 // ---------------------------------------------------------------- provider table
 struct Provider { const wchar_t *id, *name, *auth, *token, *scope; };
@@ -587,50 +660,195 @@ static bool cloud_delete(const std::wstring &dest, const std::wstring &at, const
     if (dest == L"dropbox") { http(L"POST", L"https://api.dropboxapi.com/2/files/delete_v2", auth + L"Content-Type: application/json\r\n", utf8(L"{\"path\":" + json_escape(r.id) + L"}"), st, resp); return st == 200; }
     return false;
 }
-static bool onedrive_big(const std::wstring &at, const std::wstring &name, const std::string &data);
-static bool cloud_upload(const std::wstring &dest, const std::wstring &at, const std::wstring &name, const std::string &data) {
-    DWORD st = 0; std::string resp;
+// The whole browser is tens of MB: every provider gets it in pieces, each piece retried, and after a dropped one the
+// upload goes on from what the provider says it has (never from the start). Waits between tries: 1, 2, 4, 8, 16 s.
+static const int kTries = 6;
+static void backoff(int fails) { Sleep(1000u << (std::min)(fails - 1, 4)); }
+static std::wstring content_range(size_t a, size_t n, size_t total) {
+    wchar_t r[128];
+    swprintf_s(r, L"Content-Range: bytes %zu-%zu/%zu\r\n", a, a + n - 1, total);
+    return r;
+}
+// Google Drive, resumable upload (https://developers.google.com/workspace/drive/api/guides/manage-uploads#resumable):
+// a session, then 8 MiB pieces (a multiple of 256 KiB, as Drive asks); 308 + Range says how much it has; after a
+// dropped piece, "bytes */total" asks it
+static size_t drive_has(const std::wstring &hd) {   // "Range: bytes=0-N" -> N + 1; none -> 0
+    std::wstring r = header_value(hd, L"Range");
+    size_t dash = r.find(L'-');
+    return dash == std::wstring::npos ? 0 : (size_t)_wtoi64(r.c_str() + dash + 1) + 1;
+}
+static bool gdrive_upload(const std::wstring &at, const std::wstring &name, const std::string &data) {
+    const size_t kPiece = (size_t)8 << 20, total = data.size();
     std::wstring auth = L"Authorization: Bearer " + at + L"\r\n";
-    if (dest == L"gdrive") {
-        std::string b = "--pbk\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n";
-        b += utf8(L"{\"name\":" + json_escape(name) + L",\"parents\":[\"appDataFolder\"]}");
-        b += "\r\n--pbk\r\nContent-Type: application/octet-stream\r\n\r\n" + data + "\r\n--pbk--\r\n";
-        http(L"POST", L"https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-             auth + L"Content-Type: multipart/related; boundary=pbk\r\n", b, st, resp);
-        return st == 200;
-    }
-    if (dest == L"onedrive") {
-        if (data.size() > 4 * 1024 * 1024) return onedrive_big(at, name, data);
-        http(L"PUT", L"https://graph.microsoft.com/v1.0/me/drive/special/approot:/" + url_encode(name) + L":/content",
-             auth + L"Content-Type: application/octet-stream\r\n", data, st, resp);
-        return st == 200 || st == 201;
-    }
-    if (dest == L"dropbox") {
-        std::wstring arg = L"{\"path\":\"/" + name + L"\",\"mode\":\"overwrite\",\"mute\":true}";
-        http(L"POST", L"https://content.dropboxapi.com/2/files/upload",
-             auth + L"Dropbox-API-Arg: " + arg + L"\r\nContent-Type: application/octet-stream\r\n", data, st, resp);
-        return st == 200;
+    std::string meta = utf8(L"{\"name\":" + json_escape(name) + L",\"parents\":[\"appDataFolder\"]}");
+    for (int session = 0; session < 2; session++) {   // a session that expires (404/410) starts over once
+        DWORD st = 0; std::string resp; std::wstring hd, loc;
+        for (int fails = 0; loc.empty() && fails < kTries; ) {
+            bool ok = http_raw(L"POST", L"https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+                               auth + L"Content-Type: application/json; charset=UTF-8\r\nX-Upload-Content-Type: application/octet-stream\r\n"
+                                      L"X-Upload-Content-Length: " + std::to_wstring(total) + L"\r\n",
+                               meta.data(), meta.size(), st, resp, &hd);
+            if (ok && st == 200) loc = header_value(hd, L"Location");
+            else if (ok && st >= 400 && st < 500 && st != 408 && st != 429) return false;
+            else backoff(++fails);
+        }
+        if (loc.empty()) return false;
+        size_t off = 0;
+        bool ask = false, restart = false;
+        for (int fails = 0; !restart;) {
+            bool ok;
+            if (ask) {   // after a drop: how much did it keep?
+                wchar_t r[96]; swprintf_s(r, L"Content-Range: bytes */%zu\r\n", total);
+                ok = http_raw(L"PUT", loc, auth + r, nullptr, 0, st, resp, &hd);
+            } else if (off >= total) {   // it has everything but did not say done: ask
+                if (++fails >= kTries) return false;
+                ask = true;
+                continue;
+            } else {
+                size_t n = (std::min)(kPiece, total - off);
+                ok = http_raw(L"PUT", loc, auth + content_range(off, n, total), data.data() + off, n, st, resp, &hd, 120000);
+            }
+            if (ok && (st == 200 || st == 201)) return true;
+            if (ok && st == 308) {
+                size_t has = drive_has(hd);
+                if (has > total) return false;
+                if (has > off || ask) fails = 0;   // progress
+                off = has; ask = false;
+                continue;
+            }
+            if (ok && (st == 404 || st == 410)) { restart = true; continue; }
+            if (ok && st >= 400 && st < 500 && st != 408 && st != 429) return false;
+            if (++fails >= kTries) return false;
+            backoff(fails);
+            ask = true;
+        }
     }
     return false;
 }
-// OneDrive over 4 MB: an upload session in 10 MB chunks (Graph's createUploadSession)
-static bool onedrive_big(const std::wstring &at, const std::wstring &name, const std::string &data) {
+// OneDrive, upload session (https://learn.microsoft.com/graph/api/driveitem-createuploadsession): 10 MiB pieces (a
+// multiple of 320 KiB); after a drop, a GET of the session says nextExpectedRanges. Up to 4 MB, one PUT.
+static bool onedrive_upload(const std::wstring &at, const std::wstring &name, const std::string &data) {
     DWORD st = 0; std::string resp;
     std::wstring auth = L"Authorization: Bearer " + at + L"\r\n";
-    http(L"POST", L"https://graph.microsoft.com/v1.0/me/drive/special/approot:/" + url_encode(name) + L":/createUploadSession",
-         auth + L"Content-Type: application/json\r\n", "{\"item\":{\"@microsoft.graph.conflictBehavior\":\"replace\"}}", st, resp);
-    if (st != 200) return false;
-    std::wstring url = json_str(resp, L"uploadUrl");
-    if (url.empty()) return false;
-    const size_t chunk = 10 * 1024 * 1024;
-    for (size_t off = 0; off < data.size(); off += chunk) {
-        size_t n = (std::min)(chunk, data.size() - off);
-        wchar_t range[128];
-        swprintf_s(range, L"Content-Range: bytes %zu-%zu/%zu\r\n", off, off + n - 1, data.size());
-        if (!http(L"PUT", url, range, data.substr(off, n), st, resp)) return false;
-        if (st != 202 && st != 200 && st != 201) return false;
+    const size_t total = data.size();
+    std::wstring item = L"https://graph.microsoft.com/v1.0/me/drive/special/approot:/" + url_encode(name);
+    if (total <= ((size_t)4 << 20)) {
+        for (int fails = 0; fails < kTries; backoff(++fails)) {
+            bool ok = http_raw(L"PUT", item + L":/content", auth + L"Content-Type: application/octet-stream\r\n", data.data(), total, st, resp, nullptr, 120000);
+            if (ok && (st == 200 || st == 201)) return true;
+            if (ok && st >= 400 && st < 500 && st != 408 && st != 429) return false;
+        }
+        return false;
     }
-    return true;
+    const size_t kPiece = (size_t)10 << 20;
+    for (int session = 0; session < 2; session++) {
+        std::wstring url;
+        for (int fails = 0; url.empty() && fails < kTries; ) {
+            bool ok = http(L"POST", item + L":/createUploadSession", auth + L"Content-Type: application/json\r\n",
+                           "{\"item\":{\"@microsoft.graph.conflictBehavior\":\"replace\"}}", st, resp);
+            if (ok && st == 200) url = json_str(resp, L"uploadUrl");
+            else if (ok && st >= 400 && st < 500 && st != 408 && st != 429) return false;
+            else backoff(++fails);
+        }
+        if (url.empty()) return false;
+        auto next = [](const std::string &body, size_t &off) {   // {"nextExpectedRanges":["N-"]}
+            Json j = json_parse(wide(body));
+            if (j[L"nextExpectedRanges"].arr.empty()) return false;
+            off = (size_t)_wtoi64(j[L"nextExpectedRanges"].arr[0].s.c_str());
+            return true;
+        };
+        size_t off = 0;
+        bool ask = false, restart = false;
+        for (int fails = 0; !restart;) {
+            bool ok;
+            // (the session's own URL takes no Authorization header)
+            if (ask) ok = http_raw(L"GET", url, L"", nullptr, 0, st, resp);
+            else if (off >= total) {
+                if (++fails >= kTries) return false;
+                ask = true;
+                continue;
+            } else {
+                size_t n = (std::min)(kPiece, total - off);
+                ok = http_raw(L"PUT", url, content_range(off, n, total), data.data() + off, n, st, resp, nullptr, 120000);
+            }
+            if (ok && !ask && (st == 200 || st == 201)) return true;
+            if (ok && (st == 202 || (ask && st == 200))) {
+                size_t has = 0;
+                if (!next(resp, has) || has > total) return false;
+                if (has > off || ask) fails = 0;
+                off = has; ask = false;
+                continue;
+            }
+            if (ok && st == 404) { restart = true; continue; }
+            if (ok && st == 416) { ask = true; continue; }   // a range it did not expect: ask where it is
+            if (ok && st >= 400 && st < 500 && st != 408 && st != 429) return false;
+            if (++fails >= kTries) return false;
+            backoff(fails);
+            ask = true;
+        }
+    }
+    return false;
+}
+// Dropbox, upload session (https://www.dropbox.com/developers/documentation/http/documentation#files-upload_session-start):
+// start, append_v2 and finish with the offset; a piece sent twice (its answer lost) gets incorrect_offset with the
+// right one. Up to 8 MiB, one upload (its limit is 150 MB).
+static bool dropbox_upload(const std::wstring &at, const std::wstring &name, const std::string &data) {
+    DWORD st = 0; std::string resp;
+    std::wstring auth = L"Authorization: Bearer " + at + L"\r\nContent-Type: application/octet-stream\r\n";
+    const size_t total = data.size(), kPiece = (size_t)8 << 20;
+    std::wstring commit = L"{\"path\":\"/" + name + L"\",\"mode\":\"overwrite\",\"mute\":true}";
+    auto bad = [&](bool ok) { return ok && st >= 400 && st < 500 && st != 408 && st != 409 && st != 429; };
+    if (total <= kPiece) {
+        for (int fails = 0; fails < kTries; backoff(++fails)) {
+            bool ok = http_raw(L"POST", L"https://content.dropboxapi.com/2/files/upload", auth + L"Dropbox-API-Arg: " + commit + L"\r\n",
+                               data.data(), total, st, resp, nullptr, 120000);
+            if (ok && st == 200) return true;
+            if (bad(ok)) return false;
+        }
+        return false;
+    }
+    std::wstring sid;
+    for (int fails = 0; sid.empty() && fails < kTries; ) {
+        bool ok = http_raw(L"POST", L"https://content.dropboxapi.com/2/files/upload_session/start", auth + L"Dropbox-API-Arg: {\"close\":false}\r\n",
+                           nullptr, 0, st, resp);
+        if (ok && st == 200) sid = json_str(resp, L"session_id");
+        else if (bad(ok)) return false;
+        else backoff(++fails);
+    }
+    if (sid.empty()) return false;
+    size_t off = 0;
+    for (int fails = 0;;) {
+        size_t n = (std::min)(kPiece, total - off);
+        bool last = off + n == total;
+        std::wstring cursor = L"{\"session_id\":" + json_escape(sid) + L",\"offset\":" + std::to_wstring(off) + L"}";
+        std::wstring arg = last ? L"{\"cursor\":" + cursor + L",\"commit\":" + commit + L"}" : L"{\"cursor\":" + cursor + L",\"close\":false}";
+        bool ok = http_raw(L"POST", last ? L"https://content.dropboxapi.com/2/files/upload_session/finish"
+                                         : L"https://content.dropboxapi.com/2/files/upload_session/append_v2",
+                           auth + L"Dropbox-API-Arg: " + arg + L"\r\n", data.data() + off, n, st, resp, nullptr, 120000);
+        if (ok && st == 200) {
+            if (last) return true;
+            off += n; fails = 0;
+            continue;
+        }
+        if (ok && st == 409) {   // incorrect_offset (append_v2), or lookup_failed/incorrect_offset (finish)
+            Json j = json_parse(wide(resp));
+            const Json &e = j[L"error"][L".tag"].s == L"lookup_failed" ? j[L"error"][L"lookup_failed"] : j[L"error"];
+            if (e[L".tag"].s != L"incorrect_offset" || e[L"correct_offset"].kind != Json::NUM) return false;
+            size_t has = (size_t)e[L"correct_offset"].n;
+            if (has > total || has < off) return false;
+            off = has; fails = 0;
+            continue;
+        }
+        if (bad(ok)) return false;
+        if (++fails >= kTries) return false;
+        backoff(fails);   // the same piece again: if it had arrived, Dropbox says where it is
+    }
+}
+static bool cloud_upload(const std::wstring &dest, const std::wstring &at, const std::wstring &name, const std::string &data) {
+    if (dest == L"gdrive") return gdrive_upload(at, name, data);
+    if (dest == L"onedrive") return onedrive_upload(at, name, data);
+    if (dest == L"dropbox") return dropbox_upload(at, name, data);
+    return false;
 }
 
 // ---------------------------------------------------------------- write a backup to the destination
@@ -662,7 +880,7 @@ static void keep_five_folder(const std::wstring &folder) {
     }
 }
 // returns "" on success, else an error line for the status
-static std::wstring do_backup(bool force) {
+static std::wstring do_backup(bool force, bool quitting) {
     bk::Kdf kdf; uint8_t key[32] = {};
     if (!key_remembered(kdf, key)) return T(L"Pon una contraseña para la copia.");
     std::wstring dest, folder;
@@ -671,9 +889,18 @@ static std::wstring do_backup(bool force) {
 
     double t0 = now_ms();
     std::vector<Unit> units = list_units();
-    std::string signature = fingerprint(units);
+    std::string signature, sig_imp;
+    fingerprint(units, signature, sig_imp);
     double t_list = now_ms() - t0;
-    { std::lock_guard<std::mutex> lk(g_cfg_mtx); if (!force && wide(signature) == g_cfg.signature) { SecureZeroMemory(key, 32); return L""; } }
+    {
+        std::lock_guard<std::mutex> lk(g_cfg_mtx);
+        bool skip = !force && wide(signature) == g_cfg.signature;
+        // only what changes by itself (cookies, history, sessions, site data) and the last one is under 6 h old:
+        // it waits (at most 6 h, or until Pluma is quit)
+        if (!force && !quitting && wide(sig_imp) == g_cfg.sig_important && g_cfg.last_epoch > 0 && (long long)time(nullptr) - g_cfg.last_epoch < 6 * 3600)
+            skip = true;
+        if (skip) { SecureZeroMemory(key, 32); return L""; }
+    }
 
     std::wstring hint;
     { std::lock_guard<std::mutex> lk(g_cfg_mtx); hint = g_cfg.hint; }
@@ -728,7 +955,7 @@ static std::wstring do_backup(bool force) {
     long long size = (long long)file.size();
     bk::wipe(file);
     if (!ok) return T(L"No se pudo guardar la copia.");
-    { std::lock_guard<std::mutex> lk(g_cfg_mtx); g_cfg.signature = wide(signature); g_cfg.last_iso = now_iso(); g_cfg.last_size = size; config_save_locked(); }
+    { std::lock_guard<std::mutex> lk(g_cfg_mtx); g_cfg.signature = wide(signature); g_cfg.sig_important = wide(sig_imp); g_cfg.last_epoch = (long long)time(nullptr); g_cfg.last_iso = now_iso(); g_cfg.last_size = size; config_save_locked(); }
     // counts and sizes only: never names, sites or contents in the log
     log_line(L"copia de seguridad hecha: " + std::to_wstring(size / 1024) + L" KB (sin comprimir " + std::to_wstring(raw / 1024) +
              L" KB); " + std::to_wstring(st.files) + L" ficheros en " + std::to_wstring(st.units) + L" bloques, " +
@@ -740,10 +967,11 @@ static std::wstring do_backup(bool force) {
 }
 
 // ---------------------------------------------------------------- the worker
-static void run_backup(bool force, bool toast) {
+static std::atomic<bool> g_req_exit{ false };   // the request comes from quitting Pluma: nothing waits
+static void run_backup(bool force, bool toast, bool quitting) {
     if (g_busy.exchange(true)) return;
     set_status(T(L"Copiando..."));
-    std::wstring err = do_backup(force);
+    std::wstring err = do_backup(force, quitting);
     g_last_run_ms = now_ms();
     set_status(err.empty() ? T(L"Copia hecha") : err);
     if (toast && err.empty()) ui_post([] { ui_toast(T(L"Copia hecha")); });
@@ -756,18 +984,23 @@ static void worker_main() {
         if (r == WAIT_OBJECT_0) break;   // stop
         bool forced = g_req_now.exchange(false);
         bool due = g_req_due.exchange(false);
+        bool quitting = g_req_exit.exchange(false);
         if (!forced && !due) {   // the 60 s tick: back up at most hourly, and only if something changed (checked inside)
             std::lock_guard<std::mutex> lk(g_cfg_mtx);
             due = g_cfg.automatic && !g_cfg.dest.empty() && key_is_set() &&
                   (g_last_run_ms == 0 || now_ms() - g_last_run_ms > 3600000.0);
         }
-        if (forced || due) run_backup(forced, forced);   // forced also shows a toast
+        if (forced || due) run_backup(forced, forced, quitting);   // forced also shows a toast
     }
 }
 
 // ---------------------------------------------------------------- public API
 void sync_init() {
     config_load();
+    if (g_test) {
+        wchar_t env[256] = L"";
+        if (GetEnvironmentVariableW(L"PLUMA_SYNC_NUBE_PRUEBA", env, 256) && !wcsncmp(env, L"http://127.0.0.1:", 17)) g_fake_cloud = env;
+    }
     g_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     g_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
     g_worker = std::thread(worker_main);
@@ -785,6 +1018,7 @@ void sync_on_close() {
     // the whole browser goes in: closing the window (Pluma stays in memory) backs up at most every 10 minutes;
     // quitting always does (it may be the last chance before Windows is reinstalled)
     if (!g_quitting && g_last_run_ms != 0 && now_ms() - g_last_run_ms < 600000.0) return;
+    if (g_quitting) g_req_exit = true;
     g_req_due = true;   // only if the content changed since the last backup (the worker checks the signature)
     if (g_wake) SetEvent(g_wake);   // the pages and history are already saved by the caller (hide_window / quit_now)
 }
@@ -983,7 +1217,9 @@ void sync_connect(const std::wstring &dest) {
         if (dest == L"gdrive") url += L"&access_type=offline&prompt=consent";
         if (dest == L"dropbox") url += L"&token_access_type=offline";
         set_status(T(L"Abre la ventana de inicio de sesión..."));
-        ShellExecuteW(NULL, L"open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
+        if (!g_fake_cloud.empty())   // tests: the fake signs in at once and sends the browser back to the loopback
+            std::thread([url]() { Sleep(500); DWORD s0; std::string r0; http(L"GET", url, L"", "", s0, r0); }).detach();
+        else ShellExecuteW(NULL, L"open", url.c_str(), NULL, NULL, SW_SHOWNORMAL);
         std::string code, cberr;
         if (!loopback_wait(state, code, cberr)) { set_status(T(L"No se completó el inicio de sesión.")); return; }
         std::wstring bodyw = L"client_id=" + url_encode(id) + L"&grant_type=authorization_code&code=" + wide(code) +
@@ -1054,6 +1290,9 @@ static void post_restore_result(int code) {
     ui_post([m] { settings_broadcast(m); });
 }
 // 0 ok (restarts), 1 wrong password, 2 damaged, 3 not a backup, 4 error (reported via restoreResult)
+// The backup is checked here (password, integrity) but nothing of it is written out in clear: restore-pending\ gets
+// the backup file as it is (encrypted) and its key guarded by DPAPI for this account; the next start, with the
+// engine stopped, opens it and puts it in place (sync_apply_restore).
 void sync_restore(const std::wstring &path, const std::wstring &password) {
     std::wstring p = path, pw = password;
     std::thread([p, pw]() {
@@ -1065,36 +1304,23 @@ void sync_restore(const std::wstring &path, const std::wstring &password) {
         if (!bk::derive(utf8(pw), h.kdf, key)) { post_restore_result(4); return; }
         std::vector<bk::Entry> entries;
         bk::OpenResult r = bk::open(d, h, key, entries);
-        SecureZeroMemory(key, 32);
-        d.clear(); d.shrink_to_fit();
-        if (r == bk::OPEN_WRONG_PASSWORD) { post_restore_result(1); return; }   // nothing written on a wrong password
-        if (r != bk::OPEN_OK) { post_restore_result(2); return; }
+        size_t count = entries.size();
+        for (auto &e : entries) bk::wipe(e.data);
+        entries.clear();
+        if (r != bk::OPEN_OK) { SecureZeroMemory(key, 32); post_restore_result(r == bk::OPEN_WRONG_PASSWORD ? 1 : 2); return; }   // nothing written
         g_restoring = true;
         std::wstring dir = g_state + L"\\restore-pending";
         rmtree(dir);   // a failed earlier attempt must not linger
-        std::wstring files = dir + L"\\files";
-        SHCreateDirectoryExW(NULL, files.c_str(), NULL);
-        bool ok = true;
-        for (auto &e : entries) {
-            if (e.name == "meta/clave") {   // never in clear on disk: guarded for this account until it is applied
-                DATA_BLOB in{ (DWORD)e.data.size(), (BYTE *)e.data.data() }, prot{};
-                if (CryptProtectData(&in, NULL, NULL, NULL, NULL, 0, &prot)) {
-                    if (!write_file(dir + L"\\clave.bin", std::string((const char *)prot.pbData, prot.cbData))) ok = false;
-                    LocalFree(prot.pbData);
-                } else ok = false;
-                bk::wipe(e.data);
-                continue;
-            }
-            std::wstring rel = target_rel(e.name);
-            if (rel.empty()) continue;
-            std::wstring full = files + L"\\" + rel;
-            make_parent(full);
-            if (!write_long(full, e.data)) ok = false;
-            bk::wipe(e.data);
-        }
+        mkdirs(dir);
+        bool ok = write_long(dir + L"\\copia.plumabk", d);
+        bk::wipe(d);
+        std::string k((const char *)key, 32), prot;
+        SecureZeroMemory(key, 32);
+        ok = ok && dpapi_protect(k, prot) && write_file(dir + L"\\llave.bin", prot);
+        bk::wipe(k);
         if (!ok) { rmtree(dir); g_restoring = false; post_restore_result(4); return; }
         write_file(dir + L"\\APLICAR", std::to_string(h.format));   // the format says how to apply it (below)
-        log_line(L"restauración preparada: " + std::to_wstring((int)entries.size()) + L" ficheros; reiniciando");
+        log_line(L"restauración preparada: " + std::to_wstring((int)count) + L" ficheros; reiniciando");
         post_restore_result(0);
         sync_wait_idle(8000);   // let a backup in flight finish before the restart
         ui_post([] { app_restart(false); });   // app_restart touches the window: do it on its thread
@@ -1128,14 +1354,78 @@ static int apply_root(const std::wstring &staged_files, const std::wstring &rel,
     log_line(L"restauración: no se pudo poner " + rel + L" (error " + std::to_wstring(GetLastError()) + L")");
     return 1;
 }
+// what was there before a restore keeps no caches (the engine makes them again), and only the newest two are kept
+static void prune_regenerable(const std::wstring &dir, bool engine) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(lp(dir + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    std::vector<std::pair<std::wstring, bool>> gone, into;
+    do {
+        if (fd.cFileName[0] == L'.' && (!fd.cFileName[1] || (fd.cFileName[1] == L'.' && !fd.cFileName[2]))) continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
+        std::string n = utf8(fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (engine ? bk::engine_skip_dir(n) : bk::pluma_skip_dir(n)) gone.push_back({ fd.cFileName, true });
+            else into.push_back({ fd.cFileName, true });
+        } else if (engine && bk::engine_skip_file(n)) gone.push_back({ fd.cFileName, false });
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    for (auto &g : gone) { if (g.second) rmtree(dir + L"\\" + g.first); else DeleteFileW(lp(dir + L"\\" + g.first).c_str()); }
+    for (auto &i : into) prune_regenerable(dir + L"\\" + i.first, engine);
+}
+static void keep_two_asides() {
+    std::vector<std::wstring> all;
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((g_state + L"\\antes-de-restaurar-*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do { if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) all.push_back(fd.cFileName); } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    std::sort(all.begin(), all.end());   // antes-de-restaurar-YYYYMMDD-HHMMSS sorts oldest first
+    for (size_t i = 0; i + 2 < all.size(); i++) rmtree(g_state + L"\\" + all[i]);
+}
+// at start, before the engine: a staged restore (sync_restore) is opened and put in place. Its files are decrypted to
+// restore-pending\files only for the moves (same disk: renames), and restore-pending\ is deleted whatever happens:
+// nothing of the backup stays in clear. A failure says only that it failed.
 bool sync_apply_restore() {
     std::wstring dir = g_state + L"\\restore-pending";
     if (GetFileAttributesW((dir + L"\\APLICAR").c_str()) == INVALID_FILE_ATTRIBUTES) return false;
-    std::wstring aside = g_state + L"\\antes-de-restaurar-" + stamp();
-    SHCreateDirectoryExW(NULL, aside.c_str(), NULL);
-    std::wstring files = dir + L"\\files";
     std::string mark;
     read_file(dir + L"\\APLICAR", mark);   // "2": each engine profile of the backup is whole; "1" (before): some folders
+    std::wstring files = dir + L"\\files";
+    rmtree(files);   // (a Pluma ended in the middle of an earlier attempt: decrypted again below)
+    std::string clave;   // meta/clave, the engine's key: only in memory
+    bool staged = false;
+    {
+        std::string prot, kraw, d;
+        bk::Header h;
+        std::vector<bk::Entry> entries;
+        if (read_file(dir + L"\\llave.bin", prot) && dpapi_unprotect(prot, kraw) && kraw.size() == 32 &&
+            read_backup_file(dir + L"\\copia.plumabk", d) && bk::read_header(d, h) &&
+            bk::open(d, h, (const uint8_t *)kraw.data(), entries) == bk::OPEN_OK) {
+            staged = true;
+            for (auto &e : entries) {
+                if (e.name == "meta/clave") clave = e.data;
+                else {
+                    std::wstring rel = target_rel(e.name);
+                    if (!rel.empty()) {
+                        std::wstring full = files + L"\\" + rel;
+                        make_parent(full);
+                        if (!write_long(full, e.data)) staged = false;
+                    }
+                }
+                bk::wipe(e.data);
+            }
+        }
+        bk::wipe(kraw); bk::wipe(d);
+    }
+    if (!staged) {   // nothing was moved: the profile is as it was
+        rmtree(dir);
+        bk::wipe(clave);
+        log_line(L"restauración: no se pudo aplicar; no se ha tocado nada");
+        return false;
+    }
+    std::wstring aside = g_state + L"\\antes-de-restaurar-" + stamp();
+    SHCreateDirectoryExW(NULL, aside.c_str(), NULL);
     int fails = 0;
     // each root is moved whole, so leveldb folders are never merged and stale items do not survive the restore
     for (auto &f : bk::pluma_files()) fails += apply_root(files, wide(f), aside);
@@ -1143,10 +1433,8 @@ bool sync_apply_restore() {
     for (auto &prof : engine_profiles(files + L"\\webview2\\EBWebView")) {
         std::wstring rp = L"webview2\\EBWebView\\" + wide(prof);
         // a backup of the whole profile takes the place of the live one whole: its databases with their own journals,
-        // leveldb folders never merged, nothing stale left; the live one, caches and all, goes aside. (A staging
-        // area from before the mark said the format: the whole profile always has Preferences.)
-        bool whole = mark == "2" || (mark != "1" && GetFileAttributesW((files + L"\\" + rp + L"\\Preferences").c_str()) != INVALID_FILE_ATTRIBUTES);
-        if (whole) {
+        // leveldb folders never merged, nothing stale left; the live one goes aside (without its caches, below)
+        if (mark != "1") {
             fails += apply_root(files, rp, aside);
             continue;
         }
@@ -1168,20 +1456,15 @@ bool sync_apply_restore() {
         for (auto &p : bk::engine_paths_v1()) fails += apply_root(files, rp + back_slashes(p), aside);
     }
     // the engine's key, guarded again for this Windows account: the passwords and cookies above open with it
-    std::string prot;
-    if (read_file(dir + L"\\clave.bin", prot)) {
-        DATA_BLOB in{ (DWORD)prot.size(), (BYTE *)prot.data() }, key{};
-        if (CryptUnprotectData(&in, NULL, NULL, NULL, NULL, 0, &key)) {
-            if (!engine_key_put(std::string((const char *)key.pbData, key.cbData), aside)) {
-                fails++;
-                log_line(L"restauración: no se pudo poner la llave del motor");
-            }
-            SecureZeroMemory(key.pbData, key.cbData);
-            LocalFree(key.pbData);
-        } else fails++;
+    if (!clave.empty() && !engine_key_put(clave, aside)) {
+        fails++;
+        log_line(L"restauración: no se pudo poner la llave del motor");
     }
-    DeleteFileW((dir + L"\\APLICAR").c_str());
-    if (fails == 0) rmtree(dir);   // keep the staging area on any failure, for a look
-    log_line(L"restauración aplicada (" + std::to_wstring(fails) + L" fallos); copia de lo anterior en " + aside);
+    bk::wipe(clave);
+    rmtree(dir);   // what could not be moved goes too: the backup file itself is still where it was picked
+    prune_regenerable(aside + L"\\webview2", true);
+    prune_regenerable(aside, false);
+    keep_two_asides();
+    log_line(L"restauración aplicada (" + std::to_wstring(fails) + L" fallos); lo anterior, sin la caché, en " + aside);
     return true;
 }
