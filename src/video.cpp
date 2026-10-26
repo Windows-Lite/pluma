@@ -95,6 +95,7 @@ struct Video {
     double pos = 0, dur = 0, cached = 0, start_at = 0, volume = 100, speed = 1, gain_db = 0;
     double page_gain_db = 0, page_loud = NAN;   // the page's own normalisation, and the loudness of what it was playing
     bool paused = true, eof = false, buffering = false, muted = false, restarted = false, loaded = false;
+    bool loop = false;   // play it again and again (YouTube's Loop: from its page, or the settings menu)
     double asked = 0, last_move = 0, bezel_at = -1e9, vol_text_at = -1e9;
     int bezel_icon = 0, serial = 0, osd_w = 0, osd_h = 0;
     double seek_t0 = 0, seek_ms = 1500;   // when mpv was last asked to load or seek, and what that took
@@ -542,6 +543,7 @@ static void load_streams(Video *v, double start, bool paused) {
     v->seek_t0 = now_ms();
     v->cache_end = -1; v->behind_since = 0;
     mpv_cmd(v, { "loadfile", (vf.local.empty() ? vf.url : vf.local).c_str(), "replace", "-1", opts.c_str() });
+    mpv_cmd(v, { "set", "loop-file", v->loop ? "inf" : "no" });
 }
 static bool http_get(const std::wstring &url, std::string &out);
 static bool safe_playlist(const std::string &text);
@@ -1038,6 +1040,7 @@ struct MenuRow { Icon icon; std::wstring label, value; bool on; };
 static std::vector<MenuRow> menu_rows(Video *v) {
     std::vector<MenuRow> rows;
     if (g_menu_page == 1) {
+        rows.push_back({ I_REPLAY, T(L"Bucle"), v->loop ? T(L"Activado") : T(L"Desactivado"), false });
         if (!v->caps.empty()) rows.push_back({ I_CC_OFF, T(L"Subtítulos"), v->sub >= 0 ? v->caps[v->sub].name : T(L"Desactivados"), false });
         rows.push_back({ I_SPEED, T(L"Velocidad de reproducción"), speed_text(v->speed), false });
         std::wstring q = v->vf >= 0 ? std::to_wstring(v->fmts[v->vf].h) + L"p" : L"";
@@ -1094,7 +1097,7 @@ static void paint_menu(Video *v) {
                 draw_icon(rt, b, rows[i].icon, r.left + S(8) + S(12), cy, S(24), kWhite);
                 text(rt, b, f_menu.Get(), rows[i].label, D2D1::RectF(r.left + S(56), r.top, r.right - S(30) - wv - S(32), r.bottom), kText);
                 text(rt, b, f_menu_r.Get(), rows[i].value, D2D1::RectF(r.left + S(56), r.top, r.right - S(32), r.bottom), rgba(1, 1, 1, 0.7f));
-                draw_icon(rt, b, I_CHEV_R, r.right - S(16), cy, S(20), rgba(1, 1, 1, 0.7f));
+                if (i > 0) draw_icon(rt, b, I_CHEV_R, r.right - S(16), cy, S(20), rgba(1, 1, 1, 0.7f));   // (the loop row just switches)
             } else {
                 if (rows[i].on) draw_icon(rt, b, I_CHECK, r.left + S(19), cy, S(18), kWhite);
                 text(rt, b, f_menu.Get(), rows[i].label, D2D1::RectF(r.left + S(35), r.top, r.right - S(20), r.bottom), kText);
@@ -1446,7 +1449,13 @@ static void menu_click(Video *v, int row) {
     if (row == -2) { g_menu_page = 1; return; }   // the header: back
     if (row < 0) return;
     if (g_menu_page == 1) {
-        int which = row + (v->caps.empty() ? 1 : 0);   // 0 captions, 1 speed, 2 quality
+        if (row == 0) {   // loop: on or off, at once
+            v->loop = !v->loop;
+            mpv_cmd(v, { "set", "loop-file", v->loop ? "inf" : "no" });
+            g_menu_page = 0;
+            return;
+        }
+        int which = row - 1 + (v->caps.empty() ? 1 : 0);   // 0 captions, 1 speed, 2 quality
         g_menu_page = which == 0 ? 4 : which == 1 ? 3 : 2;
     } else if (g_menu_page == 2) {
         auto rows = menu_rows(v);
@@ -1954,7 +1963,7 @@ static const wchar_t *kExtract = LR"JS((async () => {
   const loud = lm ? +lm[1] : (typeof pac.trackAbsoluteLoudnessLkfs === 'number' ? pac.trackAbsoluteLoudnessLkfs : null);
   return { id, title: vd.title || document.title, author: vd.author || '', length: +vd.lengthSeconds || 0, hls, tracks,
            time: p.getCurrentTime(), state: p.getPlayerState(), volume: p.getVolume ? p.getVolume() : 100,
-           muted: p.isMuted ? p.isMuted() : false, gain: el ? el.volume : 1, speed: p.getPlaybackRate ? p.getPlaybackRate() : 1,
+           muted: p.isMuted ? p.isMuted() : false, loop: !!(el && el.loop), gain: el ? el.volume : 1, speed: p.getPlaybackRate ? p.getPlaybackRate() : 1,
            cc: cc.languageCode || '', box: [b.left, b.top, b.width, b.height], dpr: devicePixelRatio, loud };
 })())JS";
 static void freeze_page(int id) {
@@ -2188,6 +2197,7 @@ static void video_try(Tab *t) {
             if (google_url(utf8(c[L"url"].s), true)) v->caps.push_back({ utf8(c[L"url"].s), "", c[L"name"].s, c[L"lang"].s });
         v->volume = r[L"volume"].kind == Json::NUM ? r[L"volume"].n : 100;
         v->muted = r[L"muted"].b;
+        v->loop = r[L"loop"].b;
         v->speed = r[L"speed"].kind == Json::NUM && r[L"speed"].n > 0 ? r[L"speed"].n : 1;
         double gain = r[L"gain"].kind == Json::NUM ? r[L"gain"].n : 1;
         v->page_gain_db = v->volume > 0 && gain > 0 ? std::max(-40.0, std::min(12.0, 20 * log10(gain / (v->volume / 100.0)))) : 0;
