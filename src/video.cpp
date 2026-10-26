@@ -96,6 +96,9 @@ struct Video {
     double page_gain_db = 0, page_loud = NAN;   // the page's own normalisation, and the loudness of what it was playing
     bool paused = true, eof = false, buffering = false, muted = false, restarted = false, loaded = false;
     bool loop = false;   // play it again and again (YouTube's Loop: from its page, or the settings menu)
+    double end_last = -1; int end_still = 0;   // the time at the very end standing still (end_tick)
+    double fx_rate = 1;   // the sound effect's own speed (nightcore, slowed): mpv plays at speed * fx_rate
+    std::string filters = "-";   // the audio filters ("af") mpv has now (sound.cpp; "-": none set yet)
     double asked = 0, last_move = 0, bezel_at = -1e9, vol_text_at = -1e9;
     int bezel_icon = 0, serial = 0, osd_w = 0, osd_h = 0;
     double seek_t0 = 0, seek_ms = 1500;   // when mpv was last asked to load or seek, and what that took
@@ -121,7 +124,7 @@ static int g_serial;
 static Video *V(Tab *t) { return t ? (Video *)t->video : nullptr; }
 static HWND g_msg;   // a window of its own for mpv's events (they come from mpv's threads) and the timers
 static const UINT WM_VIDEO_EVENTS = WM_APP + 60, WM_VIDEO_FAILED = WM_APP + 61, WM_VIDEO_GONE = WM_APP + 62;
-static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWarmTimer = 13, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000,
+static const UINT_PTR kAnimTimer = 7, kCtlTimer = 8, kWarmTimer = 13, kEndTimer = 14, kWatchTimer = 0x100000, kSyncTimer = 0x200000, kFreezeTimer = 0x300000,
                       kStartTimer = 0x400000, kLiteTimer = 0x500000;
 
 // ---------------------------------------------------------------- drawing: YouTube's look
@@ -195,7 +198,7 @@ static ComPtr<ID2D1PathGeometry> svg(const char *d) {
     return g;
 }
 enum Icon { I_PLAY, I_PAUSE, I_REPLAY, I_SPEAKER, I_WAVE1, I_WAVE2, I_MUTED, I_CC_ON, I_CC_OFF, I_GEAR, I_PAGE, I_FULL, I_FULL_EXIT,
-            I_SPEED, I_QUALITY, I_CHEV_R, I_CHEV_L, I_CHECK, I_COUNT };
+            I_SPEED, I_QUALITY, I_CHEV_R, I_CHEV_L, I_CHECK, I_EQ, I_NOTE, I_COUNT };
 struct IconDef { float vb; const char *d; };
 static const IconDef kIcons[I_COUNT] = {
     // play and pause: YouTube's, on its 36 grid
@@ -311,7 +314,10 @@ static const IconDef kIcons[I_COUNT] = {
           "C13.96 15.21 14.46 15 15 15Z" },
     { 24, "M9.4 18 8 16.6 12.6 12 8 7.4 9.4 6l6 6z" },
     { 24, "M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z" },
-    { 24, "M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" } };
+    { 24, "M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" },
+    // the sound effects (an equalizer's bars) and the pitch (a note)
+    { 24, "M7 18h2V6H7v12zm4 4h2V2h-2v20zm-8-8h2v-4H3v4zm12 4h2V6h-2v12zm4-8v4h2v-4h-2z" },
+    { 24, "M12 3V13.55C11.41 13.21 10.73 13 10 13C7.79 13 6 14.79 6 17C6 19.21 7.79 21 10 21C12.21 21 14 19.21 14 17V7H18V3H12Z" } };
 static ComPtr<ID2D1PathGeometry> g_icons[I_COUNT];
 static void draw_icon(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, Icon ic, float cx, float cy, float size, D2D1_COLOR_F c) {
     // size: the icon's whole box (24 px for YouTube's buttons), centred on cx, cy
@@ -406,8 +412,9 @@ static Anim g_bar_hot;          // the progress bar growing under the mouse
 static int g_hot = 0;           // control under the mouse
 static bool g_drag_seek, g_drag_vol;
 static float g_mouse_x = -1;    // over the progress bar
-static int g_menu_page = 0;     // 0 closed, 1 main, 2 quality, 3 speed, 4 captions
+static int g_menu_page = 0;     // 0 closed, 1 main, 2 quality, 3 speed, 4 captions, 5 sound effects, 6 pitch
 static int g_menu_hot = -1;
+static int g_menu_top = 0;      // the first row shown (a page taller than the video scrolls with the wheel)
 static POINT g_last_cursor = { -1, -1 };
 enum { C_NONE, C_PLAY, C_MUTE, C_VOLBAR, C_CC, C_GEAR, C_PAGE, C_FULL, C_BAR };
 static void layer_place(Layer &l, int x, int y, int w, int hh, bool click_through) {
@@ -526,6 +533,36 @@ static void audio_gain(Video *v) {
                                    v->page_loud, v->page_gain_db, v->af >= 0 ? v->fmts[v->af].loud : NAN, v->gain_db);
         log_line(b);
     }
+}
+// the speed the person chose, times the sound effect's own (nightcore plays faster, slowed slower)
+static void apply_speed(Video *v) {
+    set_double(v, "speed", v->speed * v->fx_rate);
+}
+// the sound effects (Configuración > YouTube y vídeo > Sonido, or the player's menu): mpv's audio filters. Nothing
+// when they are off. mpv's rubberband does the pitch; if this mpv has none, lavfi's asetrate + atempo
+static bool g_rubberband = true;
+static int set_af(Video *v, const std::string &af) {
+    const char *c = af.c_str();
+    return M.set_property(v->mpv, "af", MPV_FORMAT_STRING, (void *)&c);
+}
+static void apply_sound(Video *v) {
+    if (!v || !v->mpv) return;
+    SoundFx fx = sound_fx(g_set.sound);
+    std::string af = sound_af(fx, g_set.sound.pitch, g_rubberband);
+    if (af != v->filters) {
+        int r = set_af(v, af);
+        if (r < 0 && g_rubberband && af.find("rubberband") != std::string::npos) {
+            log_line(L"vídeo propio: sin rubberband en el motor (" + std::to_wstring(r) + L"); el tono, con lavfi");
+            g_rubberband = false;
+            af = sound_af(fx, g_set.sound.pitch, false);
+            r = set_af(v, af);
+        }
+        if (r < 0) { log_line(L"vídeo propio: los efectos no valen (" + std::to_wstring(r) + L"): " + wide(af)); af.clear(); set_af(v, af); }
+        else if (g_dev) log_line(L"vídeo propio: efectos «" + g_set.sound.preset + L"», tono " + std::to_wstring(g_set.sound.pitch) + L": af=" + wide(af));
+        v->filters = af;
+    }
+    v->fx_rate = fx.rate;
+    apply_speed(v);
 }
 static std::string escaped(const std::string &s) { return "%" + std::to_string(s.size()) + "%" + s; }   // mpv's quoting for option values
 static void load_streams(Video *v, double start, bool paused) {
@@ -713,7 +750,7 @@ static bool start_player(Video *v, double start) {
     M.set_wakeup_callback(v->mpv, post_events, (void *)(INT_PTR)v->tab);
     apply_volume(v);
     set_flag(v, "mute", v->muted);
-    if (fabs(v->speed - 1) > 0.01) set_double(v, "speed", v->speed);
+    apply_sound(v);   // (and the speed)
     load_streams(v, start, true);
     return true;
 }
@@ -733,7 +770,7 @@ static void stop_player(Video *v) {
 }
 static void hide_controls_now() {
     layer_hide(g_bottom); layer_hide(g_top); layer_hide(g_menu); layer_hide(g_center);
-    g_menu_page = 0; g_hot = C_NONE; g_mouse_x = -1;
+    g_menu_page = 0; g_menu_top = 0; g_hot = C_NONE; g_mouse_x = -1;
 }
 
 // ---------------------------------------------------------------- choosing the streams
@@ -1036,15 +1073,23 @@ static void paint_top(Video *v, float alpha) {
         text(rt, b, f_author.Get(), v->author, D2D1::RectF(S(24), S(40), g_top.w - S(24), S(62)), rgba(1, 1, 1, 0.8f), true);
     }, alpha);
 }
-struct MenuRow { Icon icon; std::wstring label, value; bool on; };
+// a row of the menu; on the main page, what it opens (go: a page; -1, the loop, which just switches)
+struct MenuRow { Icon icon; std::wstring label, value; bool on; int go = 0; };
+static std::wstring pitch_text(int st) {
+    if (!st) return T(L"Normal");
+    return (st > 0 ? L"+" : L"") + std::to_wstring(st);
+}
 static std::vector<MenuRow> menu_rows(Video *v) {
     std::vector<MenuRow> rows;
     if (g_menu_page == 1) {
-        rows.push_back({ I_REPLAY, T(L"Bucle"), v->loop ? T(L"Activado") : T(L"Desactivado"), false });
-        if (!v->caps.empty()) rows.push_back({ I_CC_OFF, T(L"Subtítulos"), v->sub >= 0 ? v->caps[v->sub].name : T(L"Desactivados"), false });
-        rows.push_back({ I_SPEED, T(L"Velocidad de reproducción"), speed_text(v->speed), false });
+        rows.push_back({ I_REPLAY, T(L"Bucle"), v->loop ? T(L"Activado") : T(L"Desactivado"), false, -1 });
+        if (!v->caps.empty()) rows.push_back({ I_CC_OFF, T(L"Subtítulos"), v->sub >= 0 ? v->caps[v->sub].name : T(L"Desactivados"), false, 4 });
+        rows.push_back({ I_SPEED, T(L"Velocidad de reproducción"), speed_text(v->speed), false, 3 });
+        const SoundPreset *fx = sound_preset(g_set.sound.preset);
+        rows.push_back({ I_EQ, T(L"Efectos de sonido"), T(fx ? fx->name : L"Desactivado"), false, 5 });
+        rows.push_back({ I_NOTE, T(L"Tono"), pitch_text(g_set.sound.pitch), false, 6 });
         std::wstring q = v->vf >= 0 ? std::to_wstring(v->fmts[v->vf].h) + L"p" : L"";
-        rows.push_back({ I_QUALITY, T(L"Calidad"), v->auto_quality ? T(L"Automática (") + q + L")" : quality_text(v->vf >= 0 ? v->fmts[v->vf].h : 0), false });
+        rows.push_back({ I_QUALITY, T(L"Calidad"), v->auto_quality ? T(L"Automática (") + q + L")" : quality_text(v->vf >= 0 ? v->fmts[v->vf].h : 0), false, 2 });
     } else if (g_menu_page == 2) {
         std::vector<int> hs;
         for (auto &f : v->fmts) if (!f.audio && f.h > 0 && std::find(hs.begin(), hs.end(), f.h) == hs.end()) hs.push_back(f.h);
@@ -1056,6 +1101,10 @@ static std::vector<MenuRow> menu_rows(Video *v) {
     } else if (g_menu_page == 4) {
         rows.push_back({ I_COUNT, T(L"Desactivados"), L"", v->sub < 0 });
         for (size_t i = 0; i < v->caps.size(); i++) rows.push_back({ I_COUNT, v->caps[i].name, L"", (int)i == v->sub });
+    } else if (g_menu_page == 5) {
+        for (int i = 0; i < kSoundPresetCount; i++) rows.push_back({ I_COUNT, T(kSoundPresets[i].name), L"", g_set.sound.preset == kSoundPresets[i].id });
+    } else if (g_menu_page == 6) {
+        for (int st = 6; st >= -6; st--) rows.push_back({ I_COUNT, pitch_text(st), L"", g_set.sound.pitch == st });
     }
     return rows;
 }
@@ -1072,7 +1121,16 @@ static void paint_menu(Video *v) {
     w = std::max(w, (int)S(g_menu_page == 1 ? 300 : 250));
     int h = (int)(S(16) + menu_head() + rows.size() * S(48));
     int maxh = (vr.bottom - vr.top) - (int)S(62) - (int)S(12);
+    // taller than the video: as many rows as fit, and the wheel moves them (the chosen one in view when it opens)
+    int fit = std::max(1, (int)((maxh - (float)S(16) - menu_head()) / S(48)));
+    if ((int)rows.size() > fit) h = (int)(S(16) + menu_head() + fit * S(48));
+    else fit = (int)rows.size();
     if (h > maxh) h = maxh;
+    if (g_menu_top < 0) {
+        g_menu_top = 0;
+        for (size_t i = 0; i < rows.size(); i++) if (rows[i].on) g_menu_top = (int)i - fit / 2;
+    }
+    g_menu_top = std::max(0, std::min(g_menu_top, (int)rows.size() - fit));
     int x = o.x + (vr.right - vr.left) - (int)S(12) - w, y = o.y + (vr.bottom - vr.top) - (int)S(62) - h;
     layer_place(g_menu, x, y, w, h, false);
     layer_show(g_menu, [&](ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b) {
@@ -1080,7 +1138,7 @@ static void paint_menu(Video *v) {
         rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0, 0, (float)w, (float)h), S(12), S(12)), b);
         float y0 = S(8);
         if (g_menu_page > 1) {
-            const wchar_t *titles[] = { L"", L"", T(L"Calidad"), T(L"Velocidad de reproducción"), T(L"Subtítulos") };
+            const wchar_t *titles[] = { L"", L"", T(L"Calidad"), T(L"Velocidad de reproducción"), T(L"Subtítulos"), T(L"Efectos de sonido"), T(L"Tono") };
             if (g_menu_hot == -2) { b->SetColor(rgba(1, 1, 1, 0.1f)); rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(S(24), S(28)), S(16), S(16)), b); }
             draw_icon(rt, b, I_CHEV_L, S(24), S(28), S(24), kWhite);
             text(rt, b, f_head.Get(), titles[g_menu_page], D2D1::RectF(S(48), S(8), w - S(16), S(48)), kText);
@@ -1088,8 +1146,9 @@ static void paint_menu(Video *v) {
             rt->FillRectangle(D2D1::RectF(0, S(56), (float)w, S(57)), b);
             y0 = S(57) + S(8);
         }
-        for (size_t i = 0; i < rows.size(); i++) {
-            D2D1_RECT_F r = { S(8), y0 + i * S(48), w - S(8), y0 + (i + 1) * S(48) };
+        for (size_t i = g_menu_top; i < rows.size(); i++) {
+            int k = (int)i - g_menu_top;
+            D2D1_RECT_F r = { S(8), y0 + k * S(48), w - S(8), y0 + (k + 1) * S(48) };
             if (r.bottom > h) break;
             if ((int)i == g_menu_hot) { b->SetColor(rgba(1, 1, 1, 0.1f)); rt->FillRoundedRectangle(D2D1::RoundedRect(r, S(8), S(8)), b); }
             float cy = (r.top + r.bottom) / 2;
@@ -1097,11 +1156,17 @@ static void paint_menu(Video *v) {
                 draw_icon(rt, b, rows[i].icon, r.left + S(8) + S(12), cy, S(24), kWhite);
                 text(rt, b, f_menu.Get(), rows[i].label, D2D1::RectF(r.left + S(56), r.top, r.right - S(30) - wv - S(32), r.bottom), kText);
                 text(rt, b, f_menu_r.Get(), rows[i].value, D2D1::RectF(r.left + S(56), r.top, r.right - S(32), r.bottom), rgba(1, 1, 1, 0.7f));
-                if (i > 0) draw_icon(rt, b, I_CHEV_R, r.right - S(16), cy, S(20), rgba(1, 1, 1, 0.7f));   // (the loop row just switches)
+                if (rows[i].go > 0) draw_icon(rt, b, I_CHEV_R, r.right - S(16), cy, S(20), rgba(1, 1, 1, 0.7f));   // (the loop row just switches)
             } else {
                 if (rows[i].on) draw_icon(rt, b, I_CHECK, r.left + S(19), cy, S(18), kWhite);
                 text(rt, b, f_menu.Get(), rows[i].label, D2D1::RectF(r.left + S(35), r.top, r.right - S(20), r.bottom), kText);
             }
+        }
+        if ((int)rows.size() > fit) {
+            // more rows than fit: a thin bar says where these are (the wheel moves them)
+            float track = h - y0 - S(8), th = track * fit / rows.size(), ty = y0 + track * g_menu_top / rows.size();
+            b->SetColor(rgba(1, 1, 1, 0.3f));
+            rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(w - S(6), ty, w - S(3), ty + th), S(1.5f), S(1.5f)), b);
         }
     }, 1);
 }
@@ -1308,7 +1373,7 @@ static void key_char(Video *v, wchar_t c) {
     while (i < 7 && steps[i] < v->speed - 0.01) i++;
     i = std::max(0, std::min(7, i + (c == L'>' ? 1 : -1)));
     v->speed = steps[i];
-    set_double(v, "speed", v->speed);
+    apply_speed(v);
     show_controls(v);
 }
 
@@ -1335,6 +1400,15 @@ static void on_property(Video *v, uint64_t code, mpv_event_property *p) {
         break;
     case 3:
         v->eof = f;
+        if (f && v->loop && v->mpv) {
+            // in a loop the end never comes (loop-file); if it does anyway, from the start again, never the page
+            if (g_dev) log_line(L"vídeo propio: fin en bucle; otra vez desde 0");
+            mpv_cmd(v, { "set", "loop-file", "inf" });
+            mpv_cmd(v, { "seek", "0", "absolute" });
+            set_flag(v, "pause", false);
+            v->eof = false;
+            break;
+        }
         if (f && v->stage == ST_ON && t) {
             // the end: back to the page, which shows what YouTube shows there (and plays the next one if it does).
             // An end well before the end is the stream failing: the page takes over at that second
@@ -1345,7 +1419,7 @@ static void on_property(Video *v, uint64_t code, mpv_event_property *p) {
     case 4: v->buffering = f; if (f) animate(); else if (v->stage == ST_ON) paint_center(v); break;
     case 5: v->cached = std::max(0.0, d - v->pos); break;
     case 6: v->muted = f; if (t && v->stage == ST_ON) { t->audible = !v->paused && !f; ui_invalidate(); } break;
-    case 7: if (d > 0) v->speed = d; break;
+    case 7: if (d > 0) v->speed = round(d / v->fx_rate * 1000) / 1000; break;   // (the person's speed, without the effect's)
     case 8: if (p->format == MPV_FORMAT_INT64) v->osd_w = (int)*(int64_t *)p->data; video_resized(); break;   // the size mpv draws at
     case 9: if (p->format == MPV_FORMAT_INT64) v->osd_h = (int)*(int64_t *)p->data; video_resized(); break;
     }
@@ -1403,7 +1477,11 @@ static LRESULT CALLBACK msg_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (!e || e->event_id == MPV_EVENT_NONE) break;
             if (e->event_id == MPV_EVENT_PROPERTY_CHANGE) on_property(v, e->reply_userdata, (mpv_event_property *)e->data);
             else if (e->event_id == MPV_EVENT_LOG_MESSAGE) mpv_log(v, t, (mpv_event_log_message *)e->data);
-            else if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) { v->restarted = true; v->seek_ms = now_ms() - v->seek_t0; tame(v); if (v->stage == ST_WAITING) sync_tick(t, v); }
+            else if (e->event_id == MPV_EVENT_PLAYBACK_RESTART) {
+                v->restarted = true; v->seek_ms = now_ms() - v->seek_t0; tame(v);
+                if (v->stage == ST_WAITING) sync_tick(t, v);
+                else if (v->loop && g_dev) { wchar_t b[96]; swprintf_s(b, L"vídeo propio: sigue en %.1f s (bucle)", refresh_pos(v)); log_line(b); }
+            }
             else if (e->event_id == MPV_EVENT_FILE_LOADED) { v->loaded = true; tame(v); if (v->sub >= 0) add_sub(v); }
             else if (e->event_id == MPV_EVENT_END_FILE) {
                 auto *ef = (mpv_event_end_file *)e->data;
@@ -1446,24 +1524,34 @@ static double vol_at(float x) {
     return std::max(0.0, std::min(100.0, (x - sl.left - S(6)) / (S(52) - S(12)) * 100.0));
 }
 static void menu_click(Video *v, int row) {
-    if (row == -2) { g_menu_page = 1; return; }   // the header: back
+    if (row == -2) { g_menu_page = 1; g_menu_top = 0; return; }   // the header: back
     if (row < 0) return;
     if (g_menu_page == 1) {
-        if (row == 0) {   // loop: on or off, at once
+        auto rows = menu_rows(v);
+        if (row >= (int)rows.size()) return;
+        if (rows[row].go < 0) {   // loop: on or off, at once
             v->loop = !v->loop;
             mpv_cmd(v, { "set", "loop-file", v->loop ? "inf" : "no" });
+            log_line(std::wstring(L"vídeo propio: bucle ") + (v->loop ? L"activado" : L"desactivado"));
             g_menu_page = 0;
             return;
         }
-        int which = row - 1 + (v->caps.empty() ? 1 : 0);   // 0 captions, 1 speed, 2 quality
-        g_menu_page = which == 0 ? 4 : which == 1 ? 3 : 2;
+        g_menu_page = rows[row].go;
+        g_menu_top = -1;   // (where the chosen one is, once painted)
+    } else if (g_menu_page == 5) {
+        // a sound effect: for this video and every next one (ajustes.ini), and the settings page shows it
+        if (row < kSoundPresetCount) { g_set.sound.preset = kSoundPresets[row].id; settings_save(); video_sound_changed(); }
+        g_menu_page = 0;
+    } else if (g_menu_page == 6) {
+        if (row < 13) { g_set.sound.pitch = 6 - row; settings_save(); video_sound_changed(); }
+        g_menu_page = 0;
     } else if (g_menu_page == 2) {
         auto rows = menu_rows(v);
         if (row < (int)rows.size()) set_quality(v, row == (int)rows.size() - 1 ? 0 : _wtoi(rows[row].label.c_str()));
         g_menu_page = 0;
     } else if (g_menu_page == 3) {
         static const double sp[] = { 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 };
-        if (row < 8) { v->speed = sp[row]; set_double(v, "speed", v->speed); }
+        if (row < 8) { v->speed = sp[row]; apply_speed(v); }
         g_menu_page = 0;
     } else if (g_menu_page == 4) {
         set_sub(v, row - 1);
@@ -1523,6 +1611,13 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_SHOWWINDOW && lp != 0) return 0;
     Video *v = V(active_tab());
     if (!v || v->stage != ST_ON) return DefWindowProcW(h, msg, wp, lp);
+    if (msg == WM_MOUSEWHEEL && h == g_menu.h) {
+        // a menu page taller than the video: its rows move
+        g_menu_top += GET_WHEEL_DELTA_WPARAM(wp) > 0 ? -1 : 1;
+        g_menu_hot = -1;
+        paint_menu(v);
+        return 0;
+    }
     if (msg == WM_MOUSEWHEEL) {
         if (!g_fullscreen && h != g_menu.h) { POINT p = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }; ScreenToClient(g_win, &p); wake_page(active_tab(), msg, p, GET_WHEEL_DELTA_WPARAM(wp)); }
         return 0;
@@ -1535,7 +1630,7 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     if (h == g_menu.h) {
         float y0 = S(8) + menu_head();
-        int row = g_menu_page > 1 && y < S(57) ? -2 : y < y0 ? -1 : (int)((y - y0) / S(48));
+        int row = g_menu_page > 1 && y < S(57) ? -2 : y < y0 ? -1 : (int)((y - y0) / S(48)) + g_menu_top;
         if (msg == WM_MOUSEMOVE) {
             if (row != g_menu_hot) { g_menu_hot = row; paint_menu(v); }
             track_leave(h);
@@ -1590,7 +1685,7 @@ static LRESULT CALLBACK layer_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         else if (c == C_MUTE) toggle_mute(v);
         else if (c == C_FULL) set_fullscreen(!g_fullscreen);
         else if (c == C_PAGE) { video_back_to_page(active_tab(), VIDEO_ASKED); return 0; }
-        else if (c == C_GEAR) { g_menu_page = g_menu_page ? 0 : 1; g_menu_hot = -1; }
+        else if (c == C_GEAR) { g_menu_page = g_menu_page ? 0 : 1; g_menu_hot = -1; g_menu_top = 0; }
         else if (c == C_CC) set_sub(v, v->sub >= 0 ? -1 : 0);
         else if (c == C_NONE) click_later();
         paint_all(v);
@@ -2038,6 +2133,28 @@ static void show_player(Tab *t, Video *v) {
     if (g_fullscreen || WindowFromPoint(pt) == v->wnd) show_controls(v);
 }
 static void CALLBACK lite_tick(HWND, UINT, UINT_PTR tid, DWORD);
+static void CALLBACK end_tick(HWND, UINT, UINT_PTR id, DWORD) {
+    // every player, on screen or in a tab behind: playing, at the very end, and the time standing still 3 s without
+    // mpv's end ever coming. Seen with the sound effects changed in the last seconds of a video (its sound starts
+    // again, and the end never comes): it sat there, paused-looking, in a tab behind. In a loop, from the start
+    // again; else the end, as mpv's own
+    bool any = false;
+    for (auto &up : g_tabs) {
+        Video *v = V(up.get());
+        if (!v || v->stage != ST_ON || !v->mpv) continue;
+        any = true;
+        if (v->paused || v->eof || v->buffering || !v->loaded || v->dur <= 0) { v->end_still = 0; continue; }
+        double was = v->end_last, pos = refresh_pos(v);
+        v->end_last = pos;
+        if (pos < v->dur - 1.5 || fabs(pos - was) > 0.01) { v->end_still = 0; continue; }
+        if (++v->end_still < 3) continue;
+        v->end_still = 0;
+        log_line(std::wstring(L"vídeo propio: quieto al final sin fin de mpv; ") + (v->loop ? L"otra vez desde 0" : L"se acaba"));
+        if (v->loop) { mpv_cmd(v, { "seek", "0", "absolute" }); set_flag(v, "pause", false); }
+        else PostMessageW(g_msg, WM_VIDEO_FAILED, VIDEO_ENDED, (LPARAM)v->tab);
+    }
+    if (!any) KillTimer(g_msg, id);
+}
 static void switch_now(Tab *t, Video *v, bool playing) {
     // at the very instant: the page pauses, mpv plays, in the same place (the change is not seen: only the controls
     // are Pluma's from then on)
@@ -2050,6 +2167,7 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     t->audible = playing && !v->muted;
     if (t == active_tab()) show_player(t, v);
     SetTimer(g_msg, kCtlTimer, 250, ctl_tick);
+    SetTimer(g_msg, kEndTimer, 1000, end_tick);
     wchar_t gain[24]; swprintf_s(gain, L"%+.1f", v->gain_db);
     log_line(L"vídeo propio: " + (t->incognito ? std::wstring(L"(incógnito)") : v->title) + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
              L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió, sonido " + gain + L" dB");
@@ -2306,9 +2424,16 @@ void video_back_to_page(Tab *t, int how) {
     Video *v = V(t);
     if (!t || !v) return;
     double pos = refresh_pos(v), vol = v->volume, speed = v->speed;
-    bool was_on = v->stage == ST_ON, playing = was_on && !v->paused, muted = v->muted, lite = v->lite;
+    bool was_on = v->stage == ST_ON, playing = was_on && !v->paused, muted = v->muted, lite = v->lite, loop = v->loop;
     std::wstring vid = v->id;
+    if (was_on) {
+        static const wchar_t *why[] = { L"pedida", L"fin", L"otra página", L"fallo", L"despertada" };
+        log_line(std::wstring(L"vídeo propio: vuelve la página (") + (how >= 0 && how < 5 ? why[how] : L"?") + L")");
+    }
     if (how == VIDEO_ASKED || how == VIDEO_FAILED) t->video_declined = v->id;
+    // a video that ended in a tab behind: its page plays the next one; it is not put to sleep for that (the player
+    // kept it awake, and frozen the moment it ended, the next one never came)
+    if (how == VIDEO_ENDED && t != active_tab() && t->hidden_since) t->hidden_since = now_ms();
     KillTimer(g_msg, kFreezeTimer + t->id);
     KillTimer(g_msg, kSyncTimer + t->id);
     KillTimer(g_msg, kStartTimer + t->id);
@@ -2328,10 +2453,12 @@ void video_back_to_page(Tab *t, int how) {
         if (how != VIDEO_LEAVE) {
             // the page's player where Pluma's was: same second, volume, speed, playing or not
             // (at the end, only the seek: the page then shows its end screen, and plays the next video if it would)
-            wchar_t js[400];
+            // (and the loop: the next time Pluma's player takes it, it reads it from the page again)
+            wchar_t js[480];
             swprintf_s(js, L"(() => { const p = document.getElementById('movie_player'); if (!p || !p.seekTo) return 0;"
+                           L" const el = p.querySelector('video'); if (el) el.loop = %s;"
                            L" p.setVolume(%d); %s p.setPlaybackRate(%g); p.seekTo(%.2f, true); %s return 1; })()",
-                       (int)lround(vol), muted ? L"p.mute();" : L"p.unMute();", speed, how == VIDEO_ENDED ? std::max(0.0, pos) + 5 : pos,
+                       loop ? L"true" : L"false", (int)lround(vol), muted ? L"p.mute();" : L"p.unMute();", speed, how == VIDEO_ENDED ? std::max(0.0, pos) + 5 : pos,
                        how == VIDEO_ENDED ? L"" : playing || how == VIDEO_FAILED ? L"p.playVideo();" : L"p.pauseVideo();");
             eval(t, js, [](const Json &) {});
         }
@@ -2579,6 +2706,14 @@ double video_aspect() {
     return (double)v->fmts[v->vf].w / v->fmts[v->vf].h;
 }
 bool video_on(Tab *t) { Video *v = V(t); return v && v->stage == ST_ON; }
+bool video_playing(Tab *t) { Video *v = V(t); return v && v->stage == ST_ON && !v->paused; }
+void video_sound_changed() {
+    // the sound effects or the pitch changed (the settings page, or a player's menu): every player, at once (the
+    // settings page is a tab of its own, so the video plays in another one while its sliders move)
+    for (auto &up : g_tabs) { Video *v = V(up.get()); if (v && v->mpv) apply_sound(v); }
+    Video *v = V(active_tab());
+    if (v && v->stage == ST_ON && g_menu_page) paint_menu(v);
+}
 double video_position(Tab *t) { Video *v = V(t); return v ? refresh_pos(v) : 0; }
 bool video_focus() { Video *v = V(active_tab()); if (!v || v->stage != ST_ON || !v->wnd) return false; SetFocus(v->wnd); return true; }
 void video_toggle_mute(Tab *t) { Video *v = V(t); if (v && v->stage == ST_ON) toggle_mute(v); }

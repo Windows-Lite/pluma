@@ -940,7 +940,9 @@ void tabs_tick() {
     Tab *oldest = nullptr;
     for (auto &up : g_tabs) {
         Tab *t = up.get();
-        if (!t->view || t->hidden_since == 0 || t->audible || t->creating) continue;
+        // (nor one whose video plays in Pluma's player: the light page's tab is not "audible" itself, and muted no tab
+        // is; frozen or let go, its player would stop with it)
+        if (!t->view || t->hidden_since == 0 || t->audible || video_playing(t) || t->creating) continue;
         double hidden = now - t->hidden_since;
         if (!t->suspended && hidden > g_set.sleep_s * 1000.0) {
             ComPtr<ICoreWebView2_19> v19;

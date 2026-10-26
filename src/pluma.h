@@ -29,6 +29,7 @@
 #include <cmath>
 #include "WebView2.h"
 #include "WebView2EnvironmentOptions.h"
+#include "sound.h"
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
@@ -84,6 +85,7 @@ struct Settings {
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
     bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
     bool youtube_lite = true;          // YouTube answered with Pluma's own light page (youtube.cpp)
+    SoundSettings sound;               // the player's sound effects (sound.cpp): efecto, eq, graves, reverb, tono
     bool suggest_top = true;           // the new tab page suggests the most visited sites while there are none of the person's own
     bool bookmarks_bar = false;        // a row of bookmarks under the toolbar (Ctrl+Shift+B); off by default
     int reader_size = 20;              // the reader view's font size, px (reader.cpp)
@@ -336,6 +338,8 @@ double video_position(Tab *t);
 bool video_focus();                       // the keys to the player, if one is on screen
 void video_toggle_mute(Tab *t);
 void video_settings_changed();
+void video_sound_changed();               // the sound effects changed: every player plays them now
+bool video_playing(Tab *t);               // Pluma's player is on in this tab and not paused
 void video_debug_shot(const std::wstring &path);   // tests: the window with the controls' real transparency
 void video_resized();                     // the player drew at a new size (the fullscreen zoom may end)
 double video_aspect();                    // the playing video's width/height, or 0 without Pluma's player
