@@ -223,10 +223,13 @@ static std::set<std::wstring> existing_logins(const std::wstring &login_data) {
     void *db = nullptr;
     if (pq::open(utf8(copy).c_str(), &db, 2, nullptr) == 0 && db) {
         void *st = nullptr;
-        if (pq::prepare(db, "select signon_realm, username_value from logins", -1, &st, nullptr) == 0 && st) {
+        if (pq::prepare(db, "select signon_realm, username_value, blacklisted_by_user from logins", -1, &st, nullptr) == 0 && st) {
             while (pq::step(st) == 100) {
-                const unsigned char *a = pq::ctext(st, 0), *b = pq::ctext(st, 1);
-                set.insert(wide(std::string(a ? (const char *)a : "")) + L"\n" + wide(std::string(b ? (const char *)b : "")));
+                const unsigned char *a = pq::ctext(st, 0), *b = pq::ctext(st, 1), *c = pq::ctext(st, 2);
+                std::wstring realm = wide(std::string(a ? (const char *)a : ""));
+                // a site the person said "never" to is a row of its own: "never\t<realm>" here
+                if (c && c[0] == '1') set.insert(L"never\t" + realm);
+                else set.insert(realm + L"\n" + wide(std::string(b ? (const char *)b : "")));
             }
             pq::finalize(st);
         }
@@ -277,6 +280,29 @@ static ImportResult import_file(const std::wstring &path) {
     }
     g_last_csv = path;
     return r;
+}
+
+// one password Pluma keeps itself (a suggested one whose save prompt went without saving, passgen.cpp): encrypted at
+// once into the pending file, written into Login Data at the next start. 1 kept, 2 already there, 3 a site with
+// "never", 0 not possible.
+int passwords_keep(const std::wstring &url, const std::wstring &user, const std::wstring &pass) {
+    if (g_incognito || pass.empty() || passwords_store_kind() == 20) return 0;   // (an app-bound store takes nothing written)
+    std::wstring clean = url.substr(0, url.find_first_of(L"?#"));
+    std::wstring realm = realm_of(clean);
+    if (realm.empty()) return 0;
+    std::vector<BYTE> key, blob;
+    if (!master_key(key)) return 0;
+    auto have = existing_logins(wv_profile_dir() + L"\\Login Data");
+    if (have.count(L"never\t" + realm)) { SecureZeroMemory(key.data(), key.size()); return 3; }
+    if (have.count(realm + L"\n" + user)) { SecureZeroMemory(key.data(), key.size()); return 2; }
+    std::string plain = utf8(pass);
+    bool ok = encrypt_v10(key, plain, blob);
+    SecureZeroMemory(&plain[0], plain.size());
+    SecureZeroMemory(key.data(), key.size());
+    if (!ok) return 0;
+    std::string existing; read_file(pending_file(), existing);
+    std::wstring row = tsv_safe(realm) + L"\t" + tsv_safe(clean) + L"\t" + tsv_safe(user) + L"\t" + hex_of(blob) + L"\n";
+    return write_file(pending_file(), existing + utf8(row)) ? 1 : 0;
 }
 
 bool passwords_delete_csv() {

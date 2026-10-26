@@ -1,8 +1,10 @@
 // End to end test of "Usar contraseña segura" in a test instance (tools\prueba.ps1, PLUMA_DEPURAR=<port>), with the
 // pages of tools\passgen served by tools\passgen\serve.py:
-//   node tools\passgen-e2e.js <devtools port> <pages port> fill|after <captura.exe> <window class> <out folder>
+//   node tools\passgen-e2e.js <devtools port> <pages port> fill|typed|forge|gen|after <captura.exe> <window class> <out folder>
 // fill: the suggestion on the sign-up form (and not on the login form), keyboard, Esc, a React-like form, maxlength,
 //       the setting switched off and on without reloading, and the sign-up form sent.
+// typed: a login typed by hand and sent (its prompt is left to the person). gen: a suggested password sent, nothing else.
+// forge: a page that reports a password Pluma did not make (and a frame of another site that tries too).
 // after (the instance started again): the login form offers the saved password.
 const [port, pages, phase, captura, cls, out] = process.argv.slice(2);
 const { execFileSync } = require('child_process');
@@ -149,6 +151,7 @@ const val = (sel) => `document.querySelector(${JSON.stringify(sel)}).value`;
     const on2 = await flip(true);
     check('se enciende otra vez', on2[0] === false && on2[1] === true, on2);
     await click(p, '#pw');
+    for (let i = 0; i < 10 && !(await p.ev(shownQ)); i++) await sleep(200);   // (Pluma makes the password: a moment)
     check('encendido otra vez: sale (sin recargar)', await p.ev(shownQ));
     await p.ev(`document.activeElement.blur()`);
     await go(p, 'signup.html');
@@ -164,6 +167,45 @@ const val = (sel) => `document.querySelector(${JSON.stringify(sel)}).value`;
     require('fs').writeFileSync(`${out}\\guardada.txt`, g);
     await click(p, 'button[type=submit]');
     await sleep(2000);
+    check('formulario enviado con la generada', g.length === 15 && await p.ev(`!!document.getElementById('done')`));
+  } else if (phase === 'typed') {
+    // a login typed by hand: the engine's prompt is the person's, Pluma does not touch it
+    await go(p, 'login.html');
+    // (the engine may have filled in the saved one by now, and offers it under the field: cleared, and Esc)
+    const clear = (sel) => p.ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.select(); return true; })()`);
+    await click(p, '#email'); await clear('#email'); await p.call('Input.insertText', { text: 'otra@example.com' });
+    await key(p, 'Escape', 'Escape', 27);
+    await click(p, '#pw'); await clear('#pw'); await p.call('Input.insertText', { text: 'Escrita-a-mano-7' });
+    await key(p, 'Escape', 'Escape', 27);
+    await click(p, 'button[type=submit]');
+    await sleep(2500);
+    check('entrar a mano: enviado', await p.ev(`!!document.getElementById('done')`));
+  } else if (phase === 'forge') {
+    // a page whose script (and a frame of another site) report a password Pluma did not make: ignored
+    await go(p, 'forge.html');
+    await sleep(1200);
+    // typed, as a person would (the engine only offers to save what was typed or filled in)
+    await click(p, '#pw'); await key(p, 'Escape', 'Escape', 27);
+    await p.ev(`(document.getElementById('pw').select(), 1)`); await p.call('Input.insertText', { text: 'Forjada-Pass-77' });
+    await click(p, 'button[type=submit]');
+    await sleep(2500);
+    check('forja: enviado', await p.ev(`!!document.getElementById('done')`));
+  } else if (phase === 'gen') {
+    // only a suggested password, sent (the fallback test: the prompt is then closed without saving)
+    await go(p, process.env.PLUMA_PRUEBA_PAGINA || 'signup.html');
+    await click(p, '#pw');
+    for (let i = 0; i < 10 && !(await p.ev(shownQ)); i++) await sleep(200);
+    check('la sugerencia de Pluma sale', await p.ev(shownQ));
+    await key(p, 'ArrowDown', 'ArrowDown', 40);
+    await key(p, 'Enter', 'Enter', 13);
+    const g = await p.ev(val('#pw'));
+    require('fs').writeFileSync(`${out}\\guardada.txt`, g);
+    if (process.env.PLUMA_PRUEBA_CORREO) {   // (another user than the page's)
+      await click(p, 'input[name=email]'); await key(p, 'Escape', 'Escape', 27);
+      await p.ev(`(document.querySelector('input[name=email]').select(), 1)`); await p.call('Input.insertText', { text: process.env.PLUMA_PRUEBA_CORREO });
+    }
+    await click(p, 'button[type=submit]');
+    await sleep(1500);
     check('formulario enviado con la generada', g.length === 15 && await p.ev(`!!document.getElementById('done')`));
   } else {
     // after a restart: the saved password is offered on the login form of the same site

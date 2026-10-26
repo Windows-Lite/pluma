@@ -390,14 +390,30 @@ que el motor no tiene).
   con la fila marcada (Abajo), Esc la quita; rellena con el setter nativo y `input`/`change` (React lo ve).
 - Guardarla: la guarda el gestor del motor al enviar el formulario. OJO: `IsPasswordAutosaveEnabled` no guarda solo
   (WebView2Feedback #4857): el motor PREGUNTA («¿Guardar la contraseña?», una ventana suya) y guarda al pulsar Guardar.
-  Comprobado: con Guardar, tras reiniciar el formulario de entrar se rellena con la generada.
+  Comprobado: con Guardar, tras reiniciar el formulario de entrar se rellena con la generada. Pedido el 26/10 que no
+  se pierda si la pregunta se cierra: la pregunta sigue siendo de la persona (Pluma no pulsa nada: con UI Automation
+  funciona sin foco, pero enciende la accesibilidad del motor para toda la sesión, medido en edge://accessibility; un
+  Enter enviado no hace nada). Pluma ve la pregunta (WinEvent EVENT_OBJECT_SHOW del proceso del motor, ventana
+  `Chrome_WidgetWin_1` cuyo dueño es la de Pluma; por su título, guardar o actualizar), espera a que se vaya y, si
+  el motor no tiene ese usuario y el sitio no es de «nunca», escribe la fila con `passwords_keep` (el pendiente de
+  `passwords.cpp`, entra al siguiente arranque) y lo dice en el aviso. Sin pregunta vista no escribe nada; la de
+  actualizar no se toca.
+- Para saber que es una sugerida: la contraseña la hace Pluma (la página la pide al enfocar) y la página avisa al
+  enviar, ambas con XHR síncronos a `<su origen>/.well-known/pluma-passgen/new|sent`, que Pluma contesta en
+  WebResourceRequested sin que salga nada (mismo origen: la CSP del sitio lo deja pasar; `sendBeacon` no llega al
+  handler, ERR_BLOCKED_BY_CLIENT). Solo vale si la cabecera Origin y la url son el origen de la pestaña (ni marcos de
+  otro sitio ni opacos) y la contraseña es una que Pluma hizo para esa pestaña: una página no puede plantar un login.
+  Nada en `window` (la clave sigue en el cierre del script). Con una CSP sin 'self', la hace la página y queda solo la
+  pregunta del motor. Ni la contraseña, ni el usuario, ni el sitio van al log.
+  Probado sin efecto: la preferencia `credentials_enable_autosave` y un mundo aislado por CDP.
 - Ajuste `sugerir_contrasenas` (Configuración > Privacidad y datos), encendido. Al cambiarlo (o el idioma) cada vista
   recibe el script nuevo y las páginas abiertas un evento cuyo nombre solo sabe Pluma (`ExecuteScript`); los marcos,
   en su próxima página. En incógnito sale igual y dice que no se guarda.
 - Pruebas: `node tools\passgen-test.js` (el generador) y `tools\passgen\prueba.ps1` en la sesión interactiva con
-  `PLUMA_EXE` (páginas en `tools\passgen`, una con CSP estricta y Trusted Types; `tools\passgen-e2e.js`; acepta la
-  pregunta del motor con UI Automation). OJO: el motor pone su pregunta y su lista de autorrelleno en la pantalla más
-  cercana aunque la ventana de prueba esté fuera; `tools\passgen\ventanas.ps1 -Watch` las saca al instante.
+  `PLUMA_EXE` (páginas en `tools\passgen`, una con CSP estricta y Trusted Types, otra que se inventa el aviso con un
+  marco de otro sitio; `tools\passgen-e2e.js`): Guardar pulsado como la persona, la escrita a mano y la inventada sin
+  tocar, la pregunta cerrada deja la fila pendiente que entra al reiniciar, y un sitio con «nunca» (`nunca.py`) nada.
+  OJO: el motor pone su pregunta y su lista de autorrelleno en la pantalla más cercana aunque la ventana de prueba esté fuera; `tools\passgen\ventanas.ps1 -Watch` las saca al instante.
 
 ## Incógnito
 - Ventana de incógnito (⋯ > Nueva ventana de incógnito, Ctrl+Mayús+N, o «Abrir en una ventana de incógnito» en el menú
