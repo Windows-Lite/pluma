@@ -154,6 +154,7 @@ static const Text kTexts[] = {
     { L"Automáticas", L"Automatic", L"Automáticas", L"Automatiques", L"Automatisch", L"Automatici" },
     { L"Avisarme", L"Notify me", L"Avisar-me", L"Me prévenir", L"Benachrichtigen", L"Avvisami" },
     { L"Nunca", L"Never", L"Nunca", L"Jamais", L"Nie", L"Mai" },
+    { L"Buscar actualizaciones", L"Check for updates", L"Verificar atualizações", L"Rechercher des mises à jour", L"Nach Updates suchen", L"Controlla aggiornamenti" },
     { L"Buscar ahora", L"Check now", L"Verificar agora", L"Rechercher maintenant", L"Jetzt suchen", L"Controlla ora" },
     { L"Versión ", L"Version ", L"Versão ", L"Version ", L"Version ", L"Versione " },
     { L"Nueva versión de Pluma lista: ", L"New version of Pluma ready: ", L"Nova versão do Pluma pronta: ", L"Nouvelle version de Pluma prête : ", L"Neue Pluma-Version bereit: ", L"Nuova versione di Pluma pronta: " },

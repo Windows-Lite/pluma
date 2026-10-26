@@ -1498,6 +1498,8 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sub(T(L"Borrar datos"), G_ERASE, L"", PAGE_CLEAR));
         v.push_back(item(T(L"Configuración"), G_GEAR, L"", [] { after_menu([] { settings_open(); }); }));
         v.push_back(item(T(L"Herramientas de desarrollo"), G_DEV, L"F12", [] { after_menu([] { tab_devtools(); }); }));
+        if (!g_incognito)
+            v.push_back(item(T(L"Buscar actualizaciones"), G_UPDATE, update_version(), [] { after_menu([] { update_check_now(); }); }));
         v.push_back(sep());
         v.push_back(note(T(L"Pluma usa ahora ") + std::to_wstring(engine_memory_mb()) + T(L" MB de memoria")));
         v.push_back(item(T(L"Salir de Pluma"), G_POWER, T(L"Ctrl+Mayús+Q"), [] { after_menu([] { app_quit(); }); }));
