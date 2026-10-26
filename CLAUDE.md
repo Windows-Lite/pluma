@@ -56,6 +56,7 @@ código y commits en inglés; nada de em dashes.
   (apartados de abajo).
 - `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
 - `src/passgen.cpp` + `src/passgen.js`: «Usar contraseña segura» en los formularios de registro (apartado de abajo).
+- `src/downloads.cpp`: las descargas son de Pluma, no del panel del motor (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
 - `Pluma.exe` no va en git (25/10, el usuario: «no debería estar en el repo»): cada push a `main` lo compila una Action
@@ -417,6 +418,27 @@ que el motor no tiene).
   tocar, la pregunta cerrada deja la fila pendiente que entra al reiniciar, y un sitio con «nunca» (`nunca.py`) nada.
   OJO: el motor pone su pregunta y su lista de autorrelleno en la pantalla más cercana aunque la ventana de prueba esté fuera; `tools\passgen\ventanas.ps1 -Watch` las saca al instante.
 
+## Descargas (`src/downloads.cpp`)
+Arreglado el 26/10 («el PDF descargado no se abre»): con Edge desinstalado (el motor 155 sigue), «Abrir archivo» del
+panel de descargas del motor tumbaba el motor entero (volcado: acceso a memoria ya liberada en msedge.dll, proceso
+del navegador; claves de Crashpad con el visor de PDF de Edge y Windhawk inyectado). WebView2 no deja entrar en ese
+botón, así que cada vista (pestañas, reserva, popups de extensiones) marca sus descargas como suyas en
+`DownloadStarting` (`Handled`: el panel del motor no sale); el motor sigue eligiendo el nombre, guardando y pasando
+SmartScreen. Salvo los tipos por los que el motor pregunta «¿conservar?» (programas, scripts...: la lista de Chromium
+`download_file_types.asciipb`, peligro DANGEROUS o ALLOW_ON_USER_GESTURE en Windows, en `engine_asks`): WebView2 no
+tiene cómo contestar eso y con `Handled` se quedaban al 100 % para siempre (.exe, .msi; probado también sin
+SmartScreen). Esos siguen con el panel del motor (su «Conservar» va en «Más acciones»; su «Abrir archivo», el de
+antes), y la lista de Pluma los sigue sin saltar. El panel es una página del menú (`PAGE_DOWNLOADS`, fila `kind 9`): nombre, barra mientras baja,
+estado, cancelar, mostrar en la carpeta, «Abrir carpeta de descargas»; sale solo (quieto, sin foco) al empezar y al
+acabar una, y con Ctrl+J y ⋯ > Descargas. Abrir: PDF, páginas, imágenes, SVG y texto en una pestaña (`file://`); lo
+demás con ShellExecute («Abrir con» si no hay programa). La lista solo vive en memoria (el historial del motor ya no se
+ve). Además de `StateChanged`, un sondeo cada 500 ms mientras baja algo (WebView2Feedback #5638). En las instancias de
+prueba abrir con Windows y mostrar en la carpeta solo se apuntan en `pluma.log`. Prueba: `tools\descargas\prueba.ps1`
+en la sesión interactiva con `PLUMA_EXE` (`pluma-prueba:descargas|descarga-abrir=n|descarga-carpeta=n|descarga-cancelar=n`;
+`tools\descargas\panel-motor.js` lee el panel del motor, `edge://downloads-hub`, que fuera de la pantalla solo se
+actualiza con `motor=--disable-features=CalculateNativeWinOcclusion`).
+RAM igual (3 pestañas a la vez, dos pasadas: interfaz 13 MB en las dos).
+
 ## Incógnito
 - Ventana de incógnito (⋯ > Nueva ventana de incógnito, Ctrl+Mayús+N, o «Abrir en una ventana de incógnito» en el menú
   de un enlace), como la InPrivate de Edge: otro Pluma.exe (`--incognito`, ventana, mutex y sesión propios, mismo motor
@@ -491,6 +513,8 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
   pintura pendiente): no se cerraba, no guardaba la sesión. Por eso las animaciones van por el hilo de DwmFlush.
 - `@match` con `*`: escapar todo menos el asterisco y luego `*` -> `.*` (antes quedaba `/*` y nunca casaba).
 - Desde PowerShell, `FindWindowW` con título nulo pide `[NullString]::Value`.
+- `tools\passgen\ventanas.ps1` solo mira procesos `msedgewebview2.exe`: con todos, un id de proceso reutilizado metió en
+  el árbol el Administrador de tareas del usuario (26/10; Windows no dejó moverlo).
 - El motor se apaga solo cuando se cierra su última vista (todas las pestañas soltadas, una pestaña nueva, una
   precarga cancelada) y la siguiente página espera un arranque en frío de más de 1 s: por eso existe `g_keeper`, una
   vista que no carga nada, de tamaño cero. Pasó el 25/10 con la reserva quitada («el motor se ha cerrado»).

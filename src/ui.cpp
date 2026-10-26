@@ -1471,9 +1471,10 @@ std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET, PAGE_INCOGNITO };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET, PAGE_INCOGNITO, PAGE_DOWNLOADS };
 struct MItem {
-    int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back, 8 header (the profile's flyout)
+    int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back, 8 header (the profile's flyout),
+                    // 9 a download (name, its bar while on its way, its state under it; hint = the state)
     std::wstring text, hint;
     wchar_t icon = 0;
     bool on = false, enabled = true, danger = false;
@@ -1482,6 +1483,7 @@ struct MItem {
     wchar_t b1 = 0, b2 = 0;                 // small buttons at the right of the row
     bool avatar = false; Profile prof;      // a profile's row: its avatar instead of an icon
     std::function<void()> act1, act2;
+    float progress = -1; int dl_state = 0;   // a download's row (DownloadRow)
 };
 static std::vector<MItem> g_items;
 static int g_menu_page = PAGE_MAIN, g_menu_tab = 0, g_menu_sel = -1, g_menu_hot_btn = 0;
@@ -1499,7 +1501,7 @@ static std::wstring fmt1(const wchar_t *tpl, const std::wstring &a) {
     return s;
 }
 static const float kMenuW = 344, kItemH = 34, kSepH = 9;
-static float item_h(const MItem &m) { return m.kind == 1 ? S(kSepH) : m.kind == 6 ? S(30) : m.kind == 8 ? S(76) : S(kItemH); }
+static float item_h(const MItem &m) { return m.kind == 1 ? S(kSepH) : m.kind == 6 ? S(30) : m.kind == 8 ? S(76) : m.kind == 9 ? S(54) : S(kItemH); }
 static std::vector<MItem> build_page(int page);
 static void menu_rebuild() { g_items = build_page(g_menu_page); }
 static D2D1_RECT_F item_rect(size_t i) {
@@ -1510,6 +1512,7 @@ static D2D1_RECT_F item_rect(size_t i) {
 static D2D1_RECT_F item_btn(size_t i, int which) {   // 1 or 2, from the right
     D2D1_RECT_F r = item_rect(i);
     float x = r.right - S(4) - which * S(30);
+    if (g_items[i].kind == 9) { float cy = (r.top + r.bottom) / 2; return R(x, cy - S(15), x + S(28), cy + S(15)); }   // (a tall row: a square button)
     return R(x, r.top + S(3), x + S(28), r.bottom - S(3));
 }
 static void menu_draw(Panel &p, double now) {
@@ -1539,6 +1542,34 @@ static void menu_draw(Panel &p, double now) {
             else {
                 text(p.rt.Get(), p.br.Get(), g_f.title.Get(), m.text, R(tl, cy - S(23), tr, cy + S(1)), c.text);
                 text(p.rt.Get(), p.br.Get(), g_f.ntp.Get(), m.hint, R(tl, cy + S(1), tr, cy + S(21)), c.sub);
+            }
+            continue;
+        }
+        if (m.kind == 9) {
+            // a download, as in Edge's flyout: its file, its name, a bar while it comes, its state; the button at the right
+            bool hot = (int)i == g_menu_sel && (m.act || (m.b1 && g_menu_hot_btn == 1));
+            if (hot) fill(p.rt.Get(), p.br.Get(), r, S(9), c.hover);
+            float ix = r.left + S(18), cy = (r.top + r.bottom) / 2, tr = r.right - S(12);
+            glyph(p.rt.Get(), p.br.Get(), g_f.icon.Get(), G_FILE, R(ix - S(12), cy - S(12), ix + S(12), cy + S(12)), m.dl_state == 2 ? c.error : c.sub);
+            if (m.b1) {
+                D2D1_RECT_F b = item_btn(i, 1); b.left += dx; b.right += dx;
+                if (g_menu_sel == (int)i && g_menu_hot_btn == 1) fill(p.rt.Get(), p.br.Get(), b, S(7), c.press);
+                glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), m.b1, b, c.sub);
+                tr = b.left - S(4);
+            }
+            float tl = r.left + S(38);
+            text(p.rt.Get(), p.br.Get(), g_f.menu.Get(), m.text, R(tl, r.top + S(4), tr, cy + S(1)), m.dl_state >= 2 ? c.sub : c.text);
+            if (m.dl_state == 0) {
+                D2D1_RECT_F bar = R(tl, cy + S(4), tr, cy + S(7));
+                fill(p.rt.Get(), p.br.Get(), bar, S(1.5f), c.line);
+                float f = m.progress < 0 ? 0.3f : m.progress;   // (size unknown: a short piece)
+                if (f > 0) fill(p.rt.Get(), p.br.Get(), R(bar.left, bar.top, bar.left + (bar.right - bar.left) * f, bar.bottom), S(1.5f), m.progress < 0 ? c.accent_soft : c.accent);
+                text(p.rt.Get(), p.br.Get(), g_f.tab.Get(), m.hint, R(tl, cy + S(8), tr, r.bottom - S(2)), c.sub);
+            } else {
+                D2D1_RECT_F st = R(tl, cy + S(1), tr, r.bottom - S(6));
+                text(p.rt.Get(), p.br.Get(), g_f.tab.Get(), m.hint, st, m.dl_state == 2 ? c.error : c.sub);
+                // done: says what a click does, as Edge's "Open file"
+                if (m.dl_state == 1) text(p.rt.Get(), p.br.Get(), g_f.tab.Get(), T(L"Abrir archivo"), R(tl + text_w(g_f.tab.Get(), m.hint) + S(10), st.top, tr, st.bottom), c.accent);
             }
             continue;
         }
@@ -1677,7 +1708,7 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(re);
         v.push_back(sep());
         MItem z; z.kind = 5; z.text = L"Zoom"; z.icon = G_ZOOM; v.push_back(z);
-        v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { after_menu([] { tab_downloads(); }); }));
+        v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { menu_go(PAGE_DOWNLOADS); }));
         Tab *at = active_tab();
         if (at && at->view && !settings_page_url(at->url) && (starts_with(at->url, L"https://") || starts_with(at->url, L"http://"))) {
             if (at->tr_state) v.push_back(item(T(L"Mostrar original"), G_LANG, L"", [] { after_menu([] { translate_original(active_tab()); }); }));
@@ -1865,6 +1896,25 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(head);
         v.push_back(sep());
         v.push_back(item(T(L"Cerrar ventana de incógnito"), G_X, L"", [] { after_menu([] { app_close_window(); }); }));
+    } else if (page == PAGE_DOWNLOADS) {
+        // Pluma's downloads (the engine's own flyout took the engine down on "Open file"), newest first
+        v.push_back(note(T(L"Descargas")));
+        auto rows = downloads_rows();
+        if (rows.empty()) v.push_back(note(T(L"Aún no has descargado nada")));
+        for (size_t k = 0; k < rows.size() && k < 8; k++) {
+            const DownloadRow &d = rows[k];
+            int id = d.id;
+            MItem m; m.kind = 9; m.text = d.name; m.hint = d.status; m.progress = d.progress; m.dl_state = d.state;
+            if (d.state == 1) {
+                m.act = [id] { after_menu([id] { download_open(id); }); };
+                m.b1 = G_FOLDER; m.act1 = [id] { after_menu([id] { download_show(id); }); };
+            } else if (d.state == 0) {
+                m.b1 = G_X; m.act1 = [id] { download_cancel(id); };
+            }
+            v.push_back(m);
+        }
+        v.push_back(sep());
+        v.push_back(item(T(L"Abrir carpeta de descargas"), G_FOLDER, L"", [] { after_menu([] { downloads_open_folder(); }); }));
     } else if (page == PAGE_TRANSLATE) {
         // the translate icon (or the offer): as Edge's, with the page's language, the target and what to remember
         int id = g_menu_tab;
@@ -1962,7 +2012,8 @@ static void menu_activate(int i, int btn) {
 static void menu_key(UINT vk) {
     int n = (int)g_items.size();
     auto selectable = [](const MItem &m) { return m.enabled && m.kind != 1 && m.kind != 6; };
-    bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES || g_menu_page == PAGE_INCOGNITO || g_menu_page == PAGE_TRANSLATE;
+    bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES || g_menu_page == PAGE_INCOGNITO || g_menu_page == PAGE_TRANSLATE ||
+               g_menu_page == PAGE_DOWNLOADS;
     int parent = g_menu_page == PAGE_TR_TARGET ? PAGE_TRANSLATE : PAGE_MAIN;
     if (vk == VK_ESCAPE) { if (!top) menu_go(parent); else after_menu([] {}); return; }
     if (vk == VK_LEFT && !top) { menu_go(parent); return; }
@@ -2062,6 +2113,25 @@ void ui_open_profile_menu(bool quiet) {
     // the avatar's flyout (in incognito, the badge's); quiet: tests, without the focus
     tip_close();
     open_menu_page(g_incognito ? PAGE_INCOGNITO : PAGE_PROFILES, bar_rect_on_screen(profile_rect()), 0, quiet);
+}
+void ui_open_downloads(bool quiet) {
+    // the downloads panel under ⋯ (Ctrl+J, ⋯ > Descargas, Configuración); quiet: Pluma shows it when a download starts
+    // or ends, as Edge its flyout, unless the person is busy elsewhere, and it never takes the focus
+    // (open over another window: it comes to this one, the window of the tab the download came from)
+    bool open = g_menu.h && !g_menu.closing && g_menu_page == PAGE_DOWNLOADS && GetWindow(g_menu.h, GW_OWNER) == g_win;
+    if (quiet) {
+        if (open) { if (g_menu_quiet) g_menu_quiet_since = now_ms(); menu_refresh(); return; }   // (news: its 12 s again)
+        if (g_menu.h && !g_menu.closing && g_menu_page == PAGE_DOWNLOADS && g_menu_quiet) menu_close();
+        if (ui_address_focused() || (g_menu.h && !g_menu.closing) || !IsWindowVisible(g_win) || IsIconic(g_win)) return;
+        if (!g_test && GetForegroundWindow() != g_win) return;
+    } else if (open && !g_menu_quiet) { menu_close(); return; }   // (Ctrl+J again: away, as Edge)
+    open_menu_page(PAGE_DOWNLOADS, bar_rect_on_screen(menu_rect()), 0, quiet);
+}
+void ui_downloads_changed() {
+    // (from an app-wide timer: the panel's own window is made current, or it would move to another one)
+    if (!g_menu.h || g_menu.closing || g_menu_page != PAGE_DOWNLOADS) return;
+    WinScope ws(win_of_hwnd(GetWindow(g_menu.h, GW_OWNER)));
+    menu_refresh();
 }
 void ui_open_menu_quietly(bool translate) {
     // tests: a menu shown without taking the focus (a test instance never takes it from the user)

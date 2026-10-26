@@ -56,7 +56,12 @@ Set-Key "$cap\shell\open\command" '' "`"$exe`""
 Set-Key "$cap\Capabilities" 'ApplicationName' 'Pluma'
 Set-Key "$cap\Capabilities" 'ApplicationDescription' 'Navegador ligero y rápido'
 Set-Key "$cap\Capabilities" 'ApplicationIcon' "$exe,0"
-foreach ($e in '.htm', '.html', '.shtml', '.xht', '.xhtml', '.svg', '.webp', '.pdf') { Set-Key "$cap\Capabilities\FileAssociations" $e 'PlumaHTML' }
+foreach ($e in '.htm', '.html', '.shtml', '.xht', '.xhtml', '.svg', '.webp', '.pdf') {
+    Set-Key "$cap\Capabilities\FileAssociations" $e 'PlumaHTML'
+    # en «Abrir con» de cada tipo (si no, Windows no ofrece Pluma al abrir un PDF)
+    New-Item -Path "HKCU:\Software\Classes\$e\OpenWithProgids" -Force | Out-Null
+    New-ItemProperty -Path "HKCU:\Software\Classes\$e\OpenWithProgids" -Name 'PlumaHTML' -PropertyType None -Value ([byte[]]@()) -Force | Out-Null
+}
 foreach ($p in 'http', 'https') { Set-Key "$cap\Capabilities\URLAssociations" $p 'PlumaHTML' }
 Set-Key "$cap\Capabilities\StartMenu" 'StartMenuInternet' 'Pluma'
 Set-Key 'HKCU:\Software\RegisteredApplications' 'Pluma' 'Software\Clients\StartMenuInternet\Pluma\Capabilities'

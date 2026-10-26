@@ -201,6 +201,7 @@ static void setup_view(ICoreWebView2Controller *c, bool incognito) {
     if (SUCCEEDED(st.As(&st4))) { st4->put_IsPasswordAutosaveEnabled(TRUE); st4->put_IsGeneralAutofillEnabled(TRUE); }
     ComPtr<ICoreWebView2Settings8> st8;
     if (SUCCEEDED(st.As(&st8))) st8->put_IsReputationCheckingRequired(TRUE);   // SmartScreen on pages and downloads
+    downloads_watch(v.Get());   // downloads are Pluma's: the engine's flyout only for the types it asks about (downloads.cpp)
     ComPtr<ICoreWebView2_9> v9;
     if (SUCCEEDED(v.As(&v9))) {
         v9->put_DefaultDownloadDialogCornerAlignment(COREWEBVIEW2_DEFAULT_DOWNLOAD_DIALOG_CORNER_ALIGNMENT_TOP_RIGHT);
@@ -973,11 +974,7 @@ void tab_print() {
     if (t && t->view && SUCCEEDED(t->view.As(&v16))) v16->ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_BROWSER);
 }
 void tab_devtools() { Tab *t = active_tab(); if (t && t->view) t->view->OpenDevToolsWindow(); }
-void tab_downloads() {
-    Tab *t = active_tab();
-    ComPtr<ICoreWebView2_9> v9;
-    if (t && t->view && SUCCEEDED(t->view.As(&v9))) v9->OpenDefaultDownloadDialog();
-}
+void tab_downloads() { ui_open_downloads(false); }   // (Pluma's panel: the engine's crashed on "Open file")
 void tabs_set_scripts() {
     auto sources = scripts_sources();
     for (Tab *t : all_tabs()) {

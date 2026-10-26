@@ -801,6 +801,18 @@ static void test_command(const std::wstring &what) {
     else if (what == L"oferta") ui_translate_offer(t);
     else if (what == L"clic-derecho") translate_test_pick_menu();   // the next page menu: logged, Pluma's row chosen
     else if (starts_with(what, L"destino=")) translate_set_target(what.substr(8));
+    else if (what == L"descargas") ui_open_downloads(true);
+    else if (starts_with(what, L"descarga-")) {   // descarga-abrir|carpeta|cancelar=<n>: the n-th row of the downloads panel
+        size_t eq = what.find(L'=');
+        auto rows = downloads_rows();
+        int n = eq == std::wstring::npos ? 0 : _wtoi(what.c_str() + eq + 1);
+        if (n >= 1 && n <= (int)rows.size()) {
+            std::wstring verb = what.substr(9, eq - 9);
+            if (verb == L"abrir") download_open(rows[n - 1].id);
+            else if (verb == L"carpeta") download_show(rows[n - 1].id);
+            else if (verb == L"cancelar") download_cancel(rows[n - 1].id);
+        }
+    }
     else if (starts_with(what, L"ventana=")) g_test_window = _wtoi(what.c_str() + 8);
     else if (what == L"ventana-nueva") { win_open_new(); g_test_window = g_windows.back()->id; }
     else if (what == L"mover-nueva") { Window *n = t ? tab_to_new_window(t, nullptr) : nullptr; if (n) g_test_window = n->id; }
@@ -1084,6 +1096,55 @@ static std::wstring arg_to_url(const std::wstring &a) {
     return a;
 }
 
+// the file types Pluma opens: listed in "Open with" for each, so Windows offers Pluma for them (instalar.ps1 registers
+// Pluma as a browser, but an update doesn't run it again)
+static const wchar_t *kOpenTypes[] = { L".htm", L".html", L".shtml", L".xht", L".xhtml", L".svg", L".webp", L".pdf" };
+static void register_open_with() {
+    for (auto e : kOpenTypes) {
+        HKEY k;
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, (std::wstring(L"Software\\Classes\\") + e + L"\\OpenWithProgids").c_str(), 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) continue;
+        RegSetValueExW(k, L"PlumaHTML", 0, REG_NONE, NULL, 0);
+        RegCloseKey(k);
+    }
+}
+// a type Windows hands to a program that is no longer there (Edge uninstalled leaves http, .html and .pdf on its
+// MSEdgeHTM / MSEdgePDF): opening a PDF or a link from another app then does nothing at all
+static bool handler_missing(const wchar_t *choice_key) {
+    // Windows 11 keeps the choice in UserChoiceLatest\ProgId; UserChoice can still name the old program
+    wchar_t prog[128] = L""; DWORD n = sizeof(prog);
+    std::wstring latest = std::wstring(choice_key) + L"Latest\\ProgId";
+    if (RegGetValueW(HKEY_CURRENT_USER, latest.c_str(), L"ProgId", RRF_RT_REG_SZ, NULL, prog, &n) != ERROR_SUCCESS || !*prog) {
+        n = sizeof(prog);
+        if (RegGetValueW(HKEY_CURRENT_USER, choice_key, L"ProgId", RRF_RT_REG_SZ, NULL, prog, &n) != ERROR_SUCCESS || !*prog) return false;
+    }
+    if (!wcscmp(prog, L"PlumaHTML")) return false;
+    wchar_t cmd[2048] = L""; n = sizeof(cmd);
+    if (RegGetValueW(HKEY_CLASSES_ROOT, (std::wstring(prog) + L"\\shell\\open\\command").c_str(), NULL, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, NULL, cmd, &n) != ERROR_SUCCESS)
+        return true;
+    // the program is the first token of the command, quoted or not
+    std::wstring c = cmd, exe;
+    if (!c.empty() && c[0] == L'"') { size_t e = c.find(L'"', 1); exe = c.substr(1, e == std::wstring::npos ? std::wstring::npos : e - 1); }
+    else { size_t e = c.find(L".exe"); exe = e == std::wstring::npos ? c.substr(0, c.find(L' ')) : c.substr(0, e + 4); }
+    wchar_t full[MAX_PATH] = L"";
+    ExpandEnvironmentStringsW(exe.c_str(), full, MAX_PATH);
+    return *full && GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES;
+}
+static void check_default_handlers() {
+    static const wchar_t *keys[] = {
+        L"Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice",
+        L"Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.pdf\\UserChoice",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.html\\UserChoice",
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.htm\\UserChoice" };
+    for (auto k : keys) if (handler_missing(k)) {
+        log_line(L"tipos sin programa: los PDF o los enlaces apuntan a uno que ya no está");
+        // from Pluma, on a click: the settings window comes to the front (opened from elsewhere it stayed behind)
+        ui_notice(T(L"Los PDF o los enlaces se abren con un programa que ya no está instalado."), T(L"Abrir con Pluma"),
+                  [] { ShellExecuteW(NULL, L"open", L"ms-settings:defaultapps?registeredAppUser=Pluma", NULL, NULL, SW_SHOWNORMAL); }, 0);
+        return;
+    }
+}
+
 int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     g_inst = inst;
     QueryPerformanceFrequency(&g_freq); QueryPerformanceCounter(&g_t0);
@@ -1221,6 +1282,10 @@ int APIENTRY wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     // first time: offer to bring a backup back (test instances only with PLUMA_SYNC_PRIMERA=1)
     if (first_run && !g_incognito && !g_start_hidden && (!g_test || GetEnvironmentVariableW(L"PLUMA_SYNC_PRIMERA", NULL, 0) > 0))
         ui_notice(T(L"¿Tienes una copia de Pluma? Puedes restaurarla."), T(L"Restaurar"), [] { settings_open_sync(); }, 0);
+    if (!g_incognito && !g_test && g_profile_id.empty()) {
+        register_open_with();
+        if (!g_start_hidden) check_default_handlers();
+    }
     ext_settings_apply_pending();   // and imported extensions' settings
     env_create([] {
         g_env_ready = true;
