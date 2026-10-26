@@ -573,6 +573,35 @@ void video_client_done(void *client);
 bool video_frame(void *client, int max_w, std::vector<BYTE> &px, int &w, int &h);   // the frame on screen (BGRX)
 void video_zoom_done();                   // the picture is in place: the controls again
 
+// ---------------------------------------------------------------- the Scroller (scroller.cpp): any page's videos, one after another
+// Its engine (scroller.js) runs in a world of its own in the page (the page cannot see it nor talk to Pluma); its
+// player is Pluma's (video.cpp), one mpv for the whole feed, in the slot of a layer over the same tab.
+struct ScrollMedia {
+    std::wstring url;                  // what mpv opens: a file (mp4, webm, gif) or a list (HLS, DASH); checked again
+    std::wstring list;                 // an HLS list the page read itself (signed for it: a plain GET gets 403)
+    bool hls = false, gif = false;
+    std::wstring referer, cookie, ua;  // sent with it (cookies only to the page's own host)
+    std::wstring title, author;
+    double box[4] = {}, dpr = 1;       // the slot, in the page's CSS pixels
+};
+void scroller_attach(Tab *t);              // every view: its network's videos (the bar's button) and the Scroller
+void scroller_toggle(Tab *t);              // ⋯ > Scroller, F8, the bar's button: in or out
+void scroller_close(Tab *t);               // out (Esc), back where the video is in the page
+bool scroller_is_open(Tab *t);
+bool scroller_offered(Tab *t);             // videos seen in its page, or a site used in the Scroller: the bar's button
+void scroller_step(Tab *t, int dir);       // the next (1) or the previous (-1) video
+void scroller_wheel(Tab *t, int delta);    // the wheel over the player: one notch, one video
+void scroller_player_event(Tab *t, int how);                   // VIDEO_ENDED, VIDEO_FAILED, VIDEO_ASKED, VIDEO_LEAVE
+void scroller_player_started(Tab *t, double aspect, double ms);   // it plays (its shape, and what it took)
+std::vector<std::wstring> scroller_sites();          // the sites that open straight in the Scroller (Configuración)
+void scroller_site_set(const std::wstring &site, bool always);
+bool video_scroller_play(Tab *t, const ScrollMedia &m);   // into the Scroller's player (the first, or the next in it)
+void video_scroller_box(Tab *t, double x, double y, double w, double h, double dpr);
+void video_scroller_hide(Tab *t, bool hide);    // the player out of sight (a poster, a notice, the page's own video)
+void video_scroller_cmd(Tab *t, const std::wstring &what);   // pause, play, mute, loop
+std::wstring video_scroller_state(Tab *t);       // JSON for the Scroller's layer
+void video_scroller_stop(Tab *t);
+
 // ---------------------------------------------------------------- fullscreen (main.cpp, with the zoom of zoom.cpp)
 void fullscreen_now(bool on);             // the change itself, at once
 RECT fullscreen_rect();                   // the screen it fills (in tests, one off the user's screen)

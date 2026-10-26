@@ -31,7 +31,7 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
                  G_COPY = 0xE8C8, G_WINDOW = 0xE78B, G_NEW_WINDOW_OUT = 0xE8A7, G_SWITCH = 0xE8AB, G_WARN = 0xE7BA,
                  G_CHEV_D = 0xE70D, G_BOLT = 0xE945, G_BLOCK = 0xE733, G_EQ = 0xE9E9, G_KEY = 0xE8D7, G_VIEW = 0xE890,
-                 G_HIDE = 0xED1A, G_CONTACT = 0xE77B };
+                 G_HIDE = 0xED1A, G_CONTACT = 0xE77B, G_VIDEO = 0xE714 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -247,7 +247,7 @@ static float &ui_g_frozen_w();
 #define g_frozen_w (ui_g_frozen_w())
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
            H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE, H_TRANSLATE,
-           H_PASSWORDS };
+           H_PASSWORDS, H_SCROLLER };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo &ui_g_hover();
 #define g_hover (ui_g_hover())
@@ -459,9 +459,16 @@ static D2D1_RECT_F passwords_rect() {
     D2D1_RECT_F s = translate_shown() ? translate_rect() : reader_shown() ? reader_rect() : star_rect();
     return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
 }
+// the Scroller's before them all: the page has videos (its network or a quick count saw one), or its site was used in
+// the Scroller (scroller.cpp)
+static bool scroller_shown() { Tab *t = active_tab(); return star_shown() && scroller_offered(t); }
+static D2D1_RECT_F scroller_rect() {
+    D2D1_RECT_F s = passwords_shown() ? passwords_rect() : translate_shown() ? translate_rect() : reader_shown() ? reader_rect() : star_rect();
+    return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
+}
 static D2D1_RECT_F zoom_rect() {
     D2D1_RECT_F a = addr_rect();
-    float r = passwords_shown() ? passwords_rect().left - S(4) : translate_shown() ? translate_rect().left - S(4) : reader_shown() ? reader_rect().left - S(4) :
+    float r = scroller_shown() ? scroller_rect().left - S(4) : passwords_shown() ? passwords_rect().left - S(4) : translate_shown() ? translate_rect().left - S(4) : reader_shown() ? reader_rect().left - S(4) :
               star_shown() ? star_rect().left - S(4) : a.right - S(6);
     return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
@@ -563,6 +570,7 @@ static HitInfo hit_test(float x, float y) {
         if (reader_shown() && inside(reader_rect(), x, y)) { h.what = H_READER; return h; }
         if (translate_shown() && inside(translate_rect(), x, y)) { h.what = H_TRANSLATE; return h; }
         if (passwords_shown() && inside(passwords_rect(), x, y)) { h.what = H_PASSWORDS; return h; }
+        if (scroller_shown() && inside(scroller_rect(), x, y)) { h.what = H_SCROLLER; return h; }
         if (zoom_shown() && inside(zoom_rect(), x, y)) { h.what = H_ZOOM; return h; }
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
@@ -940,6 +948,18 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         if (open) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
         else if (kh > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, kh * 1.3f));
         glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_KEY, r, open ? p.accent : mix(p.sub, p.text, kh));
+        right = r.left - S(4);
+    }
+    if (scroller_shown()) {
+        // the Scroller: quiet as the others while offered; in the accent, on a soft fill, while it is open
+        D2D1_RECT_F r = scroller_rect();
+        auto &sa = g_btn_hover[hover_key(H_SCROLLER, 0)];
+        busy |= sa.running(now);
+        float sh = sa.at(now);
+        bool on = scroller_is_open(t);
+        if (on) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
+        else if (sh > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, sh * 1.3f));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_VIDEO, r, on ? p.accent : mix(p.sub, p.text, sh));
         right = r.left - S(4);
     }
     if (zoom_shown()) {
@@ -1890,6 +1910,19 @@ static std::vector<MItem> build_page(int page) {
         if (at && at->view && !settings_page_url(at->url) && (starts_with(at->url, L"https://") || starts_with(at->url, L"http://"))) {
             if (at->tr_state) v.push_back(item(T(L"Mostrar original"), G_LANG, L"", [] { after_menu([] { translate_original(active_tab()); }); }));
             else v.push_back(item(T(L"Traducir página"), G_LANG, translate_lang_name(translate_target(), true), [] { after_menu([] { translate_page(active_tab()); }); }));
+            // the Scroller: any page (a list of thumbnails has no video of its own until it is read); and, on a site
+            // used in it, "always" (its pages open in it by themselves)
+            bool on = scroller_is_open(at);
+            v.push_back(item(on ? T(L"Salir del Scroller") : T(L"Scroller"), G_VIDEO, L"F8", [] { after_menu([] { scroller_toggle(active_tab()); }); }));
+            if (!g_incognito && (on || scroller_offered(at))) {
+                std::wstring site = lower(url_host(at->url));
+                if (starts_with(site, L"www.")) site = site.substr(4);
+                bool always = false;
+                for (auto &x : scroller_sites()) if (x == site) always = true;
+                MItem al; al.kind = 3; al.text = T(L"Abrir siempre en Scroller aquí"); al.on = always;
+                al.act = [site, always] { scroller_site_set(site, !always); menu_rebuild(); panel_render(g_menu); };
+                v.push_back(al);
+            }
         }
         if (video_sound_useful()) {   // (while Pluma's player plays: a video, or YouTube Music's sound in any tab)
             const SoundPreset *fx = sound_preset(g_set.sound.preset);
@@ -3016,6 +3049,7 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
     case H_READER: reader_toggle(active_tab()); break;
+    case H_SCROLLER: scroller_toggle(active_tab()); break;
     case H_PASSWORDS: if (passwords_panel_open() && !g_menu_quiet) { menu_close(); ui_invalidate(); } else ui_open_passwords_panel(false); break;
     case H_TRANSLATE:
         if (g_menu.h && !g_menu.closing && !g_menu_quiet && (g_menu_page == PAGE_TRANSLATE || g_menu_page == PAGE_TR_OPTIONS || g_menu_page == PAGE_TR_TARGET)) menu_close();
@@ -3254,6 +3288,7 @@ bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt) {
         if (vk == VK_F5) { tab_reload(false); return true; }
         if (vk == VK_F6) { ui_focus_address(true); return true; }
         if (vk == VK_F9) { reader_toggle(active_tab()); return true; }
+        if (vk == VK_F8) { scroller_toggle(active_tab()); return true; }
         if (vk == VK_F11) { set_fullscreen(!g_fullscreen); return true; }
         if (vk == VK_F12) { tab_devtools(); return true; }
         if (vk == VK_ESCAPE && g_fullscreen) {

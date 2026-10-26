@@ -351,6 +351,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     reader_attach(t);     // and the reader view
     translate_attach(t);  // and the translator
     passgen_attach(t);    // and the strong password on sign-up forms
+    scroller_attach(t);   // and the Scroller (its network's videos)
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
         [id](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *a) -> HRESULT {
