@@ -75,7 +75,8 @@ static bool load_mpv() {
 
 // ---------------------------------------------------------------- one video
 // one entry of YouTube's HLS list: a video variant (its own playlist) or an audio rendition, by group
-struct Fmt { std::string url, group, local; int w = 0, h = 0, fps = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec; };
+struct Fmt { std::string url, group, local; int w = 0, h = 0, fps = 0; long long br = 0; bool audio = false, main_audio = true; std::wstring codec;
+             double loud = NAN; };   // (audio: its loudness in LUFS, as YouTube measured it)
 struct Cap { std::string url, local; std::wstring name, lang; };
 enum Stage { ST_WAITING, ST_ON };
 struct Video {
@@ -89,6 +90,7 @@ struct Video {
     HWND wnd = NULL;
     Stage stage = ST_WAITING;
     double pos = 0, dur = 0, cached = 0, start_at = 0, volume = 100, speed = 1, gain_db = 0;
+    double page_gain_db = 0, page_loud = NAN;   // the page's own normalisation, and the loudness of what it was playing
     bool paused = true, eof = false, buffering = false, muted = false, restarted = false, loaded = false;
     double asked = 0, last_move = 0, bezel_at = -1e9, vol_text_at = -1e9;
     int bezel_icon = 0, serial = 0, osd_w = 0, osd_h = 0;
@@ -496,6 +498,19 @@ static void apply_volume(Video *v) {
     set_double(v, "volume", 100.0 * cbrt(std::max(0.0, v->volume) / 100.0));
     set_double(v, "volume-gain", v->gain_db);
 }
+static void audio_gain(Video *v) {
+    // as loud as the page was: its normalisation, and the difference between what it played and what mpv plays. The
+    // page often plays YouTube's "stable volume" version (DRC), which HLS does not have, and on quiet talk it is
+    // louder than the ordinary one: 4.7 dB on one, and the video sounded "mucho más bajo" after the swap (26/10)
+    double g = v->page_gain_db;
+    if (v->af >= 0 && !isnan(v->page_loud) && !isnan(v->fmts[v->af].loud)) g += v->page_loud - v->fmts[v->af].loud;
+    v->gain_db = std::max(-40.0, std::min(12.0, g));
+    if (g_dev) {
+        wchar_t b[160]; swprintf_s(b, L"vídeo propio: sonido de la página %.1f LUFS (normalización %+.1f dB), el de mpv %.1f LUFS: %+.1f dB",
+                                   v->page_loud, v->page_gain_db, v->af >= 0 ? v->fmts[v->af].loud : NAN, v->gain_db);
+        log_line(b);
+    }
+}
 static std::string escaped(const std::string &s) { return "%" + std::to_string(s.size()) + "%" + s; }   // mpv's quoting for option values
 static void load_streams(Video *v, double start, bool paused) {
     // the playlists Pluma already read (saved next to its data): mpv goes straight to the pieces
@@ -720,6 +735,8 @@ static std::vector<Fmt> parse_master(const std::string &m3u8) {
             Fmt f; f.audio = true; f.url = attr(line, "URI"); f.group = attr(line, "GROUP-ID");
             std::string name = attr(line, "NAME"), def = attr(line, "DEFAULT");
             f.main_audio = def.empty() || def == "YES" || name.find("original") != std::string::npos;
+            std::string loud = attr(line, "YT-EXT-ABSOLUTE-LOUDNESS");
+            if (!loud.empty()) f.loud = atof(loud.c_str());
             if (google_url(f.url)) out.push_back(f);
         } else if (line.rfind("#EXT-X-STREAM-INF:", 0) == 0) pending = line;
         else if (!pending.empty() && !line.empty() && line[0] != '#') {
@@ -1151,7 +1168,7 @@ static void set_quality(Video *v, int h) {
         v->vf = f;
         int a = pick_audio(v);
         auto go = [](Video *v) { load_streams(v, refresh_pos(v), v->paused); paint_all(v); };
-        if (a != v->af) { v->af = a; fetch_playlists(v, { a }, go); }
+        if (a != v->af) { v->af = a; audio_gain(v); apply_volume(v); fetch_playlists(v, { a }, go); }
         else go(v);
     });
     paint_all(v);
@@ -1746,10 +1763,16 @@ static const wchar_t *kExtract = LR"JS((async () => {
   const el = document.querySelector('#movie_player video');
   const cc = (p.getOption && p.getOption('captions', 'track')) || {};
   const b = p.getBoundingClientRect();
+  // the loudness of what the page plays: its own "stats for nerds" say it ("100%/56% DRC (cont.-14.0dB tgt.-19.0dB)"),
+  // else the ordinary version's
+  const sv = ((p.getStatsForNerds && p.getStatsForNerds()) || {}).volume || '';
+  const lm = /cont\.\s*(-?\d+(?:\.\d+)?)\s*dB/.exec(sv);
+  const pac = (((p.getPlayerResponse && p.getPlayerResponse()) || {}).playerConfig || {}).audioConfig || {};
+  const loud = lm ? +lm[1] : (typeof pac.trackAbsoluteLoudnessLkfs === 'number' ? pac.trackAbsoluteLoudnessLkfs : null);
   return { id, title: vd.title || document.title, author: vd.author || '', length: +vd.lengthSeconds || 0, hls, tracks,
            time: p.getCurrentTime(), state: p.getPlayerState(), volume: p.getVolume ? p.getVolume() : 100,
            muted: p.isMuted ? p.isMuted() : false, gain: el ? el.volume : 1, speed: p.getPlaybackRate ? p.getPlaybackRate() : 1,
-           cc: cc.languageCode || '', box: [b.left, b.top, b.width, b.height], dpr: devicePixelRatio };
+           cc: cc.languageCode || '', box: [b.left, b.top, b.width, b.height], dpr: devicePixelRatio, loud };
 })())JS";
 static void freeze_page(int id) {
     // the page, paused where it was, freezes and gives its memory back. (Not stopVideo: after it YouTube's player
@@ -1834,8 +1857,9 @@ static void switch_now(Tab *t, Video *v, bool playing) {
     t->audible = playing && !v->muted;
     if (t == active_tab()) show_player(t, v);
     SetTimer(g_msg, kCtlTimer, 250, ctl_tick);
+    wchar_t gain[24]; swprintf_s(gain, L"%+.1f", v->gain_db);
     log_line(L"vídeo propio: " + (t->incognito ? std::wstring(L"(incógnito)") : v->title) + L" a " + std::to_wstring(v->vf >= 0 ? v->fmts[v->vf].h : 0) + L"p " + (v->vf >= 0 ? v->fmts[v->vf].codec : L"") +
-             L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió");
+             L", " + std::to_wstring((int)(now_ms() - v->asked)) + L" ms desde que se pidió, sonido " + gain + L" dB");
     v->warm_at = now_ms();
     SetTimer(g_msg, kFreezeTimer + t->id, 2500, freeze_check);
     // the other qualities' lists, ahead (YouTube's list server takes 1-3 s for each)
@@ -1861,8 +1885,11 @@ static void sync_tick(Tab *t, Video *v) {
     if (now_ms() - v->asked > 45000) { video_destroy(t); video_page_changed(t); return; }   // the page did not play it: later, then
     int id = t->id;
     eval(t, L"(() => { const p = document.getElementById('movie_player'); if (!p || !p.getCurrentTime) return null;"
-            L" const r = p.getBoundingClientRect();"
-            L" return [p.getCurrentTime(), p.getPlayerState(), r.left, r.top, r.width, r.height, devicePixelRatio]; })()",
+            L" const r = p.getBoundingClientRect(), el = document.querySelector('#movie_player video');"
+            // (and its sound as it is now: the volume, and the loudness of what it plays, known only once it plays)
+            L" const lm = /cont\\.\\s*(-?\\d+(?:\\.\\d+)?)\\s*dB/.exec(((p.getStatsForNerds && p.getStatsForNerds()) || {}).volume || '');"
+            L" return [p.getCurrentTime(), p.getPlayerState(), r.left, r.top, r.width, r.height, devicePixelRatio,"
+            L" lm ? +lm[1] : null, el ? el.volume : null, p.getVolume ? p.getVolume() : null]; })()",
          [id](const Json &r) {
              Tab *t = tab_by_id(id);
              Video *v = V(t);
@@ -1908,6 +1935,16 @@ static void sync_tick(Tab *t, Video *v) {
                  }
                  // the photo or mpv's picture at the new size not there yet: a moment (if it is late, mpv goes ahead)
                  if (!pic || !drawn) { SetTimer(g_msg, kSyncTimer + id, 20, sync_timer); return; }
+                 if (r.arr.size() >= 10) {
+                     // as loud as the page is at this very moment
+                     if (r.arr[7].kind == Json::NUM) v->page_loud = r.arr[7].n;
+                     if (r.arr[8].kind == Json::NUM && r.arr[9].kind == Json::NUM && r.arr[9].n > 0 && r.arr[8].n > 0) {
+                         v->volume = r.arr[9].n;
+                         v->page_gain_db = std::max(-40.0, std::min(12.0, 20 * log10(r.arr[8].n / (v->volume / 100.0))));
+                     }
+                     audio_gain(v);
+                     apply_volume(v);
+                 }
                  switch_now(t, v, true);
                  return;
              }
@@ -1953,7 +1990,8 @@ static void video_try(Tab *t) {
         v->muted = r[L"muted"].b;
         v->speed = r[L"speed"].kind == Json::NUM && r[L"speed"].n > 0 ? r[L"speed"].n : 1;
         double gain = r[L"gain"].kind == Json::NUM ? r[L"gain"].n : 1;
-        v->gain_db = v->volume > 0 && gain > 0 ? std::max(-30.0, std::min(0.0, 20 * log10(gain / (v->volume / 100.0)))) : 0;
+        v->page_gain_db = v->volume > 0 && gain > 0 ? std::max(-40.0, std::min(12.0, 20 * log10(gain / (v->volume / 100.0)))) : 0;
+        if (r[L"loud"].kind == Json::NUM) v->page_loud = r[L"loud"].n;
         std::wstring cc = r[L"cc"].s;
         if (!cc.empty()) for (size_t i = 0; i < v->caps.size(); i++) if (v->caps[i].lang == cc) { v->sub = (int)i; break; }   // (added once loaded)
         // where the video is in the page (the quality is chosen for that size, as YouTube's)
@@ -1978,6 +2016,7 @@ static void video_try(Tab *t) {
                 v->vf = pick_video(v, target_height(v));
                 v->af = pick_audio(v);
                 if (v->vf < 0 || v->af < 0) { give_up(L"no hay formatos que valgan"); return; }
+                audio_gain(v);
                 fetch_playlists(v, { v->vf, v->af }, [pt, at](Video *v) {
                     if (v->stage != ST_WAITING || v->mpv) return;
                     // ahead of where the page is now: mpv takes ~1.5 s to start with the lists already here, more on a
