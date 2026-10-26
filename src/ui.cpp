@@ -1095,7 +1095,7 @@ static LRESULT CALLBACK edit_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (ctrl && wp == VK_BACK) { delete_word_left(); return 0; }
         if (wp == VK_TAB) return 0;
         // the browser's own keys still work while typing (not the edit's: copy, paste, undo, arrows)
-        if ((ctrl && wcschr(L"TWNJQ1234567890\x09\x21\x22", (wchar_t)wp)) || wp == VK_F5 || wp == VK_F6 || wp == VK_F11 || wp == VK_F12 ||
+        if ((ctrl && wcschr(L"TWNJQ1234567890\x09\x21\x22", (wchar_t)wp)) || wp == VK_F5 || wp == VK_F6 || wp == VK_F9 || wp == VK_F11 || wp == VK_F12 ||
             (alt && (wp == VK_LEFT || wp == VK_RIGHT)))
             if (handle_shortcut((UINT)wp, ctrl, shift, alt)) return 0;
         break;
