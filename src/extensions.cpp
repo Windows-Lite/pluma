@@ -8,14 +8,14 @@
 
 std::vector<Extension> g_exts;
 std::wstring extensions_folder() {
-    std::wstring f = g_state + L"\\extensiones";
+    std::wstring f = g_data + L"\\extensiones";
     CreateDirectoryW(f.c_str(), NULL);
     return f;
 }
 // which folder became which extension id (WebView2 does not say), and the bundled ones the user removed
 struct Known { std::wstring folder, id; bool removed = false; };
 static std::vector<Known> g_known;
-static std::wstring known_file() { return g_state + L"\\extensiones.tsv"; }
+static std::wstring known_file() { return g_data + L"\\extensiones.tsv"; }
 static void known_load() {
     g_known.clear();
     std::string d;
@@ -349,7 +349,7 @@ void ext_open_popup(size_t i, RECT anchor) {
     HWND me = g_pop;
     Tab *t = active_tab();
     std::wstring page_url = t ? t->url : L"";
-    g_env->CreateCoreWebView2Controller(g_pop, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+    create_controller(g_pop, Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
         [me, e, page_url](HRESULT hr, ICoreWebView2Controller *c) -> HRESULT {
             if (FAILED(hr) || !c || me != g_pop) { if (c) c->Close(); return S_OK; }
             g_pop_ctrl = c;
@@ -439,7 +439,7 @@ static bool unpack_crx(const std::wstring &crx, const std::wstring &dest) {
 void store_install(const std::wstring &id, bool edge) {
     ui_toast(T(L"Descargando la extensión..."));
     std::wstring dest = extensions_folder() + L"\\" + id;
-    std::wstring tmp = g_state + L"\\" + id + L".crx";
+    std::wstring tmp = g_data + L"\\" + id + L".crx";
     std::wstring url = edge
         ? L"https://edge.microsoft.com/extensionwebstorebase/v1/crx?response=redirect&x=id%3D" + id + L"%26installsource%3Dondemand%26uc"
         : L"https://clients2.google.com/service/update2/crx?response=redirect&prodversion=155.0.0.0&acceptformat=crx2,crx3&x=id%3D" + id + L"%26uc";
@@ -464,4 +464,237 @@ void store_install(const std::wstring &id, bool edge) {
             });
         });
     }).detach();
+}
+
+// ---------------------------------------------------------------- extensions from another Chromium browser (Edge)
+// What the person installed in that profile is in its Secure Preferences (location 1: from a store); each one is its
+// unpacked folder in Extensions\<id>\<version>. The store wrote the extension's public key into that manifest, so the
+// same folder loaded here keeps the same id, and with it what it saved: chrome.storage ("Local Extension Settings\<id>",
+// "Sync Extension Settings\<id>") and its IndexedDB. The folder is copied into the Pluma profile's extensiones\ (never
+// loaded from the other browser's), and the settings into the engine's profile before the extension first runs here.
+// If the engine has them open (they were there already), they wait in extensiones-ajustes\ for the next start.
+static const wchar_t *kUbolId = L"ddkjiahejlhfcafbddmgiahcphecmpfh";
+struct OtherExt { std::wstring id, src; bool off = false; };
+static bool ext_id_ok(const std::wstring &id) {
+    if (id.size() != 32) return false;
+    for (wchar_t c : id) if (c < L'a' || c > L'p') return false;
+    return true;
+}
+static std::vector<OtherExt> other_extensions(const std::wstring &dir) {
+    std::vector<OtherExt> out;
+    for (const wchar_t *f : { L"\\Secure Preferences", L"\\Preferences" }) {
+        std::string d;
+        if (!read_file(dir + f, d)) continue;
+        Json j = json_parse(wide(d));
+        const Json &s = j[L"extensions"][L"settings"];
+        if (s.kind != Json::OBJ) continue;
+        for (auto &kv : s.obj) {
+            const Json &e = kv.second;
+            // installed by the person, not the browser's own (5 and 10: built in) nor what it brought by default
+            if (!ext_id_ok(kv.first) || (int)e[L"location"].n != 1 || e[L"was_installed_by_default"].b) continue;
+            std::wstring rel = e[L"path"].s;
+            for (auto &c : rel) if (c == L'/') c = L'\\';
+            if (rel.empty() || rel.find(L"..") != std::wstring::npos || rel.find(L':') != std::wstring::npos) continue;
+            OtherExt x; x.id = kv.first; x.src = dir + L"\\Extensions\\" + rel;
+            if (!PathFileExistsW((x.src + L"\\manifest.json").c_str())) continue;
+            x.off = (e[L"disable_reasons"].kind == Json::NUM && e[L"disable_reasons"].n != 0) || (e[L"state"].kind == Json::NUM && e[L"state"].n == 0);
+            out.push_back(x);
+        }
+        if (!out.empty()) break;   // Secure Preferences has them; the other is the old place
+    }
+    return out;
+}
+int ext_import_count(const std::wstring &dir) { return (int)other_extensions(dir).size(); }
+// "__MSG_extName__" is in _locales: Pluma's language first, then the extension's own
+static std::wstring ext_shown_name(const std::wstring &folder, const Json &m) {
+    std::wstring n = m[L"name"].s;
+    if (!starts_with(n, L"__MSG_") || n.size() < 9) return n;
+    std::wstring key = lower(n.substr(6, n.size() - 8));
+    for (const std::wstring &loc : { std::wstring(lang_code()), m[L"default_locale"].s, std::wstring(L"en") }) {
+        if (loc.empty()) continue;
+        std::string d;
+        if (!read_file(folder + L"\\_locales\\" + loc + L"\\messages.json", d)) continue;
+        if (d.size() >= 3 && (unsigned char)d[0] == 0xEF) d = d.substr(3);
+        Json j = json_parse(wide(d));
+        for (auto &kv : j.obj) if (lower(kv.first) == key && kv.second[L"message"].is_str()) return kv.second[L"message"].s;
+    }
+    return n;
+}
+// a folder copied file by file (shared reads: the other browser may be open). extension: its top-level "_" names but
+// _locales are left out (the store's _metadata signature stops an unpacked load). Not an extension: no LOCK files.
+static bool copy_tree(const std::wstring &src, const std::wstring &dst, bool extension, bool top = true) {
+    SHCreateDirectoryExW(NULL, dst.c_str(), NULL);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((src + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    bool ok = true;
+    do {
+        std::wstring n = fd.cFileName;
+        if (n == L"." || n == L".." || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) continue;
+        if (extension && top && n[0] == L'_' && n != L"_locales") continue;
+        if (!extension && n == L"LOCK") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ok = copy_tree(src + L"\\" + n, dst + L"\\" + n, extension, false) && ok;
+        else { std::string d; ok = read_file(src + L"\\" + n, d) && write_file(dst + L"\\" + n, d) && ok; }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return ok;
+}
+static bool db_in_use(const std::wstring &dir) {
+    HANDLE f = CreateFileW((dir + L"\\LOCK").c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (f != INVALID_HANDLE_VALUE) { CloseHandle(f); return false; }
+    DWORD e = GetLastError();
+    return e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION;
+}
+static std::vector<std::wstring> settings_parts(const std::wstring &id) {
+    return { L"Local Extension Settings\\" + id, L"Sync Extension Settings\\" + id,
+             L"IndexedDB\\chrome-extension_" + id + L"_0.indexeddb.leveldb", L"IndexedDB\\chrome-extension_" + id + L"_0.indexeddb.blob" };
+}
+// what is staged for one extension into the engine's profile; false if something has to wait (the engine has it open)
+static bool settings_put(const std::wstring &stage, const std::wstring &wv, const std::wstring &id) {
+    bool all = true;
+    for (auto &part : settings_parts(id)) {
+        std::wstring from = stage + L"\\" + part, to = wv + L"\\" + part;
+        if (!PathFileExistsW(from.c_str())) continue;
+        std::wstring lockable = ends_with_i(to, L".blob") ? to.substr(0, to.size() - 5) + L".leveldb" : to;
+        if (db_in_use(lockable)) { all = false; continue; }
+        if (PathFileExistsW(to.c_str())) delete_tree(to);
+        if (copy_tree(from, to, false)) delete_tree(from);
+        else all = false;
+    }
+    if (all) delete_tree(stage);
+    return all;
+}
+void ext_settings_apply_pending() {
+    if (g_incognito) return;
+    std::wstring base = g_data + L"\\extensiones-ajustes";
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((base + L"\\*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    std::vector<std::wstring> ids;
+    do if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && ext_id_ok(fd.cFileName)) ids.push_back(fd.cFileName); while (FindNextFileW(h, &fd));
+    FindClose(h);
+    for (auto &id : ids) {
+        bool ok = settings_put(base + L"\\" + id, wv_profile_dir(), id);
+        log_line(L"ajustes de la extensión " + id + (ok ? L": puestos" : L": el motor los tiene abiertos, la próxima vez"));
+    }
+    RemoveDirectoryW(base.c_str());   // (only if nothing is left)
+}
+
+struct ExtLoad { std::wstring folder, id; bool off; size_t at; bool mv2; };
+struct ExtJob {
+    std::vector<ExtImported> out; std::vector<ExtLoad> load; size_t i = 0;
+    std::wstring target, data, wv; bool waiting = false;
+    ComPtr<ICoreWebView2Profile> pr; ComPtr<ICoreWebView2Controller> c;
+    std::function<void(std::vector<ExtImported>, bool)> done;
+};
+static void ext_job_end(std::shared_ptr<ExtJob> job) {
+    if (job->c) { job->c->Close(); job->c.Reset(); }
+    job->pr.Reset();
+    // which folder is which id, in that profile's list (this window's is read again by ext_sync)
+    std::wstring mine = g_data;
+    g_data = job->data;
+    known_load();
+    for (auto &l : job->load) {
+        if (job->out[l.at].state != 0) continue;
+        Known *k = known_by_folder(l.folder);
+        if (k) { k->id = l.id; k->removed = false; } else g_known.push_back({ l.folder, l.id, false });
+    }
+    known_save();
+    g_data = mine;
+    known_load();
+    if (job->target == g_profile_id) ext_sync([] { ui_layout(); });
+    else if (HWND w = profile_window(job->target)) PostMessageW(w, WM_APP + 40, 0, 0);
+    job->done(job->out, job->waiting);
+}
+static void ext_job_step(std::shared_ptr<ExtJob> job) {
+    if (job->i >= job->load.size() || !job->pr) { ext_job_end(job); return; }
+    ComPtr<ICoreWebView2Profile7> p7;
+    if (FAILED(job->pr.As(&p7))) { ext_job_end(job); return; }
+    ExtLoad l = job->load[job->i++];
+    p7->AddBrowserExtension(l.folder.c_str(), Callback<ICoreWebView2ProfileAddBrowserExtensionCompletedHandler>(
+        [job, l](HRESULT hr, ICoreWebView2BrowserExtension *x) -> HRESULT {
+            ExtImported &r = job->out[l.at];
+            if (SUCCEEDED(hr) && x) {
+                LPWSTR id = NULL; x->get_Id(&id);
+                std::wstring got = id ? id : L"";
+                CoTaskMemFree(id);
+                if (got != l.id) { log_line(L"extensión importada con otro id: " + l.id + L" -> " + got); r.settings = false; job->load[job->i - 1].id = got; }
+                if (l.off) { x->Enable(FALSE, Callback<ICoreWebView2BrowserExtensionEnableCompletedHandler>([](HRESULT) -> HRESULT { return S_OK; }).Get()); r.off = true; }
+                log_line(L"extensión importada: " + l.id);
+            } else {
+                wchar_t b[16]; swprintf_s(b, L"%08X", (unsigned)hr);
+                log_line(L"extensión importada que no carga: " + l.id + L" (" + b + L")");
+                r.state = l.mv2 ? 2 : 4; r.settings = false;   // (Manifest V2: the engine may still take them, so it is tried)
+                // nothing of it stays: it would be tried again at every start
+                std::wstring exts = job->data + L"\\extensiones\\";
+                if (!_wcsnicmp(l.folder.c_str(), exts.c_str(), exts.size())) delete_tree(l.folder);
+                delete_tree(job->data + L"\\extensiones-ajustes\\" + l.id);
+                for (auto &part : settings_parts(l.id)) if (!db_in_use(job->wv + L"\\" + part)) delete_tree(job->wv + L"\\" + part);
+            }
+            ui_post([job] { ext_job_step(job); });
+            return S_OK;
+        }).Get());
+}
+void ext_import(const std::wstring &dir, const std::wstring &target, std::function<void(std::vector<ExtImported>, bool)> done) {
+    auto job = std::make_shared<ExtJob>();
+    job->target = target; job->done = done;
+    job->data = profile_data_dir(target);
+    job->wv = wv_profile_dir_of(target);
+    std::wstring exts = job->data + L"\\extensiones", stage = job->data + L"\\extensiones-ajustes";
+    SHCreateDirectoryExW(NULL, exts.c_str(), NULL);
+    for (auto &e : other_extensions(dir)) {
+        Json m = read_manifest(e.src);
+        if (m[L"theme"].is_obj()) continue;   // a theme: nothing Pluma draws
+        ExtImported r; r.id = e.id; r.name = ext_shown_name(e.src, m);
+        std::wstring to = exts + L"\\" + e.id;
+        if (e.id == kUbolId || lower(r.name).find(L"ublock origin") != std::wstring::npos) r.state = 3;   // Pluma brings its own
+        else if (PathFileExistsW((to + L"\\manifest.json").c_str())) r.state = 1;   // brought before: what it has here stays
+        else if (!copy_tree(e.src, to, true)) { delete_tree(to); r.state = 4; }
+        else {
+            // its settings, staged, then into the engine's profile (now, unless the engine has them open)
+            bool any = false;
+            for (auto &part : settings_parts(e.id)) {
+                std::wstring from = dir + L"\\" + part;
+                if (PathFileExistsW(from.c_str()) && copy_tree(from, stage + L"\\" + e.id + L"\\" + part, false)) any = true;
+            }
+            if (any && m[L"key"].is_str()) {
+                r.settings = true;
+                if (!settings_put(stage + L"\\" + e.id, job->wv, e.id)) job->waiting = true;
+            } else delete_tree(stage + L"\\" + e.id);
+            job->load.push_back({ to, e.id, e.off, job->out.size(), (int)m[L"manifest_version"].n < 3 });
+        }
+        job->out.push_back(r);
+    }
+    RemoveDirectoryW(stage.c_str());
+    log_line(L"extensiones de " + dir.substr(dir.rfind(L'\\') + 1) + L": " + std::to_wstring(job->out.size()) + L", a cargar " + std::to_wstring(job->load.size()));
+    if (job->load.empty() || !g_env) { ext_job_end(job); return; }   // (with no engine yet, they load when it starts)
+    // into that engine profile: this window's, or another's through a view of it that is never shown
+    if (target == g_profile_id) { with_profile([job](ICoreWebView2Profile *pr) { job->pr = pr; ext_job_step(job); }); return; }
+    auto made = Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+        [job](HRESULT hr, ICoreWebView2Controller *c) -> HRESULT {
+            ComPtr<ICoreWebView2> v; ComPtr<ICoreWebView2_13> v13;
+            if (SUCCEEDED(hr) && c) {
+                job->c = c;
+                c->put_IsVisible(FALSE);
+                RECT none = { 0, 0, 0, 0 }; c->put_Bounds(none);
+                if (SUCCEEDED(c->get_CoreWebView2(&v)) && SUCCEEDED(v.As(&v13))) v13->get_Profile(&job->pr);
+            }
+            ext_job_step(job);
+            return S_OK;
+        });
+    // (the default profile is the engine's own, without a name, as its windows make it)
+    if (target.empty()) { g_env->CreateCoreWebView2Controller(g_win, made.Get()); return; }
+    ComPtr<ICoreWebView2Environment10> e10;
+    ComPtr<ICoreWebView2ControllerOptions> o;
+    if (FAILED(g_env.As(&e10)) || FAILED(e10->CreateCoreWebView2ControllerOptions(&o))) { ext_job_end(job); return; }
+    std::wstring name = L"pluma-" + target;
+    o->put_ProfileName(name.c_str());
+    e10->CreateCoreWebView2ControllerWithOptions(g_win, o.Get(), made.Get());
+}
+std::wstring ext_imported_json(const std::vector<ExtImported> &v) {
+    std::wstring o = L"[";
+    for (size_t i = 0; i < v.size(); i++)
+        o += (i ? L"," : L"") + std::wstring(L"{\"name\":") + json_escape(v[i].name) + L",\"state\":" + std::to_wstring(v[i].state) +
+             L",\"settings\":" + (v[i].settings ? L"true" : L"false") + L",\"off\":" + (v[i].off ? L"true" : L"false") + L"}";
+    return o + L"]";
 }

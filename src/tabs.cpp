@@ -93,12 +93,21 @@ static void on_browser_exited();
 static void trim_after_load();
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done);
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done, bool incognito);
+// Every Pluma.exe on this data folder shares one engine, and the engine refuses a second window whose options differ
+// from the first one's: a window started from another Pluma (incognito, another profile) takes the very options its
+// parent started the engine with, even if the language or "motor" changed since (they apply when Pluma starts again)
+static std::wstring g_engine_lang, g_engine_args;
+void engine_options(std::wstring &lang, std::wstring &args) { lang = g_engine_lang; args = g_engine_args; }
 void env_create(std::function<void()> ready) {
     auto opts = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
     opts->put_AreBrowserExtensionsEnabled(TRUE);
     opts->put_ScrollBarStyle(COREWEBVIEW2_SCROLLBAR_STYLE_FLUENT_OVERLAY);
-    opts->put_Language(lang_code());   // the engine's own menus and the pages' Accept-Language, as Pluma's
-    std::wstring args = browser_args();
+    wchar_t inh[2048];
+    std::wstring lang = lang_code(), args = browser_args();
+    if (GetEnvironmentVariableW(L"PLUMA_MOTOR_IDIOMA", inh, 2048) > 0) lang = inh;
+    if (GetEnvironmentVariableW(L"PLUMA_MOTOR_ARGS", inh, 2048) > 0) args = inh;
+    g_engine_lang = lang; g_engine_args = args;
+    opts->put_Language(lang.c_str());   // the engine's own menus and the pages' Accept-Language, as Pluma's
     opts->put_AdditionalBrowserArguments(args.c_str());
     std::wstring data = g_state + L"\\webview2";
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(NULL, data.c_str(), opts.Get(),
@@ -234,7 +243,21 @@ static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done,
         } else done(nullptr);   // (never an ordinary view instead)
         return;
     }
-    g_env->CreateCoreWebView2Controller(g_win, handler.Get());
+    create_controller(g_win, handler.Get());
+}
+void create_controller(HWND parent, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler *h) {
+    // another profile's window: its views in that profile (cookies, cache, extensions, passwords of its own)
+    if (!g_profile_id.empty()) {
+        ComPtr<ICoreWebView2Environment10> e10;
+        ComPtr<ICoreWebView2ControllerOptions> o;
+        if (SUCCEEDED(g_env.As(&e10)) && SUCCEEDED(e10->CreateCoreWebView2ControllerOptions(&o))) {
+            o->put_ProfileName(wv_profile_name().c_str());
+            o->put_IsInPrivateModeEnabled(FALSE);
+            e10->CreateCoreWebView2ControllerWithOptions(parent, o.Get(), h);
+        } else h->Invoke(E_NOINTERFACE, nullptr);   // (never the default profile instead)
+        return;
+    }
+    g_env->CreateCoreWebView2Controller(parent, h);
 }
 static void make_view(std::function<void(ComPtr<ICoreWebView2Controller>)> done) { make_view(done, false); }
 static void CALLBACK spare_timer(HWND, UINT, UINT_PTR id, DWORD) { KillTimer(g_win, id); spare_prepare(); }
@@ -1018,8 +1041,11 @@ void tabs_trim(int mode) {
         bool sounding = t->audible && mode != TRIM_IDLE;
         if (on_screen || sounding || (!everything && !t->suspended && !t->audible)) keep.push_back(main_frame(t.get()));
     }
+    std::vector<UINT32> mine;
+    for (auto &t : g_tabs) if (t->view) mine.push_back(main_frame(t.get()));
+    if (g_pre && g_pre->view) mine.push_back(main_frame(g_pre.get()));
     e13->GetProcessExtendedInfos(Callback<ICoreWebView2GetProcessExtendedInfosCompletedHandler>(
-        [mode, everything, keep](HRESULT hr, ICoreWebView2ProcessExtendedInfoCollection *list) -> HRESULT {
+        [mode, everything, keep, mine](HRESULT hr, ICoreWebView2ProcessExtendedInfoCollection *list) -> HRESULT {
             UINT n = 0;
             std::vector<DWORD> pids;
             if (FAILED(hr) || !list) return S_OK;
@@ -1035,7 +1061,7 @@ void tabs_trim(int mode) {
                 // measured), without a single extra stutter in 25 s of scrolling at 144 Hz (tools/tirones.js)
                 if (mode == TRIM_FROZEN && kind != COREWEBVIEW2_PROCESS_KIND_RENDERER) continue;
 
-                bool needed = false;
+                bool needed = false, foreign = false;
                 ComPtr<ICoreWebView2FrameInfoCollection> frames;
                 if (SUCCEEDED(x->get_AssociatedFrameInfos(&frames)) && frames) {
                     ComPtr<ICoreWebView2FrameInfoCollectionIterator> it;
@@ -1046,8 +1072,11 @@ void tabs_trim(int mode) {
                             if (FAILED(it->GetCurrent(&f))) break;
                             UINT32 r = root_frame(f.Get());
                             needed = std::find(keep.begin(), keep.end(), r) != keep.end();
+                            // (a page of another window on the same engine, another profile's: not this one's to trim)
+                            if (std::find(mine.begin(), mine.end(), r) == mine.end()) foreign = true;
                         }
                 }
+                if (kind == COREWEBVIEW2_PROCESS_KIND_RENDERER && foreign && !needed) continue;
                 if (!needed) pids.push_back((DWORD)pid);
             }
             // the trimming itself takes a while (tens of ms for a big process): never on the window's thread, which
@@ -1123,11 +1152,11 @@ void session_save() {
         for (auto &c : title) if (c == L'\t' || c == L'\n' || c == L'\r') c = L' ';
         out += t->url + L"\t" + title + L"\n";
     }
-    write_file(g_state + L"\\sesion.tsv", utf8(out));
+    write_file(g_data + L"\\sesion.tsv", utf8(out));
 }
 void session_restore() {
     std::string data;
-    if (!read_file(g_state + L"\\sesion.tsv", data)) return;
+    if (!read_file(g_data + L"\\sesion.tsv", data)) return;
     std::wstring w = wide(data);
     int active = 0;
     size_t pos = 0;

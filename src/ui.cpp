@@ -11,7 +11,7 @@
 
 // ---------------------------------------------------------------- metrics (DIP; multiplied by the screen's scale)
 static const float kTabRowH = 38, kToolRowH = 44, kNoticeH = 44, kCapW = 46, kTabMax = 236, kTabMin = 40, kTabGap = 2,
-                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30, kBmRowH = 32, kBmBtnH = 24;
+                   kTabY = 4, kTabH = 30, kBtn = 32, kAddrH = 34, kPlusW = 30, kBmRowH = 32, kBmBtnH = 24, kAvatarW = 32;
 static const double kHoverMs = 120, kTabMs = 180, kPanelMs = 140;
 static float g_s = 1;
 float ui_scale() { return g_s; }
@@ -73,7 +73,7 @@ static D2D1_RENDER_TARGET_TYPE render_type() {
     return !wcscmp(v, L"cpu") ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT;
 }
 static ComPtr<ID2D1SolidColorBrush> g_br;
-struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, menu, hint, word, ntp, ntp_sub, notice; };
+struct Formats { ComPtr<IDWriteTextFormat> tab, addr, icon, icon_sm, icon_lg, menu, hint, word, ntp, ntp_sub, notice, avatar; };
 static Formats g_f;
 static HFONT g_edit_font;
 static std::unordered_map<std::wstring, float> g_widths;   // text widths, measured once
@@ -110,6 +110,7 @@ static void make_formats() {
     g_f.ntp = make_format(false, S(13), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_f.ntp_sub = make_format(false, S(12), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_f.notice = make_format(false, S(14), DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
+    g_f.avatar = make_format(false, S(11.5f), DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
     if (g_edit_font) DeleteObject(g_edit_font);
     g_edit_font = CreateFontW(-(int)lroundf(S(14)), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, g_ui_family.c_str());
@@ -215,7 +216,7 @@ static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
 static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
 static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo g_hover, g_press;
 static std::unordered_map<int, Anim> g_btn_hover;  // per control
@@ -236,6 +237,7 @@ static void update_suggestions();
 static void sug_move(int d);
 static bool sug_commit(bool new_tab);
 static void open_menu_page(int page, RECT anchor, int tab_id = 0);
+static bool g_menu_page_is_profiles();   // the profile button's menu is open (its button stays lit)
 static void menu_close();
 
 static int hover_key(Hit h, int id) { return (int)h * 100000 + id; }
@@ -265,7 +267,8 @@ static void compute_geo() {
     Geo g;
     g.W = (float)rc.right;
     g.cap_l = g.W - S(kCapW * 3);
-    g.strip_l = S(8);
+    // the profile's button (as Edge's avatar) comes first, left of the tabs; not in the incognito window
+    g.strip_l = g_incognito ? S(8) : S(8 + kAvatarW + 4);
     g.strip_r = g.cap_l - S(8 + kPlusW + 6);
     float avail = g.strip_r - g.strip_l;
     size_t n = std::max<size_t>(1, g_tabs.size());
@@ -328,6 +331,21 @@ static D2D1_RECT_F tab_audio_rect(const Slot &s) {
 static D2D1_RECT_F plus_rect(double now, bool settled = false) {
     float x = (settled ? settled_strip_end(now) : strip_end(now)) + S(4);
     return R(x, S(kTabY), x + S(kPlusW), S(kTabY + kTabH));
+}
+static D2D1_RECT_F profile_rect() { return R(S(8), S(kTabY), S(8 + kAvatarW), S(kTabY + kTabH)); }
+static D2D1_COLOR_F rgb_of(unsigned c) { return hex(c & 0xffffff); }
+static std::wstring initial_of(const std::wstring &name) {
+    std::wstring n = trim(name);
+    if (n.empty()) return L"?";
+    std::wstring one = n.substr(0, IS_HIGH_SURROGATE(n[0]) && n.size() > 1 ? 2 : 1);
+    CharUpperBuffW(one.data(), (DWORD)one.size());
+    return one;
+}
+// a profile's avatar: its colour, its initial in white
+static void draw_avatar(ID2D1RenderTarget *rt, ID2D1SolidColorBrush *b, float cx, float cy, float r, const Profile &p) {
+    b->SetColor(rgb_of(p.color));
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), b);
+    text(rt, b, g_f.avatar.Get(), initial_of(profile_shown_name(p)), R(cx - r, cy - r, cx + r, cy + r), hex(0xffffff));
 }
 static D2D1_RECT_F cap_rect(int i) { return R(g_geo.cap_l + S(kCapW) * i, 0, g_geo.cap_l + S(kCapW) * (i + 1), S(kTabRowH)); }
 static float tool_y() { return S(kTabRowH); }
@@ -437,6 +455,7 @@ static HitInfo hit_test(float x, float y) {
     if (g_fullscreen) return h;
     if (y < S(kTabRowH)) {
         for (int i = 0; i < 3; i++) if (inside(cap_rect(i), x, y)) { h.what = (Hit)(H_MIN + i); return h; }
+        if (!g_incognito && inside(profile_rect(), x, y)) { h.what = H_PROFILE; return h; }
         for (auto &s : tab_slots(now, true)) {
             D2D1_RECT_F r = tab_rect(s);
             if (!inside(r, x, y)) continue;
@@ -548,6 +567,13 @@ static bool paint_tabs(ID2D1RenderTarget *rt, double now) {
     const Palette &p = pal();
     bool busy = false;
     fill(rt, g_br.Get(), R(0, 0, g_geo.W, S(kTabRowH)), 0, strip_color(p));
+    if (!g_incognito) {
+        D2D1_RECT_F ar = profile_rect();
+        float ah = std::max(hov(H_PROFILE, 0), g_menu_page_is_profiles() ? 1.f : 0.f);
+        busy |= g_btn_hover[hover_key(H_PROFILE, 0)].running(now);
+        if (ah > 0) fill(rt, g_br.Get(), ar, S(9), alpha(p.hover, ah * 1.4f));
+        draw_avatar(rt, g_br.Get(), (ar.left + ar.right) / 2, (ar.top + ar.bottom) / 2, S(11), profile_current());
+    }
     auto slots = tab_slots(now);
     Tab *act = active_tab();
     // the sheet under the active tab, sliding from the previous one
@@ -1337,7 +1363,7 @@ std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1346,10 +1372,12 @@ struct MItem {
     std::function<void()> act;
     int page = 0;
     wchar_t b1 = 0, b2 = 0;                 // small buttons at the right of the row
+    bool avatar = false; Profile prof;      // a profile's row: its avatar instead of an icon
     std::function<void()> act1, act2;
 };
 static std::vector<MItem> g_items;
 static int g_menu_page = PAGE_MAIN, g_menu_tab = 0, g_menu_sel = -1, g_menu_hot_btn = 0;
+static bool g_menu_page_is_profiles() { return g_menu.h && !g_menu.closing && g_menu_page == PAGE_PROFILES; }
 static RECT g_menu_anchor;
 static const float kMenuW = 344, kItemH = 34, kSepH = 9;
 static float item_h(const MItem &m) { return m.kind == 1 ? S(kSepH) : m.kind == 6 ? S(30) : S(kItemH); }
@@ -1386,7 +1414,8 @@ static void menu_draw(Panel &p, double now) {
         if (m.kind == 3) ig = m.on ? G_CHECK : 0;
         if (m.kind == 4) ig = m.on ? G_CHECK : 0;
         if (m.kind == 7) ig = G_CHEV_L;
-        if (ig) glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), m.kind >= 3 && m.kind <= 4 ? c.accent : (m.danger ? c.error : c.sub));
+        if (m.avatar) draw_avatar(p.rt.Get(), p.br.Get(), ix, cy, S(11), m.prof);
+        else if (ig) glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), ig, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), m.kind >= 3 && m.kind <= 4 ? c.accent : (m.danger ? c.error : c.sub));
         float tr = r.right - S(12);
         if (m.kind == 2) { glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_CHEV_R, R(r.right - S(28), r.top, r.right - S(8), r.bottom), c.sub); tr -= S(18); }
         if (m.b1) {
@@ -1431,7 +1460,7 @@ static void menu_place(bool from_side) {
     int w = (int)(S(kMenuW) + pad * 2), hh = (int)(h + pad * 2);
     // under its button, right edges lined up; kept on the screen
     int x = g_menu_anchor.right - w + (int)pad, y = g_menu_anchor.bottom + (int)S(4) - (int)pad;
-    if (g_menu_page == PAGE_TAB) x = g_menu_anchor.left - (int)pad;
+    if (g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES) x = g_menu_anchor.left - (int)pad;
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(MonitorFromRect(&g_menu_anchor, MONITOR_DEFAULTTONEAREST), &mi);
     x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
@@ -1638,6 +1667,24 @@ static std::vector<MItem> build_page(int page) {
             v.push_back(item(t, G_GLOBE, L"", [u] { after_menu([u] { Tab *a = active_tab(); if (a && a->url.empty()) tab_navigate(a, u); else tab_new(u, true); }); }));
         }
         if (!any) v.push_back(note(T(L"Carpeta vacía")));
+    } else if (page == PAGE_PROFILES) {
+        // the profile button: every profile (its window, opened or brought to the front), a new one, the settings
+        Profile cur = profile_current();
+        v.push_back(note(profile_shown_name(cur)));
+        for (auto &pr : profiles_list()) {
+            std::wstring id = pr.id;
+            bool here = id == g_profile_id;
+            MItem m = item(profile_shown_name(pr), 0, here ? T(L"Esta ventana") : profile_window(id) ? T(L"Abierto") : L"",
+                           [id] { after_menu([id] { profile_open(id); }); });
+            m.avatar = true; m.prof = pr;
+            v.push_back(m);
+        }
+        v.push_back(sep());
+        v.push_back(item(T(L"Nuevo perfil"), G_ADD, L"", [] { after_menu([] {
+            std::wstring id = profile_create(T(L"Perfil") + std::wstring(L" ") + std::to_wstring(profiles_list().size() + 1));
+            if (!id.empty()) profile_open(id);
+        }); }));
+        v.push_back(item(T(L"Administrar perfiles"), G_GEAR, L"", [] { after_menu([] { settings_open(L"perfiles"); }); }));
     } else if (page == PAGE_ONE_EXT) {
         // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
         size_t i = (size_t)g_menu_tab;
@@ -1684,8 +1731,9 @@ static void menu_activate(int i, int btn) {
 static void menu_key(UINT vk) {
     int n = (int)g_items.size();
     auto selectable = [](const MItem &m) { return m.enabled && m.kind != 1 && m.kind != 6; };
-    if (vk == VK_ESCAPE) { if (g_menu_page != PAGE_MAIN && g_menu_page != PAGE_TAB) menu_go(PAGE_MAIN); else after_menu([] {}); return; }
-    if (vk == VK_LEFT && g_menu_page != PAGE_MAIN && g_menu_page != PAGE_TAB) { menu_go(PAGE_MAIN); return; }
+    bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES;
+    if (vk == VK_ESCAPE) { if (!top) menu_go(PAGE_MAIN); else after_menu([] {}); return; }
+    if (vk == VK_LEFT && !top) { menu_go(PAGE_MAIN); return; }
     if (vk == VK_UP || vk == VK_DOWN) {
         int d = vk == VK_UP ? -1 : 1, i = g_menu_sel;
         for (int k = 0; k < n; k++) { i = (i + d + n) % n; if (selectable(g_items[i])) break; }
@@ -1864,6 +1912,14 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_FWD: tab_go_forward(); break;
     case H_RELOAD: { Tab *t = active_tab(); if (t && t->loading) tab_stop(); else tab_reload(GetKeyState(VK_SHIFT) < 0 || GetKeyState(VK_CONTROL) < 0); break; }
     case H_MENU: if (g_menu.h && !g_menu.closing) menu_close(); else ui_open_menu(); break;
+    case H_PROFILE: {
+        if (g_menu.h && !g_menu.closing && g_menu_page == PAGE_PROFILES) { menu_close(); break; }
+        D2D1_RECT_F r = profile_rect();
+        POINT a = { (LONG)r.left, (LONG)r.top }, b = { (LONG)r.right, (LONG)r.bottom };
+        ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+        open_menu_page(PAGE_PROFILES, { a.x, a.y, b.x, b.y });
+        break;
+    }
     case H_ZOOM: tab_zoom(0); ui_invalidate(); break;
     case H_EXT: {
         D2D1_RECT_F r{};
@@ -1942,7 +1998,7 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: {
         float x = (float)GET_X_LPARAM(lp), y = (float)GET_Y_LPARAM(lp);
         HitInfo hi = hit_test(x, y);
-        if (hi.what != H_MENU) ui_close_popups();
+        if (hi.what != H_MENU && hi.what != H_PROFILE) ui_close_popups();
         g_press = hi;
         g_press_x = x;
         if (hi.what == H_TAB) {
@@ -2204,3 +2260,58 @@ void ui_tab_closing(Tab *t, bool from_mouse) {
 }
 void ui_tab_icon_changed(Tab *t) { g_icons.erase(t->id); ui_invalidate(); }
 void ui_release_icon(Tab *t) { g_icons.erase(t->id); }
+
+// ---------------------------------------------------------------- the taskbar: which profile a window is (as Edge's badge)
+void ui_taskbar_badge() {
+    static ComPtr<ITaskbarList3> tb;
+    if (!tb) {
+        if (FAILED(CoCreateInstance(__uuidof(TaskbarList), NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&tb)))) return;
+        tb->HrInit();
+    }
+    static HICON badge;
+    if (g_incognito || profiles_list().size() < 2) { tb->SetOverlayIcon(g_win, NULL, NULL); return; }
+    // its avatar, drawn once into an icon
+    const int n = 32;
+    Profile p = profile_current();
+    ComPtr<IWICBitmap> bmp;
+    ComPtr<ID2D1RenderTarget> rt;
+    D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+    if (!g_wic || FAILED(g_wic->CreateBitmap(n, n, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) ||
+        FAILED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt))) return;
+    ComPtr<ID2D1SolidColorBrush> br;
+    rt->CreateSolidColorBrush(hex(0), &br);
+    auto f = make_format(false, 18, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER);
+    rt->BeginDraw();
+    rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+    br->SetColor(hex(0xffffff));
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(n / 2.f, n / 2.f), n / 2.f, n / 2.f), br.Get());   // (a thin ring, over any icon)
+    br->SetColor(rgb_of(p.color));
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(n / 2.f, n / 2.f), n / 2.f - 1.5f, n / 2.f - 1.5f), br.Get());
+    text(rt.Get(), br.Get(), f.Get(), initial_of(profile_shown_name(p)), R(0, 0, (float)n, (float)n), hex(0xffffff));
+    rt->EndDraw();
+    std::vector<BYTE> px(n * n * 4);
+    if (FAILED(bmp->CopyPixels(NULL, n * 4, (UINT)px.size(), px.data()))) return;
+    for (size_t i = 0; i < px.size(); i += 4) {   // icons take straight alpha
+        BYTE a = px[i + 3];
+        if (a && a < 255) for (int k = 0; k < 3; k++) px[i + k] = (BYTE)std::min(255, px[i + k] * 255 / a);
+    }
+    BITMAPV5HEADER bh = {};
+    bh.bV5Size = sizeof(bh); bh.bV5Width = n; bh.bV5Height = -n; bh.bV5Planes = 1; bh.bV5BitCount = 32; bh.bV5Compression = BI_BITFIELDS;
+    bh.bV5RedMask = 0x00ff0000; bh.bV5GreenMask = 0x0000ff00; bh.bV5BlueMask = 0x000000ff; bh.bV5AlphaMask = 0xff000000;
+    void *bits = nullptr;
+    HDC dc = GetDC(NULL);
+    HBITMAP color = CreateDIBSection(dc, (BITMAPINFO *)&bh, DIB_RGB_COLORS, &bits, NULL, 0);
+    ReleaseDC(NULL, dc);
+    if (!color) return;
+    memcpy(bits, px.data(), px.size());
+    HBITMAP mask = CreateBitmap(n, n, 1, 1, NULL);
+    ICONINFO ii = { TRUE, 0, 0, mask, color };
+    HICON icon = CreateIconIndirect(&ii);
+    DeleteObject(color); DeleteObject(mask);
+    if (!icon) return;
+    std::wstring name = profile_shown_name(p);
+    tb->SetOverlayIcon(g_win, icon, name.c_str());
+    if (badge) DestroyIcon(badge);
+    badge = icon;
+}

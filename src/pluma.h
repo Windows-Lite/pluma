@@ -6,6 +6,7 @@
 //   Pluma.exe [url]        opens the url (or the window) in the one in memory, starting it if needed
 //   Pluma.exe --oculto     starts it hidden, ready (for Windows startup)
 //   Pluma.exe --salir      closes the one in memory for good
+//   Pluma.exe --perfil=<id> [url]   the window of another profile (profiles.cpp): a Pluma.exe of its own
 // PLUMA_INSTANCIA=<name> runs a separate instance (own mutex, window class and data), off the screen, for tests;
 // PLUMA_DEPURAR=<port> opens the DevTools protocol on that port. Test instances only: PLUMA_SIN_SONIDO=1 keeps them
 // silent (the engine and mpv), PLUMA_PRUEBA_ROMPER_VIDEO=K breaks a video list's pieces from piece K on (video.cpp).
@@ -52,7 +53,7 @@ std::wstring json_escape(const std::wstring &s);  // a JSON string literal, quot
 std::wstring hash_hex(const std::wstring &s);
 bool starts_with(const std::wstring &s, const wchar_t *p);
 bool ends_with_i(const std::wstring &s, const wchar_t *p);
-std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file);   // a tab file in g_state, split into rows/fields
+std::vector<std::vector<std::wstring>> tsv_read(const std::wstring &file);   // a tab file in g_data, split into rows/fields
 
 // One value that moves towards a target with ease-out (no overshoot). Everything that moves in the bar is one of these.
 struct Anim {
@@ -104,7 +105,7 @@ void update_on_quit();
 bool settings_page_url(const std::wstring &u);              // https://pluma.local/...: Pluma's own page
 std::wstring settings_page_display(const std::wstring &u);  // ... shown as pluma://...
 std::wstring settings_page_from_typed(const std::wstring &typed);   // pluma://settings typed -> its url ("" if not)
-void settings_open();                // opens it (or goes to the tab that has it)
+void settings_open(const std::wstring &section = L"");   // opens it (or goes to the tab that has it), at a section
 void settings_attach(ICoreWebView2 *v);   // every view: serves the page and listens to it
 void settings_page_refresh();        // the open settings pages show what changed
 void settings_page_refresh_soon();
@@ -191,13 +192,16 @@ struct ImportProfile {
     std::wstring browser;           // "Edge", "Brave", "Vivaldi", "Opera", "Firefox"
     std::wstring name;              // the profile's display name
     std::wstring path;              // the profile's folder
+    std::wstring account;           // Chromium: the account's e-mail, if signed in
     bool firefox = false;
     bool running = false;           // the browser is open (its files are copied before being read)
     int bookmarks = 0, history = 0, passwords = 0;   // counts found (estimates)
+    int extensions = 0;             // Chromium: the ones the person installed
 };
 std::vector<ImportProfile> import_scan();           // the browsers and profiles found
 struct ImportResult { int bookmarks = 0, history = 0, passwords = 0; std::wstring note; };
 ImportResult import_do(const ImportProfile &p, bool bookmarks, bool history, bool passwords);
+ImportResult import_into(const std::wstring &profile_id, const ImportProfile &p, bool bookmarks, bool history);   // into that profile's files
 int passwords_store_kind();          // 0 unknown, 10 writable (v10/DPAPI), 20 app-bound (not writable)
 // passwords come from a CSV the other browser exports (its own store is app-bound and cannot be read)
 void passwords_open_edge_export();   // opens edge://settings/passwords in Edge, for the user to export
@@ -216,11 +220,50 @@ std::wstring fixup_input(const std::wstring &typed);   // what was typed in the 
 extern HINSTANCE g_inst;
 extern HWND g_win, g_bar, g_edit;
 extern std::wstring g_root, g_state;   // the exe's folder; %LOCALAPPDATA%\Pluma (or its test folder)
+extern std::wstring g_data;            // this profile's own files: g_state for the default one, g_state\perfiles\<id> for others
+extern std::wstring g_profile_id;      // the profile this window is ("" = the default one, "Personal")
 extern bool g_test, g_dev, g_quitting, g_fullscreen;
 extern bool g_incognito;   // the incognito window (--incognito): every tab InPrivate, all dark, nothing kept
 extern bool g_test_visible;   // a test instance on the screen (PLUMA_A_LA_VISTA), to record what the user would see
 extern double g_open_asked;               // when a page was asked for (start, or from memory): for the log
 extern ComPtr<ICoreWebView2Environment> g_env;
+
+// ---------------------------------------------------------------- profiles (profiles.cpp)
+// Each profile is its own WebView2 profile (cookies, cache, extensions, passwords) on the same engine, and its own
+// Pluma files (history, bookmarks, session...) in g_data; the settings stay shared. Every profile but the default one
+// runs in a Pluma.exe of its own (--perfil=<id>), started by the default one so they group in the Task Manager.
+struct Profile { std::wstring id, name; unsigned color = 0; };   // id "" = the default one
+std::vector<Profile> profiles_list();               // perfiles.tsv, the default one always first
+Profile profile_current();
+std::wstring profile_shown_name(const Profile &p);   // "Personal" in the UI language unless renamed
+bool profile_valid_id(const std::wstring &id);
+std::wstring profile_data_dir(const std::wstring &id);
+std::wstring wv_profile_name();                     // the engine's profile for this window: "Default" or "pluma-<id>"
+std::wstring wv_profile_dir();                      // ... and its folder
+std::wstring wv_profile_dir_of(const std::wstring &profile_id);   // ... that of any profile
+std::wstring profile_create(const std::wstring &name);   // a new one (its id)
+void profile_rename(const std::wstring &id, const std::wstring &name);
+void profile_set_color(const std::wstring &id, unsigned color);
+void profile_remove(const std::wstring &id, std::function<void(bool)> done);   // its window closes; its data goes
+void profile_open(const std::wstring &id, const std::vector<std::wstring> &urls = {});   // its window (started, or to the front)
+HWND profile_window(const std::wstring &id);        // its window, if it is open
+bool profiles_others_open();                        // the default one: windows of other profiles are open
+void profiles_quit_others();                        // ... closed for good (Pluma quits)
+void profile_touch();                               // this window was used last: links from other apps go to it
+std::wstring profile_last_used();
+void profile_launch_child(const std::wstring &id, const std::vector<std::wstring> &urls);   // CreateProcess, from this process
+const std::vector<unsigned> &profile_colors();
+void profiles_changed();                            // the list changed: bar, title, settings pages
+std::wstring profiles_state_json();                 // for the settings page
+void profiles_page_do(const Json &j);               // ... and what it asks
+void engine_options(std::wstring &lang, std::wstring &args);   // what the engine was started with (children must match)
+bool spawn_pluma(const std::wstring &args, DWORD *pid = nullptr);   // another Pluma.exe as a child of this one, same engine options
+void create_controller(HWND parent, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler *h);   // a view in this window's profile
+// import into another profile's files (import.cpp): the target's history and bookmarks swapped in for a moment
+void history_stash(bool push);
+void bookmarks_stash(bool push);
+extern bool g_quiet_commit;                         // bm_commit only saves (another profile's tree is in for a moment)
+void profile_reload_state();                        // history and bookmarks read again (another process wrote them)
 
 // ---------------------------------------------------------------- tabs (tabs.cpp)
 struct Tab {
@@ -315,6 +358,7 @@ void ui_window_activated(bool active);
 void ui_post(std::function<void()> f);    // runs f on the window's thread (from another thread)
 float ui_scale();
 bool handle_shortcut(UINT vk, bool ctrl, bool shift, bool alt);
+void ui_taskbar_badge();                   // the profile's avatar on the window's taskbar button (with more than one)
 void ui_toggle_pin();                      // the page on screen onto the new tab page, or off it (the star, Ctrl+D)
 
 // colours (Mapea's tokens)
@@ -379,6 +423,12 @@ void ext_open_popup(size_t i, RECT anchor);
 void ext_open_options(size_t i);
 bool ext_bundled_removed();               // one of those that come with Pluma (uBlock Origin Lite) was taken off
 void ext_restore_bundled();               // ... and back on
+// extensions from another Chromium browser's profile (its Extensions folder), with their settings, into a Pluma profile
+struct ExtImported { std::wstring id, name; int state = 0; bool settings = false, off = false; };   // state: 0 in, 1 already here, 2 Manifest V2, 3 Pluma's own uBlock, 4 would not load
+int ext_import_count(const std::wstring &profile_dir);
+void ext_import(const std::wstring &profile_dir, const std::wstring &profile_id, std::function<void(std::vector<ExtImported>, bool waiting)> done);
+std::wstring ext_imported_json(const std::vector<ExtImported> &v);
+void ext_settings_apply_pending();        // imported settings the engine had open last time: in before it starts
 bool store_extension_id(const std::wstring &url, std::wstring &id, bool &edge);
 void store_install(const std::wstring &id, bool edge);
 std::wstring extensions_folder();

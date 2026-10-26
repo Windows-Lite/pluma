@@ -71,7 +71,7 @@ void reader_site_set(const std::wstring &site, bool on) {
     if (on) g_always.insert(site); else g_always.erase(site);
     std::wstring out;
     for (auto &s : g_always) out += s + L"\n";
-    write_file(g_state + L"\\lectura.tsv", utf8(out));
+    write_file(g_data + L"\\lectura.tsv", utf8(out));   // (each profile its own, as its history)
     settings_page_refresh_soon();
 }
 

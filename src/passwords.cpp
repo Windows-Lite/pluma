@@ -158,7 +158,7 @@ static std::wstring realm_of(const std::wstring &url) {
 }
 
 // ---------------------------------------------------------------- the pending file (ready rows, no plaintext)
-static std::wstring pending_file() { return g_state + L"\\passwords-pending.tsv"; }
+static std::wstring pending_file() { return g_data + L"\\passwords-pending.tsv"; }
 static std::wstring hex_of(const std::vector<BYTE> &b) {
     static const wchar_t *d = L"0123456789abcdef";
     std::wstring s; s.reserve(b.size() * 2);
@@ -177,7 +177,7 @@ static std::wstring tsv_safe(const std::wstring &s) { std::wstring o = s; for (a
 static std::set<std::wstring> existing_logins(const std::wstring &login_data) {
     std::set<std::wstring> set;
     if (!pq::load()) return set;
-    std::wstring dir = g_state + L"\\imp_tmp"; CreateDirectoryW(dir.c_str(), NULL);
+    std::wstring dir = g_data + L"\\imp_tmp"; CreateDirectoryW(dir.c_str(), NULL);
     std::wstring copy = dir + L"\\ld-" + std::to_wstring(GetTickCount64()) + L".db";
     std::string d;
     if (!read_file(login_data, d) || !write_file(copy, d)) return set;
@@ -221,7 +221,7 @@ static ImportResult import_file(const std::wstring &path) {
     bool header_ok = false;
     auto creds = read_creds(path, header_ok);
     if (!header_ok) { r.note = T(L"El CSV no tiene las columnas esperadas (url, username, password)."); return r; }
-    auto have = existing_logins(g_state + L"\\webview2\\EBWebView\\Default\\Login Data");
+    auto have = existing_logins(wv_profile_dir() + L"\\Login Data");
     std::wstring out;
     for (auto &c : creds) {
         std::wstring realm = realm_of(c.url);
@@ -321,13 +321,13 @@ int passwords_apply_pending() {
     if (g_incognito) return 0;   // the ordinary window's engine may have Login Data open; it applies them itself
     std::string data;
     if (!read_file(pending_file(), data)) return 0;
-    std::wstring ld = g_state + L"\\webview2\\EBWebView\\Default\\Login Data";
+    std::wstring ld = wv_profile_dir() + L"\\Login Data";
     if (!PathFileExistsW(ld.c_str())) return 0;   // the engine has not made it yet: try again next start
     if (!pq::load()) return 0;
     // back up Login Data first
     SYSTEMTIME t; GetLocalTime(&t);
     wchar_t stamp[32]; swprintf_s(stamp, L"%04d%02d%02d-%02d%02d%02d", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
-    std::wstring bdir = g_state + L"\\passwords-backup-" + stamp;
+    std::wstring bdir = g_data + L"\\passwords-backup-" + stamp;
     CreateDirectoryW(bdir.c_str(), NULL);
     for (const wchar_t *suf : { L"", L"-journal", L"-wal" }) {
         std::string s; if (read_file(ld + suf, s)) write_file(bdir + L"\\Login Data" + suf, s);

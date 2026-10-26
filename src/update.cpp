@@ -186,7 +186,17 @@ static bool swap_exe() {
     return true;
 }
 // ... and Pluma started again from it, this one gone
-static void go_in(bool hidden) { if (swap_exe()) app_restart(hidden); }
+static void go_in(bool hidden) {
+    // (not while other profiles' windows are open: they run from this Pluma.exe, and would be left on the old one)
+    if (profiles_others_open()) {
+        SetTimer(g_win, 71, 60 * 1000, [](HWND h, UINT, UINT_PTR id, DWORD) {
+            KillTimer(h, id);
+            if (!g_ready.empty() && g_set.update == 2 && !IsWindowVisible(g_win)) go_in(true);
+        });
+        return;
+    }
+    if (swap_exe()) app_restart(hidden);
+}
 
 // the window thread decides once a version is waiting
 static void ready(const Release &rel) {
@@ -249,7 +259,7 @@ void update_on_quit() { if (!g_ready.empty()) swap_exe(); }   // closing for goo
 
 // at start, before the engine: what the last update left (window thread)
 void update_finish() {
-    if (g_incognito) return;   // (the ordinary Pluma updates; the incognito window only runs it)
+    if (g_incognito || !g_profile_id.empty()) return;   // (the default Pluma updates; the others only run it)
     DeleteFileW((g_root + L"\\Pluma.old.exe").c_str());
     std::wstring top = staging() + L"\\pluma-" + kVersion;
     if (PathFileExistsW(top.c_str())) {
@@ -267,6 +277,6 @@ void update_finish() {
 void update_init() {
     wchar_t u[8];
     bool test_url = GetEnvironmentVariableW(L"PLUMA_ACTUALIZAR_URL", u, 8) > 0;
-    if (g_incognito || (g_test && !test_url) || g_set.update == 0 || !wcscmp(kVersion, L"dev")) return;
+    if (g_incognito || !g_profile_id.empty() || (g_test && !test_url) || g_set.update == 0 || !wcscmp(kVersion, L"dev")) return;
     SetTimer(g_win, 70, test_url ? 3000 : 30000, tick);
 }
