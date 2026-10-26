@@ -19,7 +19,8 @@ código y commits en inglés; nada de em dashes.
 - `src/main.cpp`: ventana con marco propio (las pestañas son la barra de título; los botones de Windows 11 con su menú
   de acoplar vía HTMAXBUTTON), ajustes, historial y autocompletado, arranque.
 - `src/tabs.cpp`: una vista WebView2 por pestaña **solo cuando hace falta** (pestaña nueva = ninguna; restaurada = al
-  mirarla), dormir y soltar pestañas (vuelven al mismo punto: `saved_x/y`, y YouTube al mismo segundo), recortes de
+  mirarla), dormir y soltar pestañas (nunca las que perderían algo; vuelven al mismo punto: `saved_x/y`, y YouTube al
+  mismo segundo; apartado «Pestañas de fondo»), recortes de
   memoria (`tabs_trim`), **precarga** (`tabs_preload`: lo que el autocompletado da por seguro mientras se escribe, o un
   sitio de la pestaña nueva bajo el ratón, carga en una vista aparte que pasa a ser la pestaña al pulsar Enter;
   `tab_warm`: una pestaña soltada con el ratón encima empieza a cargar antes del clic), sesión, `ytmp3:` sin preguntar
@@ -95,6 +96,10 @@ Las medidas varían mucho entre pasadas (la gráfica, de 47 a 120 MB en el mismo
 a la vez y repetir antes de creerse una diferencia pequeña.
 Clase de la ventana de prueba: `PlumaVentana.<nombre>`; paneles `PlumaPanel`; datos en `%LOCALAPPDATA%\Pluma\prueba.<nombre>`.
 `PLUMA_REPOSO_S=<s>` hace como si nadie tocara el PC desde el segundo s (para medir el recorte en reposo).
+`PLUMA_MEMORIA_PC=<%>` hace como si el PC tuviera ese porcentaje de memoria en uso (las reglas de soltar pestañas).
+`tools\pestanas\prueba.ps1 [-Modo apagado|encendido|presion] [-Migrar]` (sesión interactiva, `PLUMA_EXE`): lo escrito
+en una pestaña de fondo sigue ahí al volver, una llamada no se congela ni se suelta, y una pestaña sin nada que perder
+no se suelta por defecto y sí con el ajuste encendido o el PC al 90 % (fotos en `out\`). `pluma-prueba:pestana=<n>` va a la pestaña n; `pluma-prueba:pestanas` apunta cada una en `pluma.log`.
 Antes de enseñar algo: captura y mirarla.
 
 ## La RAM (lo que más le importa; medir antes y después de cada cambio)
@@ -111,11 +116,12 @@ Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada 
 - Lo que queda con una web delante: la gráfica 45-55 MB recortada (sin recortar se queda 90-120 con lo que dejan los
   vídeos y las webs pesadas, y no lo suelta sola), el motor 25-70, la página (Google ~45, YouTube 220-380, igual que en
   cualquier navegador), la interfaz 3-15, la red ~10.
-- Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja). Desde el 26/10 NUNCA se sueltan por
-  defecto (`descargar_s=0`, `descargar_min=0`; Ajustes > «Descargar las pestañas que no ves»): el usuario: «no me
+- Cómo: pestañas de fondo congeladas a los 45 s (TrySuspend + memoria baja, y luego el recorte del motor y la
+  gráfica). Desde el 26/10 NUNCA se sueltan por defecto (`descargar_s=0`, `descargar_min=0`; Ajustes > «Descargar las pestañas que no ves»): el usuario: «no me
   gusta que pasado un tiempo las pestañas pierdan memoria, es un coñazo». Soltarlas al minuto (antes) dejaba las 7 en
-  118 MB frente a 214-271 congeladas; esa memoria es la de quedarse con todo. Solo con el PC al 85 % de memoria se
-  suelta la más antigua. Caché de imágenes de la gráfica con tope de 32 MB
+  118 MB frente a 214-271 congeladas; esa memoria es la de quedarse con todo (con el recorte al congelar, 128-149).
+  Solo con el PC al 85 % de memoria se suelta la más antigua que no tenga nada que perder (apartado «Pestañas de
+  fondo»). Caché de imágenes de la gráfica con tope de 32 MB
   (`--force-gpu-mem-discardable-limit-mb`); sin vista de reserva (`reserva=0`: crear una vista son ~35 ms); procesos
   sin nada visible (y el motor, la red, la gráfica y la interfaz 4 s después de cada carga) devuelven su memoria con
   EmptyWorkingSet; al cerrar la ventana se congela todo (lo que suena se suelta) y todo devuelve su memoria.
@@ -125,6 +131,54 @@ Medido el 25/10 en el portátil (i5-10300H, 16 GB, gráfica integrada), privada 
 - Probado y descartado: encoger las vistas congeladas, la gráfica NVIDIA (`--force_high_performance_gpu`), un «poca
   memoria» momentáneo en la página a la vista. Ninguno bajaba nada.
 - No hacer: quitar el aislamiento de sitios (seguridad) ni recortar la página a la vista mientras se usa.
+
+## Pestañas de fondo (`src/tabs.cpp`, `tabs_tick`)
+Arreglado el 26/10 («pasados unos segundos o minutos las pestañas como que se reinician, no tienen memoria»; y de
+otra sesión: «no me gusta que pasado un tiempo las pestañas pierdan memoria, es un coñazo»): se soltaban al minuto
+(salvo las 2 últimas, 20 min) y al volver la página cargaba de nuevo: lo escrito, un borrador, una llamada, se perdían.
+Ahora por defecto no se suelta ninguna; lo de abajo vale para todo lo que suelta: el ajuste encendido y la falta de
+memoria.
+- Congelar (`dormir_s`, 45 s): igual que antes. TrySuspend deja la página en memoria tal cual; al volver sigue donde
+  estaba (probado: el texto escrito sigue, un contador con `setInterval` sigue desde donde se congeló, la página recibe
+  `freeze` y `resume`; un WebSocket se cierra mientras está congelada y la página lo vuelve a abrir al volver, como
+  haría con un corte de red: la que no se reconecta sola se queda sin él).
+- Soltar, copiado de Chromium (`discard_eligibility_policy.cc`, https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/performance_manager/policies/discard_eligibility_policy.cc):
+  NUNCA una pestaña con algo escrito desde que cargó (su `kFormInteractions`/`kUserEdits`; los buscadores y los
+  deslizadores no cuentan: `type=search|range`, `role=search|searchbox|combobox`, `name=q|query|search|search_query|s`;
+  comprobado: escribir en el de Google no la guarda), una cuyo sitio tiene permiso de avisos, una en llamada (su página
+  pidió micrófono o cámara: `PermissionRequested`, hasta otro documento), una que el motor no congela, una que suena
+  o con el Scroller abierto (aunque esté en pausa: su feed corre en la página; ni se congela), una de incógnito; ni con el PC sin memoria (Chromium tampoco suelta las de formulario). Las de llamada tampoco se
+  congelan (su `kCapturingAudio/Video`; el motor SÍ congela una página con cámara y micrófono vivos, medido): se
+  quedan despiertas hasta otro documento (WebView2 no dice cuándo acaba la captura). Las de avisos sí se congelan
+  (Chromium no, `kNotificationPermission`: Gmail o WhatsApp despiertos son 100-300 MB; mientras están congeladas no
+  avisan, igual que antes de esto). Lo escrito
+  lo apunta el script base en cada marco (`__plumaTyped`, un `input` de verdad; los marcos de otro origen no se ven) y
+  Pluma lo lee al esconder la pestaña (`read_state`): una congelada no se pregunta (la despertaría). Nada de envolver
+  `RTCPeerConnection` ni `getUserMedia` en la página: los antibots buscan funciones nativas tocadas. Las cámaras y
+  micrófonos los sigue preguntando el motor; solo `tools\pestanas` dice que sí solo (`PLUMA_PRUEBA_MEDIOS=1`).
+- Las demás: con «Descargar las pestañas que no ves» apagado (por defecto, `descargar_s=0`), nunca, salvo con el PC
+  al 85 % de memoria: la más antigua, al momento. Encendido (10 min, 1 h o 4 h: `descargar_s`; las `recientes` (2)
+  últimas vistas, `descargar_min` = el mayor de 20 min y ese tiempo; Chromium no suelta nada visto hace menos de
+  10 min, `kNonVisiblePagesUrgentProtectionTime`): a ese tiempo, y con el PC al 75 % de memoria al minuto. Cada
+  pestaña guardada o soltada, al log. Sin migración propia: los ajustes de antes de `ajustes_v=3` ya leen «nunca».
+- No copiado: los tiempos de Memory Saver (2, 4 o 6 h: `memory_saver_mode_policy.cc`) ni las 15 min de Edge para
+  dormir (`SleepingTabsTimeout`, https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/sleepingtabstimeout):
+  aquí la RAM manda. `beforeunload`: Chromium no lo mira y muchas webs lo ponen para sus estadísticas (guardaría casi
+  todo); lo que no está guardado ya se escribió. Web Locks: el motor los congela y suelta igual (medido), como Chromium
+  al soltar. Un WebRTC sin micrófono ni cámara (solo datos, o recibir): sin detectar. La actividad en segundo plano
+  (`kBackgroundActivity`, título que cambia) y el scroll de los muros infinitos: sin hacer.
+- Medido el 26/10, las dos builds a la vez, PC al 33-66 % de memoria, contra el soltar al minuto de antes:
+  `escenario.ps1` a 90 s 142-157 MB -> 128-149 (6 de fondo congeladas: 9-10 procesos de página frente a 4; congeladas
+  y recortadas cuestan poco, lo que pesa es el motor y la gráfica, que ahora se recortan también al congelar; sin ese
+  recorte salía 237-240); `tres.ps1` 132-185 -> 111-123. Contra `main` con «nunca soltar» (sin el recorte al
+  congelar), `tres.ps1`: 165 -> 131 y 101 -> 112 (esta pasada, con el PC ocupado y 8 procesos en vez de 10: dentro de
+  lo que varía).
+- Prueba: `tools\pestanas\prueba.ps1 -Modo apagado|encendido|presion [-Migrar]`. Antes (soltar al minuto): a los 60 s
+  la del formulario, la llamada y la sin nada estaban soltadas (el texto, perdido). Ahora, en los tres: formulario
+  congelado con su texto, llamada viva (sin congelar, cámara y micrófono falsos del motor vivos), WebSocket
+  reconectado. La sin nada: apagado, congelada y de vuelta sin cargar; encendido (25 s) o PC al 90 %, la única soltada.
+  Un `ajustes.ini` con `ajustes_v=2` y 60/2/20 lee 0/2/0 (nunca).
+  Sin medir de nuevo: los tirones del recorte tras congelar (el mismo que tras cargar, con su espera a `user_away`).
 
 ## YouTube en el reproductor de Pluma (`src/video.cpp`)
 Pedido el 25/10: que viendo YouTube no pese lo que pesa su página, sin esperar los 10 s de yt-dlp, con controles «lo
