@@ -292,6 +292,37 @@ Plan aprobado el 26/10 («Webs ligeras»): cualquier artículo sin basura, como 
   Automático: la página se corta en DOMContentLoaded y el modo lectura sale a los 1,0-1,8 s; datos The Verge 1,9-2,0
   MB frente a 3,0, El País 1,4-1,5 frente a 1,75.
 
+## Traducción (`src/translate.cpp`, `src/translate.js`, `src/translate_core.h`)
+Pedido el 26/10: «necesito una opción para traducir», como Edge.
+- Página: icono en la barra (delante del libro o la estrella) y fila «Traducir página» / «Mostrar original» en ⋯.
+  Idioma de la página: su `lang` (o el meta), salvo que el texto diga claramente otro (`tr_guess_lang`: escritura y
+  palabras frecuentes, en Pluma; nada sale hasta que se pide traducir). Si no es el de destino (`traducir_a`, vacío = el
+  de Pluma), el icono se enciende y, una vez por sitio e idioma y sesión, la ventanita de la oferta (menú «quieto»: no
+  coge el foco, se va con un clic fuera, Esc, otra pestaña o 12 s sin tocarla): Traducir, Traducir a, Siempre, Nunca
+  este idioma, Nunca este sitio, Ahora no. `traducir_siempre` y `traducir_nunca` en `ajustes.ini`; sitios en
+  `traducir-nunca.tsv` (no se escribe desde incógnito). Un idioma traducido a mano se sigue traduciendo en esa pestaña.
+- Cómo (copiado de TWP, https://github.com/FilipePS/Traduzir-paginas-web `src/contentScript/pageTranslator.js`, y de
+  Firefox, `toolkit/components/translations/content/translations-document.sys.mjs`): `translate.js` (RCDATA 221) se
+  mete con ExecuteScript (pasa la CSP), junta en «trozos» los textos de cada bloque (`<a i=N>` por nodo, para que la
+  frase vaya entera), los de la pantalla primero, y Pluma los pide cada 700 ms (`take`), los manda a
+  `translate.googleapis.com/translate_a/t?client=gtx` (POST, varios `q`, `format=html`; WinHTTP en un hilo) y los
+  devuelve (`put`). Se escriben con `nodeValue`, nunca HTML: la maquetación, los enlaces y los scripts de la página no
+  cambian (prueba de la página de `tools\traducir-prueba.js`: el mismo número de elementos y, al mostrar el original, el
+  mismo HTML). Lo nuevo (MutationObserver, 250 ms) se traduce igual; caché por trozo. No se traduce script, style,
+  code, pre, textarea, inputs, contenteditable, `translate="no"`, `.notranslate`; sí `placeholder`, `title` y el título.
+  No copiado: el modelo local de Firefox (cientos de MB) ni el iframe de TWP.
+- Google mueve a veces el texto fuera de los marcadores: va al marcador anterior (`tr_split_markers`). Los espacios entre
+  nodos y la puntuación los arregla `apply` (sin «mantequilla .» ni dobles espacios).
+- Selección: «Traducir «…»» en el menú del clic derecho (tras Copiar) y una burbuja de Pluma junto a la selección,
+  con copiar. Fallos (sin red, 429/403/503): aviso y la página se queda como estaba.
+- Configuración > Idioma > Traducción: ofrecer sí/no, destino y las listas para quitar.
+- Pruebas: `tools\traducir-test.cpp` (marcadores y detección; `cl /EHsc /std:c++17`), `tools\traducir-prueba.ps1
+  -Salida <carpeta>` con `PLUMA_EXE` (de punta a punta: la página de prueba, Wikipedia en francés y japonés, YouTube,
+  Configuración, burbuja, menús; capturas hechas por Pluma). Órdenes de prueba: `Pluma.exe pluma-prueba:traducir|
+  original|seleccion|menu|menu-principal|oferta|clic-derecho|destino=xx|foto=<nombre>` (solo en instancias de prueba).
+- El menú del clic derecho es del motor: no sale en las capturas. `clic-derecho` hace que el siguiente no se enseñe:
+  sus filas van a `pluma.log` y se elige la de traducir, como un clic (`tools\clic.js ... right` para abrirlo).
+- RAM (26/10, 3 pestañas, `tres.ps1` a la vez): 151 MB sin esto, 156 con esto (dentro de lo que varía).
 ## YouTube Music ligero (`src/music.html`, RCDATA 204)
 Plan aprobado el 26/10 (las webs que más visita: YouTube Music 1.590 visitas en 120 días).
 - music.youtube.com (`/`, `/search?q=`, `/browse/<id>`, `/channel/UC...`, `/playlist?list=`, `/library`, `/watch?v=`): la

@@ -22,6 +22,9 @@ Edge's engine (WebView2) behind a native interface of its own.</p>
 - **Reader view**: the book in the address bar (or F9) on an article shows just its text and pictures, light or dark,
   with the font size you choose; a site can open its articles in reader view always. Uses Mozilla's
   [Readability](https://github.com/mozilla/readability) (Apache-2.0, `src/readability`).
+- **Translation**: a page in another language lights the translate icon in the address bar and offers to translate it,
+  as Edge does; text that appears later is translated too, and "Show original" puts the page back. Selected text:
+  right click > Translate, in a small bubble. Google Translate, nothing sent until you ask.
 - **Built in**: incognito tabs, uBlock Origin Lite, Chrome extensions from the Web Store, user scripts (Violentmonkey style),
   saved passwords, downloads, find, zoom, print.
 - **Native**: C++17, Win32, Direct2D and DirectWrite, one ~1 MB executable. Light, dark or as Windows (the default);

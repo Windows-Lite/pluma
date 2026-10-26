@@ -334,6 +334,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     settings_attach(v);   // Pluma's own page (pluma://settings), served from the exe
     lite_attach(t);       // and the light pages (YouTube, YouTube Music, Reddit)
     reader_attach(t);     // and the reader view
+    translate_attach(t);  // and the translator
     passgen_attach(t);    // and the strong password on sign-up forms
 
     v->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
@@ -558,6 +559,7 @@ static void attach(Tab *t, ComPtr<ICoreWebView2Controller> c) {
     if (SUCCEEDED(t->view.As(&v11)))
         v11->add_ContextMenuRequested(Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
             [id](ICoreWebView2 *, ICoreWebView2ContextMenuRequestedEventArgs *a) -> HRESULT {
+                translate_context_menu(tab_by_id(id), a);   // "Traducir «...»" for a selection, "Traducir página" on the page
                 // "open link in a new window" becomes "in a new tab": there is one window
                 ComPtr<ICoreWebView2ContextMenuTarget> target;
                 ComPtr<ICoreWebView2ContextMenuItemCollection> items;

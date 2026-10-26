@@ -116,6 +116,7 @@ static std::wstring state_json(const Json &texts) {
     o += L",\"readerSites\":[";
     { bool f = true; for (auto &s : reader_sites()) { o += (f ? L"" : L",") + json_escape(s); f = false; } }
     o += L"]";
+    o += translate_state_json();
     o += L",\"sync\":" + sync_state_json();
     o += L",\"profiles\":" + profiles_state_json();
     size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
@@ -160,6 +161,7 @@ void settings_page_refresh() {
 }
 
 static void apply(const std::wstring &key, const Json &val) {
+    if (translate_apply(key, val)) return;
     if (key == L"theme") { g_set.theme = (int)val.n; settings_save(); ui_theme_changed(); tabs_apply_theme(); }
     else if (key == L"font") { g_set.font = val.s; settings_save(); ui_font_changed(); }
     else if (key == L"engine") { g_set.engine = val.s; settings_save(); }

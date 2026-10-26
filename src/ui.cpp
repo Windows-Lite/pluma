@@ -27,7 +27,8 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_FOLDER = 0xE8B7, G_CODE = 0xE943, G_DOWNLOAD = 0xE896, G_PRINT = 0xE749, G_ZOOMIN = 0xE8A3,
                  G_ZOOMOUT = 0xE71F, G_POWER = 0xE7E8, G_COLOR = 0xE790, G_ERASE = 0xE75C, G_FILE = 0xE8A5, G_NEWTAB = 0xEC6C,
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
-                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753 };
+                 G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
+                 G_COPY = 0xE8C8 };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -216,7 +217,7 @@ static Anim g_sheet_k, g_notice_h, g_addr_focus, g_menu_btn_open;
 static int g_sheet_from = 0, g_sheet_to = 0;     // tab ids the sheet slides between
 static float g_frozen_w;                          // after closing with the mouse, the tabs keep their width until it leaves
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE, H_TRANSLATE };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo g_hover, g_press;
 static std::unordered_map<int, Anim> g_btn_hover;  // per control
@@ -236,7 +237,7 @@ static void close_suggestions();
 static void update_suggestions();
 static void sug_move(int d);
 static bool sug_commit(bool new_tab);
-static void open_menu_page(int page, RECT anchor, int tab_id = 0);
+static void open_menu_page(int page, RECT anchor, int tab_id = 0, bool quiet = false);
 static bool g_menu_page_is_profiles();   // the profile button's menu is open (its button stays lit)
 static void menu_close();
 
@@ -379,9 +380,15 @@ static D2D1_RECT_F reader_rect() {
     D2D1_RECT_F s = star_rect();
     return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
 }
+// the translate icon before them: the page is in another language, or translated (translate.cpp)
+static bool translate_shown() { Tab *t = active_tab(); return star_shown() && (t->tr_state || (t->tr_offer && g_set.tr_offer)); }
+static D2D1_RECT_F translate_rect() {
+    D2D1_RECT_F s = reader_shown() ? reader_rect() : star_rect();
+    return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
+}
 static D2D1_RECT_F zoom_rect() {
     D2D1_RECT_F a = addr_rect();
-    float r = reader_shown() ? reader_rect().left - S(4) : star_shown() ? star_rect().left - S(4) : a.right - S(6);
+    float r = translate_shown() ? translate_rect().left - S(4) : reader_shown() ? reader_rect().left - S(4) : star_shown() ? star_rect().left - S(4) : a.right - S(6);
     return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
@@ -480,6 +487,7 @@ static HitInfo hit_test(float x, float y) {
         }
         if (star_shown() && inside(star_rect(), x, y)) { h.what = H_STAR; return h; }
         if (reader_shown() && inside(reader_rect(), x, y)) { h.what = H_READER; return h; }
+        if (translate_shown() && inside(translate_rect(), x, y)) { h.what = H_TRANSLATE; return h; }
         if (zoom_shown() && inside(zoom_rect(), x, y)) { h.what = H_ZOOM; return h; }
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
@@ -802,6 +810,17 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         if (t->reader) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
         else if (rh > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, rh * 1.3f));
         glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_READER, r, t->reader ? p.accent : mix(p.sub, p.text, rh));
+        right = r.left - S(4);
+    }
+    if (translate_shown()) {
+        // translate: in the accent while offered (the page is in another language), on a soft fill once translated
+        D2D1_RECT_F r = translate_rect();
+        auto &ta = g_btn_hover[hover_key(H_TRANSLATE, 0)];
+        busy |= ta.running(now);
+        float th = ta.at(now);
+        if (t->tr_state) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
+        else if (th > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, th * 1.3f));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_LANG, r, t->tr_state || t->tr_offer ? p.accent : mix(p.sub, p.text, th));
         right = r.left - S(4);
     }
     if (zoom_shown()) {
@@ -1186,7 +1205,7 @@ struct Panel {
     POINT pos{};
     std::function<void(Panel &, double)> draw;
 };
-static Panel g_menu, g_sug, g_toast;
+static Panel g_menu, g_sug, g_toast, g_bubble;
 static const float kPanelPad = 18;   // room around the panel for its shadow (DIP)
 static void panel_free(Panel &p) {
     if (p.h) { DestroyWindow(p.h); p.h = NULL; }
@@ -1363,7 +1382,7 @@ std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back
     std::wstring text, hint;
@@ -1379,6 +1398,17 @@ static std::vector<MItem> g_items;
 static int g_menu_page = PAGE_MAIN, g_menu_tab = 0, g_menu_sel = -1, g_menu_hot_btn = 0;
 static bool g_menu_page_is_profiles() { return g_menu.h && !g_menu.closing && g_menu_page == PAGE_PROFILES; }
 static RECT g_menu_anchor;
+static bool g_menu_quiet;              // opened by Pluma itself (the translate offer): never takes the focus, closes on its own
+static bool g_menu_quiet_touched;      // ... the mouse went over it (then it stays until a click elsewhere)
+static double g_menu_quiet_since;
+static int g_menu_quiet_tab;           // ... and the tab on screen then (another one: it goes)
+static bool keep_on_screen() { return !g_test || g_test_visible; }   // (a test instance's panels stay off the screen with it)
+static std::wstring fmt1(const wchar_t *tpl, const std::wstring &a) {
+    std::wstring s = tpl;
+    size_t at = s.find(L"%1");
+    if (at != std::wstring::npos) s.replace(at, 2, a);
+    return s;
+}
 static const float kMenuW = 344, kItemH = 34, kSepH = 9;
 static float item_h(const MItem &m) { return m.kind == 1 ? S(kSepH) : m.kind == 6 ? S(30) : S(kItemH); }
 static std::vector<MItem> build_page(int page);
@@ -1463,21 +1493,29 @@ static void menu_place(bool from_side) {
     if (g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES) x = g_menu_anchor.left - (int)pad;
     MONITORINFO mi = { sizeof(mi) };
     GetMonitorInfoW(MonitorFromRect(&g_menu_anchor, MONITOR_DEFAULTTONEAREST), &mi);
-    x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
-    if (y + hh > mi.rcWork.bottom + pad) y = std::max((int)mi.rcWork.top, (int)(mi.rcWork.bottom + pad) - hh);
+    if (keep_on_screen()) {
+        x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
+        if (y + hh > mi.rcWork.bottom + pad) y = std::max((int)mi.rcWork.top, (int)(mi.rcWork.bottom + pad) - hh);
+    }
     g_menu.draw = menu_draw;
     bool fresh = !g_menu.h || g_menu.closing;
-    panel_open(g_menu, x, y, w, hh, true);
+    panel_open(g_menu, x, y, w, hh, !g_menu_quiet);
     if (!fresh && from_side) { g_menu.slide.snap(1); g_menu.slide.go(0, kPanelMs); panel_render(g_menu); }
 }
-static void open_menu_page(int page, RECT anchor, int tab_id) {
+static void open_menu_page(int page, RECT anchor, int tab_id, bool quiet) {
+    // (a quiet one's window cannot take the focus: the person's own menu is a new window)
+    if (g_menu.h && g_menu_quiet && !quiet) panel_free(g_menu);
+    g_menu_quiet = quiet; g_menu_quiet_touched = false; g_menu_quiet_since = now_ms();
+    { Tab *a = active_tab(); g_menu_quiet_tab = a ? a->id : 0; }
     g_menu_page = page; g_menu_tab = tab_id; g_menu_sel = -1; g_menu_anchor = anchor;
     close_suggestions();
     menu_place(false);
-    g_menu_btn_open.go(1, kHoverMs);
+    if (quiet && g_menu.h) SetTimer(g_menu.h, 6, 200, NULL);
+    if (!quiet) g_menu_btn_open.go(1, kHoverMs);
 }
 static void menu_close() {
     if (!g_menu.h) return;
+    if (g_menu_quiet) { KillTimer(g_menu.h, 6); g_menu_quiet = false; }
     panel_close(g_menu);
     g_menu_btn_open.go(0, kHoverMs);
     ui_invalidate();
@@ -1533,6 +1571,11 @@ static std::vector<MItem> build_page(int page) {
         v.push_back(sep());
         MItem z; z.kind = 5; z.text = L"Zoom"; z.icon = G_ZOOM; v.push_back(z);
         v.push_back(item(T(L"Descargas"), G_DOWNLOAD, T(L"Ctrl+J"), [] { after_menu([] { tab_downloads(); }); }));
+        Tab *at = active_tab();
+        if (at && at->view && !settings_page_url(at->url) && (starts_with(at->url, L"https://") || starts_with(at->url, L"http://"))) {
+            if (at->tr_state) v.push_back(item(T(L"Mostrar original"), G_LANG, L"", [] { after_menu([] { translate_original(active_tab()); }); }));
+            else v.push_back(item(T(L"Traducir página"), G_LANG, translate_lang_name(translate_target(), true), [] { after_menu([] { translate_page(active_tab()); }); }));
+        }
         v.push_back(sep());
         size_t on = 0; for (auto &e : g_exts) if (!e.builtin && e.enabled) on++;
         v.push_back(sub(T(L"Extensiones"), G_PUZZLE, on == 1 ? T(L"1 activa") : on ? std::to_wstring(on) + T(L" activas") : L"", PAGE_EXT));
@@ -1687,6 +1730,57 @@ static std::vector<MItem> build_page(int page) {
             if (!id.empty()) profile_open(id);
         }); }));
         v.push_back(item(T(L"Administrar perfiles"), G_GEAR, L"", [] { after_menu([] { settings_open(L"perfiles"); }); }));
+    } else if (page == PAGE_TRANSLATE) {
+        // the translate icon (or the offer): as Edge's, with the page's language, the target and what to remember
+        int id = g_menu_tab;
+        Tab *t = tab_by_id(id);
+        if (!t) return v;
+        std::wstring lang = t->page_lang, tl = translate_target(), site = translate_site(t);
+        std::wstring tl1 = tl.substr(0, tl.find(L'-'));
+        v.push_back(note(lang.empty() ? std::wstring(T(L"Traducir esta página")) : fmt1(T(L"Página en %1"), translate_lang_name(lang, false))));
+        if (t->tr_state == 1) v.push_back(note(fmt1(T(L"Traduciendo… %1 %"), std::to_wstring(translate_progress(t)))));
+        if (t->tr_state) v.push_back(item(T(L"Mostrar original"), G_UNDO, L"", [id] { after_menu([id] { translate_original(tab_by_id(id)); }); }));
+        else v.push_back(item(T(L"Traducir"), G_LANG, translate_lang_name(tl, true), [id] { after_menu([id] { translate_page(tab_by_id(id)); }); }));
+        v.push_back(sub(T(L"Traducir a"), G_GLOBE, translate_lang_name(tl, true), PAGE_TR_TARGET));
+        v.push_back(sep());
+        if (!lang.empty() && lang != tl1) {
+            std::wstring name = translate_lang_name(lang, false);
+            MItem al; al.kind = 3; al.text = fmt1(T(L"Traducir siempre las páginas en %1"), name); al.on = translate_always(lang);
+            al.act = [id, lang] {
+                bool on = !translate_always(lang);
+                translate_set_always(lang, on);
+                Tab *t = tab_by_id(id);
+                if (on && t && !t->tr_state) translate_page(t);
+            };
+            v.push_back(al);
+            MItem nv; nv.kind = 3; nv.text = fmt1(T(L"No traducir nunca las páginas en %1"), name); nv.on = translate_never(lang);
+            nv.act = [lang] { translate_set_never(lang, !translate_never(lang)); };
+            v.push_back(nv);
+        }
+        if (!site.empty()) {
+            MItem ns; ns.kind = 3; ns.text = T(L"No traducir nunca este sitio"); ns.on = translate_never_site(site);
+            ns.act = [site] { translate_set_never_site(site, !translate_never_site(site)); };
+            v.push_back(ns);
+        }
+        v.push_back(sep());
+        if (!t->tr_state) v.push_back(item(T(L"Ahora no"), G_X, L"", [] { after_menu([] {}); }));
+        v.push_back(item(T(L"Configuración de traducción"), G_GEAR, L"", [] { after_menu([] { settings_open(L"idioma"); }); }));
+    } else if (page == PAGE_TR_TARGET) {
+        MItem b = back(T(L"Traducir a"));
+        b.act = [] { menu_go(PAGE_TRANSLATE); };
+        v.push_back(b);
+        std::wstring tl = translate_target();
+        for (auto &c : translate_targets()) {
+            MItem m; m.kind = 4; m.text = translate_lang_name(c, true); m.on = c == tl;
+            m.act = [c] {
+                bool changed = c != translate_target();
+                translate_set_target(c);
+                Tab *t = tab_by_id(g_menu_tab);
+                if (changed && t && t->tr_state) translate_page(t);   // (into the new one now)
+                menu_go(PAGE_TRANSLATE);
+            };
+            v.push_back(m);
+        }
     } else if (page == PAGE_ONE_EXT) {
         // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
         size_t i = (size_t)g_menu_tab;
@@ -1733,9 +1827,10 @@ static void menu_activate(int i, int btn) {
 static void menu_key(UINT vk) {
     int n = (int)g_items.size();
     auto selectable = [](const MItem &m) { return m.enabled && m.kind != 1 && m.kind != 6; };
-    bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES;
-    if (vk == VK_ESCAPE) { if (!top) menu_go(PAGE_MAIN); else after_menu([] {}); return; }
-    if (vk == VK_LEFT && !top) { menu_go(PAGE_MAIN); return; }
+    bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES || g_menu_page == PAGE_TRANSLATE;
+    int parent = g_menu_page == PAGE_TR_TARGET ? PAGE_TRANSLATE : PAGE_MAIN;
+    if (vk == VK_ESCAPE) { if (!top) menu_go(parent); else after_menu([] {}); return; }
+    if (vk == VK_LEFT && !top) { menu_go(parent); return; }
     if (vk == VK_UP || vk == VK_DOWN) {
         int d = vk == VK_UP ? -1 : 1, i = g_menu_sel;
         for (int k = 0; k < n; k++) { i = (i + d + n) % n; if (selectable(g_items[i])) break; }
@@ -1778,17 +1873,258 @@ void ui_toast(const std::wstring &t) {
     panel_open(g_toast, o.x, o.y, w, h, false);
     SetTimer(g_toast.h, 2, 2600, NULL);
 }
-void ui_close_popups() { close_suggestions(); if (g_menu.h && !g_menu.closing) menu_close(); }
+// ---------------------------------------------------------------- page translation (translate.cpp): its popup and the bubble
+static void menu_refresh() {
+    // the open menu shows what changed (its height too)
+    if (!g_menu.h || g_menu.closing) return;
+    menu_rebuild();
+    float h = S(12);
+    for (auto &m : g_items) h += item_h(m);
+    if ((int)(h + S(kPanelPad) * 2) != g_menu.hh) menu_place(false); else panel_render(g_menu);
+}
+void ui_translate_changed() {
+    ui_invalidate();
+    if (g_menu.h && !g_menu.closing && (g_menu_page == PAGE_TRANSLATE || g_menu_page == PAGE_MAIN)) menu_refresh();
+}
+static RECT bar_rect_on_screen(D2D1_RECT_F r) {
+    POINT a = { (LONG)r.left, (LONG)r.top }, b = { (LONG)r.right, (LONG)r.bottom };
+    ClientToScreen(g_bar, &a); ClientToScreen(g_bar, &b);
+    return { a.x, a.y, b.x, b.y };
+}
+static void open_translate_menu(bool quiet) {
+    Tab *t = active_tab();
+    if (!t) return;
+    open_menu_page(PAGE_TRANSLATE, bar_rect_on_screen(translate_shown() ? translate_rect() : menu_rect()), t->id, quiet);
+}
+void ui_open_translate_menu() { open_translate_menu(false); }
+void ui_open_menu_quietly(bool translate) {
+    // tests: a menu shown without taking the focus (a test instance never takes it from the user)
+    if (translate) { open_translate_menu(true); return; }
+    open_menu_page(PAGE_MAIN, bar_rect_on_screen(menu_rect()), 0, true);
+}
+bool ui_translate_offer(Tab *t) {
+    // as Edge's: the popup under the icon, unless the person is busy elsewhere (then the lit icon is enough); it takes
+    // the place of another quiet one (the last tab's offer, still there: the new tab is on screen before it goes)
+    if (!t || t != active_tab() || !translate_shown() || ui_address_focused() || (g_menu.h && !g_menu.closing && !g_menu_quiet) ||
+        !IsWindowVisible(g_win) || IsIconic(g_win)) return false;
+    if (!g_test && GetForegroundWindow() != g_win) return false;
+    open_translate_menu(true);
+    return true;
+}
+static bool mouse_clicked() {   // a button down anywhere (test instances: never, the mouse is the user's)
+    return !g_test && ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) || (GetAsyncKeyState(VK_RBUTTON) & 0x8000));
+}
+static bool escape_down() { return !g_test && (GetAsyncKeyState(VK_ESCAPE) & 0x8000) && GetForegroundWindow() == g_win; }
+static void quiet_watch() {
+    // the offer closes with a click elsewhere, Esc, another tab, or by itself after 12 s if the mouse never went to it
+    if (!g_menu_quiet || !g_menu.h || g_menu.closing) return;
+    POINT c; GetCursorPos(&c);
+    RECT wr; GetWindowRect(g_menu.h, &wr);
+    int pad = (int)S(kPanelPad);
+    InflateRect(&wr, -pad, -pad);
+    bool over = PtInRect(&wr, c) != FALSE;
+    if (over) g_menu_quiet_touched = true;
+    Tab *t = active_tab();
+    if ((mouse_clicked() && !over) || escape_down() || !t || t->id != g_menu_quiet_tab || !IsWindowVisible(g_win) || IsIconic(g_win) ||
+        (!g_menu_quiet_touched && now_ms() - g_menu_quiet_since > 12000))
+        menu_close();
+}
+
+static std::wstring g_bub_title, g_bub_text;
+static bool g_bub_loading;
+static RECT g_bub_anchor;
+static int g_bub_hot, g_bub_tab, g_bub_tr;   // (g_bub_tr: was the page translated when it opened)
+static double g_bub_opened, g_bub_copied = -1e9;
+static const float kBubW = 380, kBubHead = 38, kBubMaxBody = 320;
+static ComPtr<IDWriteTextLayout> bubble_layout() {
+    ComPtr<IDWriteTextLayout> l;
+    if (!g_dw || !g_f.menu) return l;
+    g_dw->CreateTextLayout(g_bub_text.c_str(), (UINT32)g_bub_text.size(), g_f.menu.Get(), S(kBubW - 30), 100000, &l);
+    if (l) {
+        l->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        l->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        l->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        DWRITE_TRIMMING none = { DWRITE_TRIMMING_GRANULARITY_NONE, 0, 0 };
+        l->SetTrimming(&none, NULL);
+    }
+    return l;
+}
+static D2D1_RECT_F bubble_card(const Panel &p) { float pad = S(kPanelPad); return R(pad, pad, p.w - pad, p.hh - pad); }
+static D2D1_RECT_F bubble_btn(const Panel &p, int which) {   // 1 copy, 2 close
+    D2D1_RECT_F c = bubble_card(p);
+    float x = c.right - S(8) - S(30) * (which == 2 ? 1 : 2);
+    return R(x, c.top + S(6), x + S(28), c.top + S(34));
+}
+static void bubble_draw(Panel &p, double now) {
+    const Palette &c = pal();
+    D2D1_RECT_F card = bubble_card(p);
+    card.top -= S(6) * p.slide.at(now); card.bottom -= S(6) * p.slide.at(now);
+    panel_card(p, card);
+    float dy = card.top - bubble_card(p).top;
+    glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_LANG, R(card.left + S(8), card.top + S(6), card.left + S(34), card.top + S(34)), c.accent);
+    D2D1_RECT_F copy = bubble_btn(p, 1), close = bubble_btn(p, 2);
+    copy.top += dy; copy.bottom += dy; close.top += dy; close.bottom += dy;
+    text(p.rt.Get(), p.br.Get(), g_f.hint.Get(), g_bub_title, R(card.left + S(36), card.top + S(6), copy.left - S(4), card.top + S(34)), c.sub);
+    bool copied = now - g_bub_copied < 1500;
+    if (!g_bub_loading) {
+        if (g_bub_hot == 1) fill(p.rt.Get(), p.br.Get(), copy, S(7), c.hover);
+        glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), copied ? G_CHECK : G_COPY, copy, copied ? c.accent : c.sub);
+    }
+    if (g_bub_hot == 2) fill(p.rt.Get(), p.br.Get(), close, S(7), c.hover);
+    glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_X, close, c.sub);
+    auto l = bubble_layout();
+    if (!l) return;
+    D2D1_RECT_F body = R(card.left + S(14), card.top + S(kBubHead), card.right - S(14), card.bottom - S(12));
+    p.rt->PushAxisAlignedClip(body, D2D1_ANTIALIAS_MODE_ALIASED);
+    p.br->SetColor(g_bub_loading ? c.sub : c.text);
+    p.rt->DrawTextLayout(D2D1::Point2F(body.left, body.top), l.Get(), p.br.Get());
+    p.rt->PopAxisAlignedClip();
+}
+static void bubble_place() {
+    float pad = S(kPanelPad);
+    auto l = bubble_layout();
+    DWRITE_TEXT_METRICS m{};
+    if (l) l->GetMetrics(&m);
+    float body = std::min(std::max(m.height, S(18)), S(kBubMaxBody));
+    int w = (int)(S(kBubW) + pad * 2), hh = (int)(S(kBubHead) + body + S(14) + pad * 2);
+    RECT a = g_bub_anchor;
+    int x = a.left - (int)pad, y = a.bottom + (int)S(8) - (int)pad;
+    if (keep_on_screen()) {
+        // under the words, or over them when there is no room below; always on their screen
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfoW(MonitorFromRect(&a, MONITOR_DEFAULTTONEAREST), &mi);
+        if (y + hh - pad > mi.rcWork.bottom) y = a.top - (int)S(8) - hh + (int)pad;
+        y = std::max((int)mi.rcWork.top - (int)pad, std::min(y, (int)mi.rcWork.bottom - hh + (int)pad));
+        x = std::max((int)mi.rcWork.left - (int)pad, std::min(x, (int)mi.rcWork.right - w + (int)pad));
+    }
+    g_bubble.draw = bubble_draw;
+    bool fresh = !g_bubble.h || g_bubble.closing;
+    panel_open(g_bubble, x, y, w, hh, false);
+    if (fresh && g_bubble.h) SetTimer(g_bubble.h, 5, 120, NULL);
+}
+static void bubble_close() {
+    if (!g_bubble.h || g_bubble.closing) return;
+    KillTimer(g_bubble.h, 5);
+    panel_close(g_bubble);
+}
+void ui_bubble(RECT anchor, const std::wstring &title, const std::wstring &text, bool loading) {
+    Tab *t = active_tab();
+    g_bub_anchor = anchor; g_bub_title = title; g_bub_text = text; g_bub_loading = loading;
+    g_bub_hot = 0; g_bub_tab = t ? t->id : 0; g_bub_tr = t ? t->tr_state : 0; g_bub_opened = now_ms(); g_bub_copied = -1e9;
+    bubble_place();
+}
+void ui_bubble_text(const std::wstring &title, const std::wstring &text, bool loading) {
+    if (!g_bubble.h || g_bubble.closing) return;
+    g_bub_title = title; g_bub_text = text; g_bub_loading = loading;
+    bubble_place();
+}
+static void bubble_watch() {
+    // a click elsewhere, Esc, another tab, the whole page being translated or the window going: the bubble goes
+    if (!g_bubble.h || g_bubble.closing) return;
+    POINT c; GetCursorPos(&c);
+    RECT wr; GetWindowRect(g_bubble.h, &wr);
+    int pad = (int)S(kPanelPad);
+    InflateRect(&wr, -pad, -pad);
+    bool over = PtInRect(&wr, c) != FALSE;
+    Tab *t = active_tab();
+    if ((mouse_clicked() && !over && now_ms() - g_bub_opened > 400) || escape_down() || !t || t->id != g_bub_tab || (!g_bub_tr && t->tr_state) ||
+        !IsWindowVisible(g_win) || IsIconic(g_win))
+        bubble_close();
+}
+static void copy_to_clipboard(const std::wstring &s) {
+    if (!OpenClipboard(g_win)) return;
+    EmptyClipboard();
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (s.size() + 1) * sizeof(wchar_t));
+    if (h) {
+        memcpy(GlobalLock(h), s.c_str(), (s.size() + 1) * sizeof(wchar_t));
+        GlobalUnlock(h);
+        if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
+    }
+    CloseClipboard();
+}
+IStream *ui_glyph_png(wchar_t g) {
+    // the page's context menu takes its icons as images: the glyph drawn once, in the menu's ink (it follows the theme)
+    static std::unordered_map<int, std::string> cache;
+    bool dark = dark_theme();
+    int key = (int)g * 2 + (dark ? 1 : 0);
+    auto it = cache.find(key);
+    if (it == cache.end()) {
+        std::string png;
+        const UINT px = 32;
+        ComPtr<IWICBitmap> bmp;
+        ComPtr<ID2D1RenderTarget> rt;
+        ComPtr<IDWriteTextFormat> f;
+        ComPtr<ID2D1SolidColorBrush> br;
+        D2D1_RENDER_TARGET_PROPERTIES rp = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96, 96);
+        if (g_wic && g_d2d && g_dw && SUCCEEDED(g_wic->CreateBitmap(px, px, GUID_WICPixelFormat32bppPBGRA, WICBitmapCacheOnLoad, &bmp)) &&
+            SUCCEEDED(g_d2d->CreateWicBitmapRenderTarget(bmp.Get(), rp, &rt)) &&
+            SUCCEEDED(g_dw->CreateTextFormat(g_icon_family.c_str(), NULL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 24.0f, L"", &f)) &&
+            SUCCEEDED(rt->CreateSolidColorBrush(dark ? hex(0xe7eaee) : hex(0x1d2733), &br))) {
+            f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            f->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            rt->BeginDraw();
+            rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+            rt->DrawText(&g, 1, f.Get(), D2D1::RectF(0, 0, (float)px, (float)px), br.Get());
+            if (SUCCEEDED(rt->EndDraw())) {
+                IStream *s = SHCreateMemStream(NULL, 0);
+                ComPtr<IWICBitmapEncoder> enc;
+                ComPtr<IWICBitmapFrameEncode> fr;
+                if (s && SUCCEEDED(g_wic->CreateEncoder(GUID_ContainerFormatPng, NULL, &enc)) && SUCCEEDED(enc->Initialize(s, WICBitmapEncoderNoCache)) &&
+                    SUCCEEDED(enc->CreateNewFrame(&fr, NULL)) && SUCCEEDED(fr->Initialize(NULL)) && SUCCEEDED(fr->SetSize(px, px)) &&
+                    SUCCEEDED(fr->WriteSource(bmp.Get(), NULL)) && SUCCEEDED(fr->Commit()) && SUCCEEDED(enc->Commit())) {
+                    STATSTG st{};
+                    LARGE_INTEGER zero{};
+                    if (SUCCEEDED(s->Stat(&st, STATFLAG_NONAME)) && SUCCEEDED(s->Seek(zero, STREAM_SEEK_SET, NULL))) {
+                        png.resize((size_t)st.cbSize.QuadPart);
+                        ULONG got = 0;
+                        if (FAILED(s->Read(&png[0], (ULONG)png.size(), &got)) || got != png.size()) png.clear();
+                    }
+                }
+                if (s) s->Release();
+            }
+        }
+        it = cache.emplace(key, png).first;
+    }
+    if (it->second.empty()) return nullptr;
+    return SHCreateMemStream((const BYTE *)it->second.data(), (UINT)it->second.size());
+}
+
+void ui_blend_panels(BYTE *bits, int w, int h, POINT origin) {
+    // tests: the open panels into a picture of the window, with their real transparency (as the screen shows them)
+    for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble }) {
+        if (!p->h || !p->bmp || !IsWindowVisible(p->h)) continue;
+        DIBSECTION ds{};
+        if (!GetObjectW(p->bmp, sizeof(ds), &ds) || !ds.dsBm.bmBits) continue;
+        float k = std::max(0.0f, std::min(1.0f, p->fade.at(now_ms())));
+        for (int y = 0; y < p->hh; y++)
+            for (int x = 0; x < p->w; x++) {
+                int dx = p->pos.x - origin.x + x, dy = p->pos.y - origin.y + y;
+                if (dx < 0 || dy < 0 || dx >= w || dy >= h) continue;
+                BYTE *src = (BYTE *)ds.dsBm.bmBits + (y * p->w + x) * 4, *d = bits + (dy * w + dx) * 4;
+                float a = src[3] / 255.0f * k;
+                for (int c = 0; c < 3; c++) d[c] = (BYTE)std::min(255.0f, src[c] * k + d[c] * (1 - a));
+            }
+    }
+}
+void ui_close_popups() {
+    close_suggestions();
+    if (g_menu.h && !g_menu.closing) menu_close();
+    if (g_bubble.h && !g_bubble.closing && now_ms() - g_bub_opened > 500) bubble_close();   // (not the page taking the focus back from its own menu)
+}
 
 static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    Panel *p = h == g_menu.h ? &g_menu : h == g_sug.h ? &g_sug : h == g_toast.h ? &g_toast : nullptr;
+    Panel *p = h == g_menu.h ? &g_menu : h == g_sug.h ? &g_sug : h == g_toast.h ? &g_toast : h == g_bubble.h ? &g_bubble : nullptr;
     switch (msg) {
     case WM_TIMER:
         if (!p) break;
         if (wp == 2) { KillTimer(h, 2); panel_close(*p); return 0; }
+        if (wp == 5 && p == &g_bubble) { bubble_watch(); return 0; }
+        if (wp == 6 && p == &g_menu) { quiet_watch(); return 0; }
+        if (wp == 7) KillTimer(h, 7);   // (the bubble's "copied" tick, drawn once more)
         panel_render(*p);
         return 0;
-    case WM_MOUSEACTIVATE: return p == &g_menu ? MA_ACTIVATE : MA_NOACTIVATE;
+    case WM_MOUSEACTIVATE: return p == &g_menu && !g_menu_quiet ? MA_ACTIVATE : MA_NOACTIVATE;
     case WM_ACTIVATE:
         if (p == &g_menu && LOWORD(wp) == WA_INACTIVE && !g_menu.closing) menu_close();
         return 0;
@@ -1799,6 +2135,9 @@ static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (p == &g_menu) {
             int btn = 0, i = menu_hit(x, y, &btn);
             if (i != g_menu_sel || btn != g_menu_hot_btn) { g_menu_sel = i; g_menu_hot_btn = btn; panel_render(g_menu); }
+        } else if (p == &g_bubble) {
+            int hot = inside(bubble_btn(g_bubble, 1), (float)x, (float)y) && !g_bub_loading ? 1 : inside(bubble_btn(g_bubble, 2), (float)x, (float)y) ? 2 : 0;
+            if (hot != g_bub_hot) { g_bub_hot = hot; panel_render(g_bubble); }
         } else if (p == &g_sug) {
             float pad = S(kPanelPad);
             int i = (int)((y - pad - S(6)) / S(kSugRow));
@@ -1810,10 +2149,15 @@ static LRESULT CALLBACK panel_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSELEAVE:
         if (p == &g_menu) { g_menu_hot_btn = 0; panel_render(g_menu); }
         if (p == &g_sug) { g_sug_hover = -1; panel_render(g_sug); }
+        if (p == &g_bubble && g_bub_hot) { g_bub_hot = 0; panel_render(g_bubble); }
         return 0;
     case WM_LBUTTONUP: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
         if (p == &g_menu) { int btn = 0, i = menu_hit(x, y, &btn); if (i >= 0) menu_activate(i, btn); else after_menu([] {}); }
+        else if (p == &g_bubble) {
+            if (g_bub_hot == 1) { copy_to_clipboard(g_bub_text); g_bub_copied = now_ms(); panel_render(g_bubble); SetTimer(h, 7, 1600, NULL); }
+            else if (g_bub_hot == 2) bubble_close();
+        }
         else if (p == &g_sug && g_sug_hover >= 0) {
             g_sug_sel = g_sug_hover;
             if (g_sug_sel == 0) commit_address(false); else sug_commit(false);
@@ -1940,6 +2284,7 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
     case H_READER: reader_toggle(active_tab()); break;
+    case H_TRANSLATE: if (g_menu.h && !g_menu.closing && g_menu_page == PAGE_TRANSLATE && !g_menu_quiet) menu_close(); else ui_open_translate_menu(); break;
     case H_BM: {
         BmNode *n = bm_find(h.id);
         if (!n) break;
@@ -2082,7 +2427,7 @@ static LRESULT CALLBACK bar_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         double now = now_ms();
         bool busy = false;
         if (g_bar_busy) { paint(); busy |= g_bar_busy; }
-        for (Panel *p : { &g_menu, &g_sug, &g_toast })
+        for (Panel *p : { &g_menu, &g_sug, &g_toast, &g_bubble })
             if (p->h && (p->fade.running(now) || p->slide.running(now) || p->closing)) { panel_render(*p); busy |= p->h != NULL; }
         if (!busy) g_anim_on = false;
         return 0;
