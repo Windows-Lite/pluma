@@ -24,10 +24,15 @@ typedef int (*bblob_t)(void *, int, const void *, int, void *);
 typedef int (*bi64_t)(void *, int, long long);
 typedef const unsigned char *(*ctext_t)(void *, int);
 typedef int (*ccount_t)(void *);
+typedef const void *(*cblob_t)(void *, int);
+typedef int (*cbytes_t)(void *, int);
+typedef long long (*ci64_t)(void *, int);
+typedef int (*exec_t)(void *, const char *, void *, void *, char **);
 typedef int (*fin_t)(void *);
 typedef int (*close_t)(void *);
 static open_t open; static prep_t prepare; static step_t step; static btext_t bind_text; static bblob_t bind_blob;
 static bi64_t bind_i64; static ctext_t ctext; static ccount_t ccount; static fin_t finalize; static close_t close;
+static cblob_t cblob; static cbytes_t cbytes; static ci64_t ci64; static exec_t exec;
 static bool load() {
     static int s = 0;
     if (s) return s == 1;
@@ -43,7 +48,11 @@ static bool load() {
     ccount = (ccount_t)GetProcAddress(h, "sqlite3_column_count");
     finalize = (fin_t)GetProcAddress(h, "sqlite3_finalize");
     close = (close_t)GetProcAddress(h, "sqlite3_close");
-    s = (open && prepare && step && bind_text && bind_blob && bind_i64 && ctext && ccount && finalize && close) ? 1 : -1;
+    cblob = (cblob_t)GetProcAddress(h, "sqlite3_column_blob");
+    cbytes = (cbytes_t)GetProcAddress(h, "sqlite3_column_bytes");
+    ci64 = (ci64_t)GetProcAddress(h, "sqlite3_column_int64");
+    exec = (exec_t)GetProcAddress(h, "sqlite3_exec");
+    s = (open && prepare && step && bind_text && bind_blob && bind_i64 && ctext && ccount && finalize && close && cblob && cbytes && ci64 && exec) ? 1 : -1;
     return s == 1;
 }
 }
@@ -305,6 +314,144 @@ int passwords_keep(const std::wstring &url, const std::wstring &user, const std:
     return write_file(pending_file(), existing + utf8(row)) ? 1 : 0;
 }
 
+// ---------------------------------------------------------------- the saved logins (vault.cpp shows them)
+// The list is read from a copy of Login Data (shared read of the live file and its -wal; the engine keeps it open) or,
+// if the live one cannot be read, from the copy taken at this start before the engine opened it (sync-motor\).
+// Nothing is decrypted here: the rows keep their ciphertext, and one is decrypted only when the person asks.
+static std::wstring hex_of(const std::string &b) { return hex_of(std::vector<BYTE>(b.begin(), b.end())); }
+static std::wstring forget_file_in(const std::wstring &data) { return data + L"\\passwords-delete.tsv"; }
+static std::wstring forget_file() { return forget_file_in(g_data); }
+static std::wstring forget_key(const std::wstring &realm, const std::wstring &user, const std::string &blob) {
+    return tsv_safe(realm) + L"\t" + tsv_safe(user) + L"\t" + hex_of(blob);
+}
+static void read_logins(const std::wstring &db_path, std::vector<SavedLogin> &out) {
+    void *db = nullptr;
+    if (pq::open(utf8(db_path).c_str(), &db, 1 /* READONLY */, nullptr) == 0 && db) {
+        void *st = nullptr;
+        if (pq::prepare(db, "select id, origin_url, signon_realm, username_value, password_value from logins "
+                            "where blacklisted_by_user = 0 order by signon_realm, username_value", -1, &st, nullptr) == 0 && st) {
+            while (pq::step(st) == 100) {
+                SavedLogin l;
+                l.id = pq::ci64(st, 0);
+                const unsigned char *o = pq::ctext(st, 1), *r = pq::ctext(st, 2), *u = pq::ctext(st, 3);
+                l.origin = wide(std::string(o ? (const char *)o : ""));
+                l.realm = wide(std::string(r ? (const char *)r : ""));
+                l.user = wide(std::string(u ? (const char *)u : ""));
+                const void *b = pq::cblob(st, 4);
+                int n = pq::cbytes(st, 4);
+                if (b && n > 0) l.blob.assign((const char *)b, (size_t)n);
+                if (!l.realm.empty()) out.push_back(std::move(l));
+            }
+            pq::finalize(st);
+        }
+    }
+    if (db) pq::close(db);
+}
+int passwords_read_saved(std::vector<SavedLogin> &out, const std::wstring &prof, const std::wstring &data) {
+    out.clear();
+    if (g_incognito || !pq::load()) return -1;
+    std::wstring live = prof + L"\\Login Data";
+    std::wstring snap = g_state + L"\\sync-motor\\" + prof.substr(prof.find_last_of(L'\\') + 1) + L"\\Login Data";
+    std::string d, wal;
+    int from = 0;
+    if (read_file(live, d)) read_file(live + L"-wal", wal);
+    else if (read_file(snap, d)) { from = 1; read_file(snap + L"-wal", wal); }
+    else return PathFileExistsW(live.c_str()) ? -1 : 0;   // (none yet: the engine has not saved anything)
+    std::wstring dir = data + L"\\imp_tmp"; CreateDirectoryW(dir.c_str(), NULL);
+    std::wstring copy = dir + L"\\sv-" + std::to_wstring(GetCurrentThreadId()) + L"-" + std::to_wstring(GetTickCount64()) + L".db";
+    if (!write_file(copy, d)) return -1;
+    if (!wal.empty()) write_file(copy + L"-wal", wal);
+    read_logins(copy, out);
+    for (const wchar_t *suf : { L"", L"-wal", L"-shm", L"-journal" }) DeleteFileW((copy + suf).c_str());
+    // the rows waiting to be removed at the next start
+    std::string del;
+    if (read_file(forget_file_in(data), del)) {
+        std::wstring w = wide(del);
+        for (auto &l : out) if (w.find(forget_key(l.realm, l.user, l.blob)) != std::wstring::npos) l.forgotten = true;
+    }
+    return from;
+}
+// one row's password, only when asked (the key comes out of DPAPI and is wiped right after)
+int passwords_decrypt(const std::string &blob, std::string &plain) {
+    plain.clear();
+    if (blob.size() >= 3 && blob.compare(0, 3, "v20") == 0) return 1;   // app-bound: only the engine can open it
+    if (blob.size() >= 3 + 12 + 16 && (blob.compare(0, 3, "v10") == 0 || blob.compare(0, 3, "v11") == 0)) {
+        std::vector<BYTE> key;
+        if (!master_key(key)) return 2;
+        BCRYPT_ALG_HANDLE alg = NULL; BCRYPT_KEY_HANDLE k = NULL;
+        bool ok = false;
+        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_AES_ALGORITHM, NULL, 0) == 0) {
+            if (BCryptSetProperty(alg, BCRYPT_CHAINING_MODE, (PUCHAR)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0) == 0 &&
+                BCryptGenerateSymmetricKey(alg, &k, NULL, 0, key.data(), (ULONG)key.size(), 0) == 0) {
+                const BYTE *nonce = (const BYTE *)blob.data() + 3;
+                const BYTE *ct = nonce + 12;
+                ULONG ctn = (ULONG)(blob.size() - 3 - 12 - 16);
+                BYTE tag[16]; memcpy(tag, blob.data() + blob.size() - 16, 16);
+                BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO info;
+                BCRYPT_INIT_AUTH_MODE_INFO(info);
+                info.pbNonce = (PUCHAR)nonce; info.cbNonce = 12; info.pbTag = tag; info.cbTag = 16;
+                plain.resize(ctn);
+                ULONG done = 0;
+                ok = BCryptDecrypt(k, (PUCHAR)ct, ctn, &info, NULL, 0, ctn ? (PUCHAR)&plain[0] : NULL, ctn, &done, 0) == 0;
+                if (ok) plain.resize(done);
+            }
+        }
+        if (k) BCryptDestroyKey(k);
+        if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+        SecureZeroMemory(key.data(), key.size());
+        if (!ok) { if (!plain.empty()) SecureZeroMemory(&plain[0], plain.size()); plain.clear(); return 2; }
+        return 0;
+    }
+    // an old row: DPAPI straight
+    DATA_BLOB in{ (DWORD)blob.size(), (BYTE *)blob.data() }, outb{};
+    if (blob.empty() || !CryptUnprotectData(&in, NULL, NULL, NULL, NULL, 0, &outb)) return 2;
+    plain.assign((const char *)outb.pbData, outb.cbData);
+    SecureZeroMemory(outb.pbData, outb.cbData);
+    LocalFree(outb.pbData);
+    return 0;
+}
+// removing a login: the engine keeps Login Data open while it runs (writing under it risks its database), so the row
+// is queued and goes at the next start, before the engine opens it, as passwords_keep's rows come in. undo: unqueue.
+bool passwords_forget(const SavedLogin &l, bool undo) {
+    if (g_incognito) return false;
+    std::string cur; read_file(forget_file(), cur);
+    std::wstring w = wide(cur), key = forget_key(l.realm, l.user, l.blob) + L"\n";
+    size_t at = w.find(key);
+    if (undo) { if (at == std::wstring::npos) return true; w.erase(at, key.size()); }
+    else { if (at != std::wstring::npos) return true; w += key; }
+    if (w.empty()) { DeleteFileW(forget_file().c_str()); return true; }
+    return write_file(forget_file(), utf8(w));
+}
+// at the start: the queued rows out (each one only if it is still the same: same site, user and ciphertext)
+static int forget_apply(void *db, const std::wstring &queued) {
+    std::vector<long long> ids;
+    void *st = nullptr;
+    if (pq::prepare(db, "select id, signon_realm, username_value, password_value from logins", -1, &st, nullptr) == 0 && st) {
+        while (pq::step(st) == 100) {
+            const unsigned char *r = pq::ctext(st, 1), *u = pq::ctext(st, 2);
+            const void *b = pq::cblob(st, 3);
+            int n = pq::cbytes(st, 3);
+            std::string blob = b && n > 0 ? std::string((const char *)b, (size_t)n) : std::string();
+            std::wstring key = forget_key(wide(std::string(r ? (const char *)r : "")), wide(std::string(u ? (const char *)u : "")), blob) + L"\n";
+            if (queued.find(key) != std::wstring::npos) ids.push_back(pq::ci64(st, 0));
+        }
+        pq::finalize(st);
+    }
+    pq::exec(db, "pragma foreign_keys = on", nullptr, nullptr, nullptr);
+    int removed = 0;
+    for (long long id : ids) {
+        // its notes and leak flags first (SQLite only cascades with foreign keys on, and they may not be declared)
+        for (const char *sql : { "delete from password_notes where parent_id = ?", "delete from insecure_credentials where parent_id = ?",
+                                 "delete from logins where id = ?" }) {
+            if (pq::prepare(db, sql, -1, &st, nullptr) != 0 || !st) continue;   // (a table this engine does not have)
+            pq::bind_i64(st, 1, id);
+            if (pq::step(st) == 101 && !strncmp(sql, "delete from logins", 18)) removed++;
+            pq::finalize(st);
+        }
+    }
+    return removed;
+}
+
 bool passwords_delete_csv() {
     if (g_last_csv.empty()) return false;
     shred(g_last_csv);
@@ -383,8 +530,9 @@ static void build_insert(void *db, const std::wstring &realm, const std::wstring
 }
 int passwords_apply_pending() {
     if (g_incognito) return 0;   // the ordinary window's engine may have Login Data open; it applies them itself
-    std::string data;
-    if (!read_file(pending_file(), data)) return 0;
+    std::string data, del;
+    bool adding = read_file(pending_file(), data), removing = read_file(forget_file(), del);
+    if (!adding && !removing) return 0;
     std::wstring ld = wv_profile_dir() + L"\\Login Data";
     if (!PathFileExistsW(ld.c_str())) return 0;   // the engine has not made it yet: try again next start
     if (!pq::load()) return 0;
@@ -398,6 +546,12 @@ int passwords_apply_pending() {
     }
     void *db = nullptr;
     if (pq::open(utf8(ld).c_str(), &db, 2 /* READWRITE */, nullptr) != 0 || !db) { if (db) pq::close(db); return 0; }
+    if (removing) {
+        int removed = forget_apply(db, wide(del));
+        DeleteFileW(forget_file().c_str());
+        if (removed) log_line(L"contraseñas quitadas: " + std::to_wstring(removed));
+    }
+    if (!adding) { pq::close(db); return 0; }
     auto have = existing_logins(ld);
     int added = 0;
     long long now = ((long long)time(NULL) + 11644473600LL) * 1000000LL;

@@ -4,6 +4,7 @@
 //   {op:"get", texts:[...]}          -> Pluma answers with the state and the texts in the chosen language (T())
 //   {op:"set", key, value}           -> a setting changed: saved to ajustes.ini and applied at once
 //   {op:"do", what}                  -> an action (clear data, check for updates, open a folder...)
+//   {op:"pw", cmd, id}               -> saved passwords (vault.cpp): the list, reveal and copy after Windows verifies
 // Only messages from that page count: other pages cannot reach Pluma's settings.
 #include "pluma.h"
 #include "json.h"
@@ -35,6 +36,7 @@ static int page_resource(const std::wstring &u) {
     if (path.empty() || path == L"settings") return 200;
     return 0;
 }
+bool settings_main_page(const std::wstring &u) { return settings_page_url(u) && page_resource(u) == 200; }
 void settings_open(const std::wstring &section) {
     std::wstring u = std::wstring(kPage) + (section.empty() ? L"" : L"#" + section);
     for (size_t i = 0; i < g_tabs.size(); i++)
@@ -231,7 +233,8 @@ void settings_attach(ICoreWebView2 *v) {
             IStream *s = SHCreateMemStream((const BYTE *)body.data(), (UINT)body.size());
             ComPtr<ICoreWebView2WebResourceResponse> res;
             if (g_env && SUCCEEDED(g_env->CreateWebResourceResponse(s, page ? 200 : 404, page ? L"OK" : L"Not Found",
-                    L"Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store", &res)))
+                    L"Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n"
+                    L"X-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'", &res)))   // (never inside another page)
                 a->put_Response(res.Get());
             if (s) s->Release();
             return S_OK;
@@ -243,6 +246,7 @@ void settings_attach(ICoreWebView2 *v) {
             a->get_Uri(&uri);
             bool own = uri && settings_page_url(uri);
             CoTaskMemFree(uri);
+            vault_page_navigating(v);   // (a reload too: the permission to reveal passwords is the page's, not the tab's)
             ComPtr<ICoreWebView2Settings> st;
             if (SUCCEEDED(v->get_Settings(&st))) st->put_IsWebMessageEnabled(own ? TRUE : FALSE);
             return S_OK;
@@ -264,6 +268,7 @@ void settings_attach(ICoreWebView2 *v) {
             if (op == L"set") { apply(j[L"key"].s, j[L"value"]); if (j[L"key"].s == L"startup") settings_page_refresh(); }
             else if (op == L"do") act(j[L"what"].s);
             else if (op == L"profile") profiles_page_do(j);
+            else if (op == L"pw") vault_page_do(v, j);   // saved passwords (vault.cpp): answers only this view
             return S_OK;
         }).Get(), &tok);
 }

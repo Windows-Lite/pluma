@@ -30,7 +30,8 @@ enum : wchar_t { G_BACK = 0xE72B, G_FWD = 0xE72A, G_RELOAD = 0xE72C, G_STOP = 0x
                  G_UNDO = 0xE7A7, G_STORE = 0xE719, G_DEV = 0xEC7A, G_ZOOM = 0xE71E, G_STAR = 0xE734, G_STAR_FILL = 0xE735,
                  G_INPRIVATE = 0xE727, G_FONT = 0xE8D2, G_LANG = 0xF2B7, G_UPDATE = 0xE895, G_READER = 0xE736, G_CLOUD = 0xE753,
                  G_COPY = 0xE8C8, G_WINDOW = 0xE78B, G_NEW_WINDOW_OUT = 0xE8A7, G_SWITCH = 0xE8AB, G_WARN = 0xE7BA,
-                 G_CHEV_D = 0xE70D, G_BOLT = 0xE945, G_BLOCK = 0xE733, G_EQ = 0xE9E9 };
+                 G_CHEV_D = 0xE70D, G_BOLT = 0xE945, G_BLOCK = 0xE733, G_EQ = 0xE9E9, G_KEY = 0xE8D7, G_VIEW = 0xE890,
+                 G_HIDE = 0xED1A, G_CONTACT = 0xE77B };
 
 // ---------------------------------------------------------------- colours (Mapea's tokens)
 static D2D1_COLOR_F hex(unsigned v, float a = 1) { return { ((v >> 16) & 255) / 255.f, ((v >> 8) & 255) / 255.f, (v & 255) / 255.f, a }; }
@@ -245,7 +246,8 @@ static int &ui_g_sheet_to();
 static float &ui_g_frozen_w();
 #define g_frozen_w (ui_g_frozen_w())
 enum Hit { H_NONE, H_TAB, H_TAB_CLOSE, H_TAB_AUDIO, H_PLUS, H_BACK, H_FWD, H_RELOAD, H_ADDR, H_ZOOM, H_MENU, H_EXT,
-           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE, H_TRANSLATE };
+           H_MIN, H_MAX, H_CLOSE, H_NOTICE_BTN, H_NOTICE_X, H_NTP_ROW, H_STAR, H_NTP_X, H_BM, H_READER, H_PROFILE, H_TRANSLATE,
+           H_PASSWORDS };
 struct HitInfo { Hit what = H_NONE; int id = 0; };
 static HitInfo &ui_g_hover();
 #define g_hover (ui_g_hover())
@@ -450,9 +452,17 @@ static D2D1_RECT_F translate_rect() {
     D2D1_RECT_F s = reader_shown() ? reader_rect() : star_rect();
     return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
 }
+static bool passwords_panel_open();
+// the key before them all: the site has saved logins (vault.cpp); a click shows them, as Edge's key
+static bool passwords_shown() { Tab *t = active_tab(); return star_shown() && !t->reader && vault_site_has(t->url); }
+static D2D1_RECT_F passwords_rect() {
+    D2D1_RECT_F s = translate_shown() ? translate_rect() : reader_shown() ? reader_rect() : star_rect();
+    return R(s.left - S(30), s.top, s.left - S(2), s.bottom);
+}
 static D2D1_RECT_F zoom_rect() {
     D2D1_RECT_F a = addr_rect();
-    float r = translate_shown() ? translate_rect().left - S(4) : reader_shown() ? reader_rect().left - S(4) : star_shown() ? star_rect().left - S(4) : a.right - S(6);
+    float r = passwords_shown() ? passwords_rect().left - S(4) : translate_shown() ? translate_rect().left - S(4) : reader_shown() ? reader_rect().left - S(4) :
+              star_shown() ? star_rect().left - S(4) : a.right - S(6);
     return R(r - S(56), a.top + S(5), r, a.bottom - S(5));
 }
 static bool zoom_shown() { double z = tab_zoom_factor(); return fabs(z - 1.0) > 0.01; }
@@ -552,6 +562,7 @@ static HitInfo hit_test(float x, float y) {
         if (star_shown() && inside(star_rect(), x, y)) { h.what = H_STAR; return h; }
         if (reader_shown() && inside(reader_rect(), x, y)) { h.what = H_READER; return h; }
         if (translate_shown() && inside(translate_rect(), x, y)) { h.what = H_TRANSLATE; return h; }
+        if (passwords_shown() && inside(passwords_rect(), x, y)) { h.what = H_PASSWORDS; return h; }
         if (zoom_shown() && inside(zoom_rect(), x, y)) { h.what = H_ZOOM; return h; }
         if (inside(addr_rect(), x, y)) { h.what = H_ADDR; return h; }
         return h;
@@ -917,6 +928,18 @@ static bool paint_toolbar(ID2D1RenderTarget *rt, double now) {
         if (t->tr_state) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
         else if (th > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, th * 1.3f));
         glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_LANG, r, t->tr_state ? p.accent : mix(p.sub, p.text, th));
+        right = r.left - S(4);
+    }
+    if (passwords_shown()) {
+        // the key: quiet as the others; on a soft fill while its panel is open
+        D2D1_RECT_F r = passwords_rect();
+        auto &ka = g_btn_hover[hover_key(H_PASSWORDS, 0)];
+        busy |= ka.running(now);
+        float kh = ka.at(now);
+        bool open = passwords_panel_open();
+        if (open) fill(rt, g_br.Get(), r, S(7), p.accent_soft);
+        else if (kh > 0) fill(rt, g_br.Get(), r, S(7), alpha(p.hover, kh * 1.3f));
+        glyph(rt, g_br.Get(), g_f.icon_sm.Get(), G_KEY, r, open ? p.accent : mix(p.sub, p.text, kh));
         right = r.left - S(4);
     }
     if (zoom_shown()) {
@@ -1482,19 +1505,20 @@ std::wstring lang_name(const wchar_t *code) {
     for (auto &n : names) if (!wcscmp(code, n.code)) return n.name;
     return T(L"Como Windows");
 }
-enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET, PAGE_INCOGNITO, PAGE_DOWNLOADS, PAGE_TR_OPTIONS };
+enum { PAGE_MAIN, PAGE_EXT, PAGE_SCRIPTS, PAGE_ENGINE, PAGE_THEME, PAGE_FONT, PAGE_CLEAR, PAGE_TAB, PAGE_ONE_EXT, PAGE_BOOKMARKS, PAGE_STAR, PAGE_BM_OPEN, PAGE_PROFILES, PAGE_TRANSLATE, PAGE_TR_TARGET, PAGE_INCOGNITO, PAGE_DOWNLOADS, PAGE_TR_OPTIONS, PAGE_PASSWORDS };
 struct MItem {
     int kind = 0;   // 0 action, 1 separator, 2 opens a page, 3 check, 4 radio, 5 zoom row, 6 note, 7 back, 8 header (the profile's flyout),
                     // 9 a download (name, its bar while on its way, its state under it; hint = the state),
-                    // 10-12 the translate card: 10 its title (with ... and x), 11 the two languages, 12 its buttons
+                    // 10-12 the translate card: 10 its title (with ... and x), 11 the two languages, 12 its buttons,
+                    // 13 a saved login (username over its password; copy username above, eye and copy password below)
     std::wstring text, hint;
     wchar_t icon = 0;
     bool on = false, enabled = true, danger = false;
     std::function<void()> act;
     int page = 0;
-    wchar_t b1 = 0, b2 = 0;                 // small buttons at the right of the row
+    wchar_t b1 = 0, b2 = 0, b3 = 0;         // small buttons at the right of the row (b3: a login's copy username)
     bool avatar = false; Profile prof;      // a profile's row: its avatar instead of an icon
-    std::function<void()> act1, act2;
+    std::function<void()> act1, act2, act3;
     float progress = -1; int dl_state = 0;   // a download's row (DownloadRow)
     int value = -1;                         // the translate card's title: how far the translation went (0-100)
 };
@@ -1523,6 +1547,7 @@ static float item_h(const MItem &m) {
     case 10: return S(58);
     case 11: return S(50);
     case 12: return S(58);
+    case 13: return S(56);
     default: return S(kItemH);
     }
 }
@@ -1538,6 +1563,11 @@ static D2D1_RECT_F item_btn(size_t i, int which) {   // 1 or 2, from the right
     D2D1_RECT_F r = item_rect(i);
     float x = r.right - S(4) - which * S(30);
     if (g_items[i].kind == 9) { float cy = (r.top + r.bottom) / 2; return R(x, cy - S(15), x + S(28), cy + S(15)); }   // (a tall row: a square button)
+    if (g_items[i].kind == 13) {   // a login: 3 (copy username) on the top line, 1 and 2 (copy, eye) on the bottom one
+        float cy = (r.top + r.bottom) / 2, rx = r.right - S(4);
+        if (which == 3) return R(rx - S(28), r.top + S(3), rx, cy - S(1));
+        return R(rx - which * S(30) + S(2), cy + S(1), rx - (which - 1) * S(30), r.bottom - S(3));
+    }
     return R(x, r.top + S(3), x + S(28), r.bottom - S(3));
 }
 // the translate card's parts, as Chrome's and Edge's bubble (chrome/browser/ui/views/translate/translate_bubble_view.cc):
@@ -1657,6 +1687,21 @@ static void menu_draw(Panel &p, double now) {
             }
             continue;
         }
+        if (m.kind == 13) {
+            float ix = r.left + S(18), cy = (r.top + r.bottom) / 2;
+            glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), G_CONTACT, R(ix - S(10), cy - S(10), ix + S(10), cy + S(10)), c.sub);
+            for (int k = 1; k <= 3; k++) {
+                wchar_t g = k == 1 ? m.b1 : k == 2 ? m.b2 : m.b3;
+                if (!g) continue;
+                D2D1_RECT_F b = item_btn(i, k); b.left += dx; b.right += dx;
+                if (g_menu_sel == (int)i && g_menu_hot_btn == k) fill(p.rt.Get(), p.br.Get(), b, S(7), c.press);
+                glyph(p.rt.Get(), p.br.Get(), g_f.icon_sm.Get(), g, b, k == 2 && !m.hint.empty() && m.on ? c.accent : c.sub);
+            }
+            float tl = r.left + S(38), tr = r.right - S(4) - S(60) - S(6);
+            text(p.rt.Get(), p.br.Get(), g_f.menu.Get(), m.text, R(tl, r.top + S(4), tr, cy + S(1)), c.text);
+            text(p.rt.Get(), p.br.Get(), g_f.menu.Get(), m.hint, R(tl, cy - S(1), tr, r.bottom - S(4)), m.on ? c.text : c.sub);
+            continue;
+        }
         if (m.kind >= 10) { card_draw(p, m, i, r); continue; }
         if (m.kind == 9) {
             // a download, as in Edge's flyout: its file, its name, a bar while it comes, its state; the button at the right
@@ -1762,6 +1807,7 @@ static void menu_place(bool from_side) {
     if (!fresh && from_side) { g_menu.slide.snap(1); g_menu.slide.go(0, kPanelMs); panel_render(g_menu); }
 }
 static void open_menu_page(int page, RECT anchor, int tab_id, bool quiet) {
+    if (g_menu.h && !g_menu.closing && g_menu_page == PAGE_PASSWORDS && page != PAGE_PASSWORDS) vault_panel_closed();
     // (a quiet one's window cannot take the focus: the person's own menu is a new window)
     if (g_menu.h && g_menu_quiet && !quiet) panel_free(g_menu);
     g_menu_quiet = quiet; g_menu_quiet_touched = false; g_menu_quiet_since = now_ms();
@@ -1774,6 +1820,7 @@ static void open_menu_page(int page, RECT anchor, int tab_id, bool quiet) {
 }
 static void menu_close() {
     if (!g_menu.h) return;
+    if (g_menu_page == PAGE_PASSWORDS && !g_menu.closing) vault_panel_closed();   // (revealed values go with it)
     if (g_menu_quiet) { KillTimer(g_menu.h, 6); g_menu_quiet = false; }
     panel_close(g_menu);
     g_menu_btn_open.go(0, kHoverMs);
@@ -2136,6 +2183,27 @@ static std::vector<MItem> build_page(int page) {
             };
             v.push_back(m);
         }
+    } else if (page == PAGE_PASSWORDS) {
+        // the key's panel, as Edge's: the site's saved logins, each with copy username, show and copy password
+        Tab *t = tab_by_id(g_menu_tab);
+        std::wstring url = t ? t->url : L"", host = url_host(url);
+        if (starts_with(host, L"www.")) host = host.substr(4);
+        v.push_back(note(fmt1(T(L"Contraseñas guardadas para %1"), host)));
+        auto rows = vault_site_rows(url);
+        if (rows.empty()) v.push_back(note(T(L"No hay contraseñas guardadas para este sitio")));
+        for (auto &r : rows) {
+            int id = r.id;
+            MItem m; m.kind = 13;
+            m.text = r.user.empty() ? T(L"(sin usuario)") : r.user;
+            m.on = !r.shown.empty();
+            m.hint = m.on ? r.shown : L"••••••••••";
+            m.b1 = G_COPY; m.act1 = [id, url] { vault_panel_do(2, id, url); };
+            m.b2 = m.on ? G_HIDE : G_VIEW; m.act2 = [id, url] { vault_panel_do(1, id, url); };
+            m.b3 = G_COPY; m.act3 = [id, url] { vault_panel_do(3, id, url); };
+            v.push_back(m);
+        }
+        v.push_back(sep());
+        v.push_back(item(T(L"Gestionar contraseñas"), G_KEY, L"", [] { after_menu([] { settings_open(L"contrasenas"); }); }));
     } else if (page == PAGE_ONE_EXT) {
         // right click on an extension's button, as in Chrome (g_menu_tab: its place in g_exts)
         size_t i = (size_t)g_menu_tab;
@@ -2160,6 +2228,7 @@ static int menu_hit(int x, int y, int *btn) {
         if (m.kind == 5) { if (inside(item_btn(i, 4), (float)x, (float)y)) *btn = 4; else if (inside(item_btn(i, 1), (float)x, (float)y)) *btn = 1; }
         else if (m.b1 && inside(item_btn(i, 1), (float)x, (float)y)) *btn = 1;
         else if (m.b2 && inside(item_btn(i, 2), (float)x, (float)y)) *btn = 2;
+        else if (m.b3 && inside(item_btn(i, 3), (float)x, (float)y)) *btn = 3;
         return (int)i;
     }
     return -1;
@@ -2180,6 +2249,7 @@ static void menu_activate(int i, int btn) {
     }
     if (btn == 1 && m.act1) { m.act1(); if (g_menu.h && !g_menu.closing) { menu_place(false); } return; }
     if (btn == 2 && m.act2) { m.act2(); return; }
+    if (btn == 3 && m.act3) { m.act3(); return; }
     if (m.kind == 2) { menu_go(m.page); return; }
     if (m.act) m.act();
     if (m.kind == 3 && g_menu.h && !g_menu.closing) { menu_refresh(); ui_layout(); }
@@ -2197,7 +2267,7 @@ static void menu_key(UINT vk) {
         return;
     }
     bool top = g_menu_page == PAGE_MAIN || g_menu_page == PAGE_TAB || g_menu_page == PAGE_PROFILES || g_menu_page == PAGE_INCOGNITO || g_menu_page == PAGE_TRANSLATE ||
-               g_menu_page == PAGE_DOWNLOADS;
+               g_menu_page == PAGE_DOWNLOADS || g_menu_page == PAGE_PASSWORDS;
     int parent = g_menu_page == PAGE_TR_TARGET || g_menu_page == PAGE_TR_OPTIONS ? PAGE_TRANSLATE : PAGE_MAIN;
     if (vk == VK_ESCAPE) { if (!top) menu_go(parent); else after_menu([] {}); return; }
     if (vk == VK_LEFT && !top) { menu_go(parent); return; }
@@ -2315,6 +2385,17 @@ void ui_open_downloads(bool quiet) {
         if (!g_test && GetForegroundWindow() != g_win) return;
     } else if (open && !g_menu_quiet) { menu_close(); return; }   // (Ctrl+J again: away, as Edge)
     open_menu_page(PAGE_DOWNLOADS, bar_rect_on_screen(menu_rect()), 0, quiet);
+}
+static bool passwords_panel_open() {
+    return g_menu.h && !g_menu.closing && g_menu_page == PAGE_PASSWORDS && GetWindow(g_menu.h, GW_OWNER) == g_win;
+}
+void ui_open_passwords_panel(bool quiet) {
+    // the key's panel (quiet: tests, without the focus); already open in this window: shown again (a value revealed)
+    Tab *t = active_tab();
+    if (!t) return;
+    if (passwords_panel_open() && g_menu_tab == t->id) { menu_refresh(); ui_invalidate(); return; }
+    open_menu_page(PAGE_PASSWORDS, bar_rect_on_screen(passwords_shown() ? passwords_rect() : menu_rect()), t->id, quiet);
+    ui_invalidate();
 }
 void ui_downloads_changed() {
     // (from an app-wide timer: the panel's own window is made current, or it would move to another one)
@@ -2935,6 +3016,7 @@ static void bar_click(HitInfo h, float x, float y) {
     case H_NTP_X: if (h.id < (int)g_ntp_rows.size()) ntp_take_off((size_t)h.id); break;
     case H_STAR: ui_toggle_pin(); break;
     case H_READER: reader_toggle(active_tab()); break;
+    case H_PASSWORDS: if (passwords_panel_open() && !g_menu_quiet) { menu_close(); ui_invalidate(); } else ui_open_passwords_panel(false); break;
     case H_TRANSLATE:
         if (g_menu.h && !g_menu.closing && !g_menu_quiet && (g_menu_page == PAGE_TRANSLATE || g_menu_page == PAGE_TR_OPTIONS || g_menu_page == PAGE_TR_TARGET)) menu_close();
         else ui_open_translate_menu();

@@ -77,6 +77,19 @@ h3.sub { font-size: 15px; font-weight: 600; margin: 22px 0 10px; }
 .colors i { width: 16px; height: 16px; border-radius: 50%; cursor: default; box-sizing: border-box; }
 .colors i.on { outline: 2px solid var(--text); outline-offset: 2px; }
 .confirm { background: var(--hover); }
+.field { height: 32px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); color: var(--text); font: inherit; padding: 0 10px; outline: none; }
+.field:focus { border-color: var(--accent); }
+.ib { width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; flex: none; color: var(--sub); }
+.ib:hover { color: var(--text); }
+.ib svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ib.on { color: var(--accent); }
+.login .site-ic { width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center; flex: none; }
+.login .site-ic svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.login .pw { font-family: Consolas, "Cascadia Mono", monospace; color: var(--sub); min-width: 120px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.login .pw.shown { color: var(--text); user-select: all; }
+.login .flash { color: var(--accent); font-size: 12.5px; white-space: nowrap; }
+.login.gone .txt, .login.gone .pw { opacity: .5; }
+.pwhide { display: none !important; }
 .confirm .desc { color: var(--text); }
 @media (max-width: 760px) { nav { display: none; } main { padding: 20px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -96,6 +109,7 @@ h3.sub { font-size: 15px; font-weight: 600; margin: 22px 0 10px; }
     <a href="#nueva"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M3 8h14"/></svg><span data-t="Página de nueva pestaña">Página de nueva pestaña</span></a>
     <a href="#marcadores"><svg viewBox="0 0 20 20"><path d="m10 3 2.1 4.6 5 .5-3.8 3.3 1.2 4.9L10 13.8 5.5 16.3l1.2-4.9L2.9 8.1l5-.5Z"/></svg><span data-t="Marcadores">Marcadores</span></a>
     <a href="#privacidad"><svg viewBox="0 0 20 20"><rect x="4" y="9" width="12" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span data-t="Privacidad y datos">Privacidad y datos</span></a>
+    <a href="#contrasenas"><svg viewBox="0 0 20 20"><circle cx="7" cy="12.5" r="3.5"/><path d="m9.5 10 7-7M14 5.5l2 2M12 7.5l1.5 1.5"/></svg><span data-t="Contraseñas">Contraseñas</span></a>
     <a href="#predeterminado"><svg viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="3"/><path d="M3 7h14"/></svg><span data-t="Navegador predeterminado">Navegador predeterminado</span></a>
     <a href="#sincronizar"><svg viewBox="0 0 20 20"><path d="M4 10a6 6 0 0 1 10-4.5M16 10a6 6 0 0 1-10 4.5M14 3v2.5h-2.5M6 17v-2.5h2.5"/></svg><span data-t="Sincronizar">Sincronizar</span></a>
     <hr>
@@ -189,6 +203,21 @@ h3.sub { font-size: 15px; font-weight: 600; margin: 22px 0 10px; }
           <label class="toggle"><input type="checkbox" id="passgen"><span></span></label>
         </div>
       </div>
+    </section>
+
+    <section id="contrasenas">
+      <h2 data-t="Contraseñas">Contraseñas</h2>
+      <div class="card" id="pw-card">
+        <div class="row" data-k="contraseñas contraseña password passwords senha senhas palavra-passe mot de passe mots de passe passwort passwörter kennwort usuario guardadas">
+          <div class="txt"><div class="name" data-t="Contraseñas guardadas">Contraseñas guardadas</div><div class="desc" id="pw-desc">…</div></div>
+          <input id="pw-q" class="field" type="search" data-tp="Buscar contraseñas" placeholder="Buscar contraseñas" autocomplete="off">
+        </div>
+        <div class="row off" id="pw-empty" data-k="contraseñas password importar">
+          <div class="txt"><div class="desc" data-t="Aún no hay contraseñas guardadas. Pluma las guarda al entrar en una web y pulsar Guardar, o las importa de otro navegador.">Aún no hay contraseñas guardadas. Pluma las guarda al entrar en una web y pulsar Guardar, o las importa de otro navegador.</div></div>
+          <button data-do="import" data-t="Importar">Importar</button>
+        </div>
+      </div>
+      <p class="desc" style="margin:10px 2px 0;color:var(--sub);font-size:12.5px" data-t="Para ver o copiar una contraseña, Windows comprueba que eres tú (Windows Hello, PIN o la contraseña de tu cuenta). Copiada, se borra del portapapeles a los 30 s.">Para ver o copiar una contraseña, Windows comprueba que eres tú (Windows Hello, PIN o la contraseña de tu cuenta). Copiada, se borra del portapapeles a los 30 s.</p>
     </section>
 
     <section id="predeterminado">
@@ -588,6 +617,86 @@ document.querySelectorAll('[data-sync]').forEach(b => b.addEventListener('click'
   else if (c === 'pickRestore') sync({ cmd: 'pickRestore' });
   else if (c === 'restore') { const pw = $('sync-restore-pw').value; if (!pw || !restorePath) return; $('sync-restore-msg').textContent = tr('Restaurando...'); sync({ cmd: 'restore', path: restorePath, password: pw }); }
 }));
+// ---- saved passwords: the list comes apart from the state (only when this page asks); a password comes only when
+// asked for, after Windows checks it is the person, and is hidden again after a minute or when the page is left
+let PW = null, pwShown = {}, pwFlash = {}, pwConfirm = null, pwTimer = 0;
+const pw = o => W && W.postMessage(Object.assign({ op: 'pw' }, o));
+const ICON = {
+  key: '<circle cx="7" cy="12.5" r="3.5"/><path d="m9.5 10 7-7M14 5.5l2 2M12 7.5l1.5 1.5"/>',
+  eye: '<path d="M1.8 10S5 4.5 10 4.5 18.2 10 18.2 10 15 15.5 10 15.5 1.8 10 1.8 10Z"/><circle cx="10" cy="10" r="2.5"/>',
+  hide: '<path d="M3 3l14 14M8.2 5a8 8 0 0 1 1.8-.5c5 0 8.2 5.5 8.2 5.5a14 14 0 0 1-2.4 3M12 15.2a7 7 0 0 1-2 .3C5 15.5 1.8 10 1.8 10a14 14 0 0 1 3.4-3.8M8.3 8.3a2.5 2.5 0 0 0 3.4 3.4"/>',
+  copy: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/>',
+  user: '<circle cx="10" cy="6.5" r="3"/><path d="M4 17a6 6 0 0 1 12 0"/>',
+  open: '<path d="M11 3h6v6M17 3l-8 8M14 12v3.5a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 3 15.5v-8A1.5 1.5 0 0 1 4.5 6H8"/>',
+  del: '<path d="M3.5 5.5h13M8 5.5V4h4v1.5M5.5 5.5l.8 11h7.4l.8-11"/>',
+};
+function ib(icon, title, on) {
+  const b = document.createElement('button'); b.className = 'ib' + (on ? ' on' : ''); b.title = title; b.setAttribute('aria-label', title);
+  b.innerHTML = '<svg viewBox="0 0 20 20">' + ICON[icon] + '</svg>';
+  return b;
+}
+function pwFilter() {
+  const q = $('pw-q').value.trim().toLowerCase();
+  document.querySelectorAll('#pw-card .login').forEach(r => r.classList.toggle('pwhide', !!q && !r.dataset.k.toLowerCase().includes(q)));
+}
+function renderPasswords() {
+  if (!PW) return;
+  document.querySelectorAll('#pw-card .login, #pw-card .confirm').forEach(r => r.remove());
+  const n = PW.rows.filter(r => !r.del).length;
+  let d = PW.incognito ? tr('No disponible en una ventana de incógnito.') : PW.from < 0 ? tr('No se pudo leer la lista de contraseñas.') :
+          n === 1 ? tr('1 contraseña') : n + tr(' contraseñas');
+  if (PW.from === 1) d += ' · ' + tr('según el último arranque de Pluma');
+  $('pw-desc').textContent = d;
+  $('pw-q').classList.toggle('off', PW.incognito || !PW.rows.length);
+  $('pw-empty').classList.toggle('off', PW.incognito || PW.from < 0 || PW.rows.length > 0);
+  const card = $('pw-card');
+  for (const r of PW.rows) {
+    const row = document.createElement('div'); row.className = 'row login' + (r.del ? ' gone' : '');
+    row.dataset.k = 'contraseña password ' + r.site + ' ' + r.user;
+    const ic = document.createElement('div'); ic.className = 'site-ic'; ic.innerHTML = '<svg viewBox="0 0 20 20">' + ICON.key + '</svg>';
+    const txt = document.createElement('div'); txt.className = 'txt';
+    const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = r.site;
+    const us = document.createElement('div'); us.className = 'desc'; us.textContent = r.del ? tr('Se quita al reiniciar Pluma') : (r.user || tr('(sin usuario)'));
+    txt.append(nm, us);
+    row.append(ic, txt);
+    if (pwFlash[r.id]) { const f = document.createElement('span'); f.className = 'flash'; f.textContent = pwFlash[r.id]; row.append(f); }
+    if (r.del) {
+      const u = document.createElement('button'); u.textContent = tr('Deshacer'); u.onclick = () => pw({ cmd: 'undelete', id: r.id });
+      row.append(u);
+    } else {
+      const shown = pwShown[r.id] !== undefined;
+      const p = document.createElement('span'); p.className = 'pw' + (shown ? ' shown' : ''); p.textContent = shown ? pwShown[r.id] : '••••••••••';
+      const eye = ib(shown ? 'hide' : 'eye', tr(shown ? 'Ocultar contraseña' : 'Mostrar contraseña'), shown);
+      eye.onclick = () => { if (shown) { delete pwShown[r.id]; renderPasswords(); } else pw({ cmd: 'reveal', id: r.id }); };
+      const cp = ib('copy', tr('Copiar contraseña')); cp.onclick = () => pw({ cmd: 'copy', id: r.id });
+      const cu = ib('user', tr('Copiar usuario')); cu.onclick = () => pw({ cmd: 'copyUser', id: r.id });
+      row.append(p, eye, cp, cu);
+      if (r.url) { const op = ib('open', tr('Abrir el sitio')); op.onclick = () => pw({ cmd: 'open', id: r.id }); row.append(op); }
+      const dl = ib('del', tr('Quitar')); dl.onclick = () => { pwConfirm = pwConfirm === r.id ? null : r.id; renderPasswords(); };
+      row.append(dl);
+    }
+    card.append(row);
+    if (pwConfirm === r.id && !r.del) {
+      const c = document.createElement('div'); c.className = 'row confirm'; c.dataset.k = row.dataset.k;
+      const t = document.createElement('div'); t.className = 'txt';
+      const dd = document.createElement('div'); dd.className = 'desc'; dd.textContent = tr('¿Quitar esta contraseña? Se quita al reiniciar Pluma (el motor tiene el fichero abierto).');
+      t.append(dd);
+      const no = document.createElement('button'); no.textContent = tr('Cancelar'); no.onclick = () => { pwConfirm = null; renderPasswords(); };
+      const yes = document.createElement('button'); yes.className = 'primary'; yes.style.background = 'var(--danger)'; yes.style.borderColor = 'var(--danger)';
+      yes.textContent = tr('Quitar'); yes.onclick = () => { pwConfirm = null; pw({ cmd: 'delete', id: r.id }); };
+      c.append(t, no, yes); card.append(c);
+    }
+  }
+  pwFilter();
+  filter();
+}
+function flash(id, text) {
+  pwFlash[id] = text; renderPasswords();
+  setTimeout(() => { if (pwFlash[id] === text) { delete pwFlash[id]; renderPasswords(); } }, 4000);
+}
+function hideAll() { if (Object.keys(pwShown).length) { pwShown = {}; renderPasswords(); } }
+$('pw-q').addEventListener('input', pwFilter);
+document.addEventListener('visibilitychange', () => { if (document.hidden) hideAll(); else if (PW) pw({ cmd: 'list' }); });
 // the search: rows by their words (shown, in the language, and their keywords); sections with none left go
 function filter() {
   const q = $('q').value.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -641,7 +750,13 @@ function ask() {
    'Se borrarán sus pestañas, marcadores, historial, contraseñas, cookies y extensiones. No se puede deshacer.',
    'Sin elegir', 'Sin conectar', 'Conectar', 'Volver a conectar', 'Última copia', 'Todavía no hay ninguna copia',
    'Copia del', 'Pista', 'Ese fichero no es una copia de Pluma.', 'Restaurando...', 'Contraseña incorrecta.',
-   'La copia está dañada.', 'No se pudo restaurar.'].forEach(s => all.add(s));
+   'La copia está dañada.', 'No se pudo restaurar.',
+   'No disponible en una ventana de incógnito.', 'No se pudo leer la lista de contraseñas.', '1 contraseña', ' contraseñas',
+   'según el último arranque de Pluma', 'Se quita al reiniciar Pluma', '(sin usuario)', 'Deshacer', 'Ocultar contraseña',
+   'Mostrar contraseña', 'Copiar contraseña', 'Copiar usuario', 'Abrir el sitio',
+   '¿Quitar esta contraseña? Se quita al reiniciar Pluma (el motor tiene el fichero abierto).', 'Copiada · se borra en 30 s',
+   'Usuario copiado', 'No se ha podido comprobar que eres tú.', 'Pluma no puede leer esta contraseña: el motor la guarda cifrada para él solo.',
+   'No se pudo leer la contraseña.'].forEach(s => all.add(s));
   send({ op: 'get', texts: [...all] });
 }
 if (W) W.addEventListener('message', e => {
@@ -664,9 +779,24 @@ if (W) W.addEventListener('message', e => {
     $('sync-restore-msg').textContent = m.code === 0 ? tr('Restaurando...') : (msg[m.code] || '');
     return;
   }
+  if (m.op === 'pwList') { PW = m; for (const k in pwShown) if (!m.rows.some(r => r.id === +k && !r.del)) delete pwShown[k]; renderPasswords(); return; }
+  if (m.op === 'pwValue') {
+    pwShown[m.id] = m.value; renderPasswords();
+    clearTimeout(pwTimer); pwTimer = setTimeout(hideAll, 60000);   // (as the permission: a minute)
+    return;
+  }
+  if (m.op === 'pwDone') {
+    const say = { copied: 'Copiada · se borra en 30 s', copiedUser: 'Usuario copiado', denied: 'No se ha podido comprobar que eres tú.',
+                  bound: 'Pluma no puede leer esta contraseña: el motor la guarda cifrada para él solo.', failed: 'No se pudo leer la contraseña.' };
+    if (say[m.what]) flash(m.id, tr(say[m.what]));
+    return;
+  }
   if (m.op !== 'state') return;
   if (m.t) { texts = m.t; translate(); }
+  const first = !S;
   S = m; render(); filter(); mark();
+  if (first) pw({ cmd: 'list' });   // (once the texts are here)
+  else if (PW) renderPasswords();
 });
 if (location.hash) addEventListener('load', () => { const s = document.querySelector(location.hash); if (s) s.scrollIntoView(); });
 ask();

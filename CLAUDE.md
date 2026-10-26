@@ -56,6 +56,8 @@ código y commits en inglés; nada de em dashes.
   (apartados de abajo).
 - `src/reader.cpp` + `src/reader.html` + `src/readability/`: modo lectura (apartado de abajo).
 - `src/passgen.cpp` + `src/passgen.js`: «Usar contraseña segura» en los formularios de registro (apartado de abajo).
+- `src/vault.cpp`: las contraseñas guardadas, verlas y copiarlas (Configuración > Contraseñas y la llave de la barra;
+  apartado de abajo).
 - `src/downloads.cpp`: las descargas son de Pluma, no del panel del motor (apartado de abajo).
 - `instalar.ps1`: accesos, Pluma registrado como navegador (el predeterminado lo elige el usuario en Configuración),
   `-ArrancarConWindows`, `-Quitar`, y mete el botón MP3 de `Documents\YT-MP3`. Los `.ps1` con tildes, con BOM.
@@ -466,6 +468,53 @@ que el motor no tiene).
   tocar, la pregunta cerrada deja la fila pendiente que entra al reiniciar, y un sitio con «nunca» (`nunca.py`) nada.
   OJO: el motor pone su pregunta y su lista de autorrelleno en la pantalla más cercana aunque la ventana de prueba esté fuera; `tools\passgen\ventanas.ps1 -Watch` las saca al instante.
 
+## Contraseñas guardadas (`src/vault.cpp`, lectura en `src/passwords.cpp`)
+Pedido el 26/10: «que en el apartado de ajustes se puedan ver las contraseñas guardadas, y se puedan ver y copiar» y
+«un icono de un ojo para mostrar la contraseña o copiarla al portapapeles» en la lista de autorrelleno del motor.
+- La lista de autorrelleno es del motor (una ventana suya, `Chrome_WidgetWin_1`): Pluma no puede ponerle iconos. En su
+  lugar, como la llave de Edge: si el sitio de la pestaña tiene contraseñas guardadas sale una llave en la barra (antes
+  del icono de traducir, el libro y la estrella); su panel (página `PAGE_PASSWORDS` del menú, filas `kind 13`) tiene
+  cada usuario con copiar arriba y la contraseña con el ojo y copiar abajo, y «Gestionar contraseñas».
+- Configuración > Contraseñas: sitio, usuario, contraseña tapada; ojo, copiar contraseña, copiar usuario, abrir el
+  sitio y quitar; buscador propio, número y texto sin ninguna. La búsqueda de la configuración la encuentra en los 6
+  idiomas (`data-k` con contraseña, password, senha, mot de passe, Passwort...). La lista va aparte del estado
+  (`{op:"pw"}`), solo a esa página.
+- Lectura: una copia del `Login Data` vivo (y su `-wal`; el motor lo deja leer) del perfil de la ventana, en un hilo;
+  si no se puede leer, la de `sync-motor\` del arranque y la página dice «según el último arranque de Pluma» (ese
+  arranque copia ya con las contraseñas pendientes metidas: `sync_snapshot_engine` va tras `passwords_apply_pending`).
+  La llave mira si cambió el fichero como mucho cada 2 s. Nada se descifra para la lista. En incógnito, no hay.
+- Ver o copiar pide que Windows compruebe que es la persona, como Edge y Chromium
+  (`chrome/browser/password_manager/password_manager_util_win.cc`, `device_reauth/win`): Windows Hello
+  (`UserConsentVerifier`, `RequestVerificationForWindowAsync`) y, sin Hello, `CredUIPromptForWindowsCredentials` con
+  `CREDUIWIN_ENUMERATE_CURRENT_USER` comprobado con `LsaLogonUser` contra el SID de esta cuenta (la ventana deja
+  cambiar de cuenta). Hecho, esa página (o el panel) puede ver y copiar durante 60 s (el `kAuthValidityPeriod` de
+  Chromium); se pierde al recargar o salir de la página y al cerrar el panel. Una contraseña se descifra solo al
+  pedirla, de una en una (v10: AES-GCM con la llave de `Local State`; una v20 del motor, «Pluma no puede leerla»), y va
+  solo a la página de configuración que la pidió (su dirección se vuelve a mirar al tener la respuesta: si se fue, no
+  se manda nada) o al portapapeles. Copiar usuario no pide nada (como Edge).
+- Portapapeles: con `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory`=0 y
+  `CanUploadToCloudClipboard`=0 (fuera de Win+V y de la nube); a los 30 s se vacía si sigue siendo lo que puso Pluma
+  (`GetClipboardSequenceNumber`, sin guardar el valor).
+- Quitar: el motor tiene `Login Data` abierto mientras corre (escribir a la vez se arriesga a su base), así que la fila queda en
+  `passwords-delete.tsv` (sitio, usuario y su cifrado) y se quita al siguiente arranque, antes del motor y con copia de
+  `Login Data`, solo si sigue igual (y sus notas y avisos de filtración). La página dice «Se quita al reiniciar Pluma» y
+  deja deshacer. El autorrelleno del motor la ofrece hasta entonces.
+- Nunca al registro contraseñas, usuarios ni sitios: solo «contraseñas: verificado», «copiada», «portapapeles vaciado».
+- Las páginas de `pluma.local` van con `X-Frame-Options: DENY` y `frame-ancestors 'none'`.
+- RAM (26/10, `tres.ps1` con y sin esto a la vez, y otra vez cambiados de sitio): interfaz 13 MB en los dos; total 160
+  frente a 153 (las páginas, 65 y 69). Las dos primeras pasadas daban más al segundo lanzado, fuera cual fuera.
+- Pruebas: `tools\contrasenas\prueba.ps1` en la sesión interactiva con `PLUMA_EXE` (una guardada por el motor con su
+  Guardar, cuatro inventadas con `pluma-prueba:sembrar`, la lista, ver la del motor y una de Pluma, copiar con los
+  formatos y el vaciado, quitar al reiniciar, una web sin `chrome.webview`, sin verificar no llega nada, la página que
+  se va mientras Windows pregunta no recibe nada, el registro sin nada de eso; fotos claro y oscuro). `-Hello`: la
+  pregunta de verdad (sin nada que la conteste) sale, Pluma no revela nada y se va al cerrar la instancia; en un PC sin
+  Hello es la de la contraseña de la cuenta, que no acepta cerrarse desde fuera ni sale en PrintWindow (negra), y
+  `pluma-prueba:cancelar` solo cancela la de Hello. Solo en instancias de prueba (sus datos y su
+  llave son los suyos, en `prueba.<nombre>`; `PLUMA_INSTANCIA` solo vale con 1-32 letras, cifras, - o _, para que
+  esa carpeta nunca sea otra): `PLUMA_PRUEBA_VERIFICAR=si|no|lento` contesta sin Windows,
+  `PLUMA_PRUEBA_PORTAPAPELES_S` acorta el vaciado; órdenes `claves`, `clave-ver|clave-copiar|clave-usuario=<n>`,
+  `lista`, `sembrar`, `cancelar`.
+
 ## Descargas (`src/downloads.cpp`)
 Arreglado el 26/10 («el PDF descargado no se abre»): con Edge desinstalado (el motor 155 sigue), «Abrir archivo» del
 panel de descargas del motor tumbaba el motor entero (volcado: acceso a memoria ya liberada en msedge.dll, proceso
@@ -558,8 +607,10 @@ Pedido el 26/10: separar sus cuentas como en Edge y pasarlas a Pluma de golpe. P
 ## Seguridad
 - Motor de Edge, actualizado por Windows. Páginas en AppContainer (`msWebView2RendererAppContainer`), aislamiento de
   sitios activado (no quitarlo para ahorrar memoria), SmartScreen, prevención de rastreo equilibrada, uBlock Lite.
-- Ninguna página puede hablar con Pluma: sin mensajes web ni objetos del host. Contraseñas con el gestor de WebView2
-  (cifradas con la cuenta de Windows). Solo abren apps sin preguntar los protocolos de `protocolos` (ytmp3).
+- Ninguna página puede hablar con Pluma: sin mensajes web ni objetos del host. OJO: `chrome.webview.postMessage`
+  existe y no falla en cualquier página (visto el 26/10); lo que protege es que Pluma mira el origen de cada mensaje
+  (`settings_page_url` en `WebMessageReceived`), probado en `tools\contrasenas\prueba.ps1` (una web pide copiar: nada). Contraseñas con el gestor de WebView2
+  (cifradas con la cuenta de Windows); verlas o copiarlas en Pluma pide Windows Hello o la contraseña de la cuenta. Solo abren apps sin preguntar los protocolos de `protocolos` (ytmp3).
 
 ## Trampas ya vistas
 - uBlock Origin clásico (MV2) se instala en WebView2 155 pero NO bloquea (webRequestBlocking muerto): uBlock Lite sí.
