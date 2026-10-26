@@ -7,3 +7,4 @@ tmp/
 motor-video/
 Pluma.viejo*.exe
 /Pluma.exe
+src/secrets.h
