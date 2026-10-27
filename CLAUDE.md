@@ -186,7 +186,8 @@ más parecidos posible a los de YouTube», sin tocar Zas y sin depender de otra 
 ya tenga esa funcionalidad»).
 - Motor: libmpv propio en `motor-video\libmpv-2.dll` junto al exe (la compilación oficial de shinchiro, versión fijada y
   comprobada con su SHA-256 en `tools\motor-video.ps1`; `instalar.ps1` la baja si falta; fuera de git). Se carga con el
-  primer vídeo. Ajuste `video_propio` (menú: «YouTube en el reproductor de Pluma»).
+  primer vídeo. Ajuste `video_propio` (menú: «YouTube en el reproductor de Pluma»), APAGADO por defecto desde el 27/10
+  (abajo); el reproductor sigue siempre en las páginas ligeras que no tienen otro: Reddit y YouTube Music.
 - Cómo: la página abre y reproduce como siempre. Cuando su vídeo suena (sin anuncio y arriba del todo), Pluma pide desde
   la página (sus cookies, su visitorData) la respuesta del cliente VISIONOS y coge su `hlsManifestUrl`; baja la lista
   con WinHTTP, elige variante (lo que cabe en el reproductor; VP9, luego H.264, luego AV1) y el audio de su grupo. mpv
@@ -227,6 +228,13 @@ ya tenga esa funcionalidad»).
 - Elegido por el usuario el 25/10, con las cifras delante: el reproductor de Pluma siempre (~150 MB), no la página
   normal con Pluma solo en pantalla completa (~385 en la ventana) ni la página siempre (~385). La página viva con su
   vídeo parado y el reproductor de Pluma en su hueco no ahorra nada (322 MB la página sola): el ahorro es dormirla.
+- Cambiado por el usuario el 27/10: «en yt siempre tiene un comportamiento raro, a los 5 segundos ocurre algo y al
+  hacer scroll como que se produce un corte ... hay que quitar esa mierda aunque consuma un poco más de RAM». Por
+  defecto, la página de YouTube con su reproductor (y `/watch` ya no es ligero: sin el reproductor de Pluma no tiene
+  vídeo); `ajustes_v=4`: un `video_propio=1` guardado antes era el valor por defecto, no una elección. Medido en Parla
+  con la página normal (`tools` de pruebas, 60 fps): ni un fotograma perdido en el recorte de 4-5 s tras cargar (el
+  de la gráfica y el motor) ni haciendo scroll; el primer scroll, un parón de 91 ms de la página (YouTube carga los
+  comentarios), luego 6-30 ms.
 - Pluma solo coge el vídeo mientras la página lo reproduce (en su grabación lo cogió en mitad de un doble clic en el
   reproductor de la página, en pausa en 0:01, y ahí se quedó). Si mpv deja de avanzar 8 s sin pausa (30 cargando),
   vuelve la página en ese segundo. La pantalla completa que pide la página va de golpe, sin zoom (el zoom de la

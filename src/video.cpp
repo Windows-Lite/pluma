@@ -2896,7 +2896,8 @@ static void watch(Tab *t);
 static const wchar_t *kLiteExtract = L"window.__pluma ? __pluma.extract() : { error: 'sin página ligera' }";
 static void lite_fail(Tab *t, const std::wstring &why);
 static void video_try(Tab *t) {
-    if (!t || !t->view || t->video || !g_set.native_video) return;
+    // ("YouTube en el reproductor de Pluma" is YouTube's: Reddit's light page has no other player)
+    if (!t || !t->view || t->video || (!g_set.native_video && t->lite != LITE_REDDIT)) return;
     bool page_lite = t->yt_lite || t->lite == LITE_REDDIT;
     std::wstring vid = page_lite ? lite_video_id(t) : watch_id(t->url);
     if (vid.empty() || vid == t->video_declined || !load_mpv()) return;
@@ -3040,7 +3041,7 @@ void video_page_changed(Tab *t) {
         std::wstring id = lite_video_id(t);
         // Pluma's light page: no page player to wait for; Pluma's goes in as soon as the page has loaded
         if (v && v->id != id) video_destroy(t);
-        if (!id.empty() && !t->video && !t->loading && t->view && g_set.native_video && id != t->video_declined) video_try(t);
+        if (!id.empty() && !t->video && !t->loading && t->view && id != t->video_declined) video_try(t);
         return;
     }
     std::wstring id = watch_id(t->url);
@@ -3862,9 +3863,10 @@ double video_position(Tab *t) { Video *v = V(t); return v ? refresh_pos(v) : 0; 
 bool video_focus() { Video *v = V(active_tab()); if (!v || v->stage != ST_ON || !v->wnd) return false; SetFocus(v->wnd); return true; }
 void video_toggle_mute(Tab *t) { Video *v = V(t); if (v && v->stage == ST_ON) toggle_mute(v); }
 void video_settings_changed() {
-    // the setting was turned off: every video goes back to its page; on: the one on screen is looked at
+    // the setting was turned off: every YouTube video goes back to its page (Reddit's light page has no other
+    // player); on: the one on screen is looked at
     if (!g_set.native_video) {
-        for (Tab *tab : all_tabs()) if (tab->video) { WinScope ws(win_of_tab(tab)); video_back_to_page(tab, VIDEO_ASKED); }
+        for (Tab *tab : all_tabs()) if (tab->video && !V(tab)->reddit) { WinScope ws(win_of_tab(tab)); video_back_to_page(tab, VIDEO_ASKED); }
     } else if (active_tab()) video_page_changed(active_tab());
 }
 void video_tab_moved(Tab *t) {

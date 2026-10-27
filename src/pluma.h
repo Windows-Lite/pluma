@@ -87,7 +87,7 @@ struct Settings {
     int recent_discard_min = 0;        // this long (0 = never). Never unloaded at all: a tab with something to lose (tabs.cpp)
     bool spare = false;                // a view made ahead of time (the next page starts 35 ms sooner; costs ~10 MB)
     bool resident = true;              // closing the window keeps the engine warm (about 75 MB)
-    bool native_video = true;          // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
+    bool native_video = false;         // YouTube videos in Pluma's own player, the page asleep behind it (video.cpp)
     bool youtube_lite = true;          // YouTube answered with Pluma's own light page (lite.cpp)
     bool music_lite = true;            // ... YouTube Music
     bool reddit_lite = true;           // ... Reddit

@@ -176,7 +176,10 @@ void settings_load() {
     g_set.recent_discard_min = v3 ? std::max(0, _wtoi(ini_get(L"descargar_min", L"0").c_str())) : 0;
     g_set.spare = ini_get(L"reserva", L"0") == L"1";
     g_set.resident = ini_get(L"residente", L"1") != L"0";
-    g_set.native_video = ini_get(L"video_propio", L"1") != L"0";
+    // YouTube in its own page by default (27/10, the user: the switch to Pluma's player a few seconds in, and the page
+    // waking up on a scroll, "funciona muy mal, hay que quitar esa mierda aunque consuma un poco más de RAM"); before
+    // ajustes_v 4 it was on by default, so a saved "1" was never a choice
+    g_set.native_video = _wtoi(ini_get(L"ajustes_v", L"1").c_str()) >= 4 && ini_get(L"video_propio", L"0") == L"1";
     g_set.youtube_lite = ini_get(L"youtube_ligero", L"1") != L"0";
     g_set.music_lite = ini_get(L"music_ligero", L"1") != L"0";
     g_set.reddit_lite = ini_get(L"reddit_ligero", L"1") != L"0";
@@ -222,7 +225,7 @@ void settings_load() {
 void settings_save() {
     std::wstring f = ini();
     WritePrivateProfileStringW(L"pluma", L"buscador", g_set.engine.c_str(), f.c_str());
-    WritePrivateProfileStringW(L"pluma", L"ajustes_v", L"3", f.c_str());
+    WritePrivateProfileStringW(L"pluma", L"ajustes_v", L"4", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"tema", g_set.theme == 1 ? L"oscuro" : g_set.theme == 2 ? L"sistema" : L"claro", f.c_str());
     WritePrivateProfileStringW(L"pluma", L"fuente", g_set.font.c_str(), f.c_str());
     WritePrivateProfileStringW(L"pluma", L"idioma", g_set.lang.c_str(), f.c_str());

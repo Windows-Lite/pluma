@@ -12,13 +12,13 @@ Edge's engine (WebView2) behind a native interface of its own.</p>
 ---
 
 - **Measured**: one ordinary tab, 117-140 MB; seven tabs, ~125 MB (Firefox with the same seven: 3,100 MB);
-  YouTube playing at 1080p, ~110-150 MB (385 MB in YouTube's own page).
+  YouTube playing at 1080p, ~110-150 MB in Pluma's player (385 MB in YouTube's own page, the default).
 - **How**: tabs out of sight are frozen after 45 s, and come back at once with everything they had (unloading them
   after a while is an option in the settings; only a PC short of memory lets the oldest go); processes with nothing
   on screen give their unused memory back to Windows.
-- **YouTube in its own player**: videos play in Pluma's player (libmpv) in their place in the page, with YouTube's
-  controls, keys and qualities up to 4K, while the heavy page sleeps behind it. A click or the wheel on the page wakes
-  it at the same second.
+- **YouTube in its own player** (optional, off by default): videos play in Pluma's player (libmpv) in their place in
+  the page, with YouTube's controls, keys and qualities up to 4K, while the heavy page sleeps behind it. A click or the
+  wheel on the page wakes it at the same second.
 - **Reader view**: the book in the address bar (or F9) on an article shows just its text and pictures, light or dark,
   with the font size you choose; a site can open its articles in reader view always. Uses Mozilla's
   [Readability](https://github.com/mozilla/readability) (Apache-2.0, `src/readability`).

@@ -65,10 +65,11 @@ static bool youtube_url(const std::wstring &url) {
     return parts.size() == base + 1 && (parts[base] == L"videos" || parts[base] == L"featured");
 }
 // YouTube Music: home, search, an artist, an album or a playlist (/browse/..., /channel/..., /playlist), the library
-// and a song (/watch, which plays it). Its music needs Pluma's player
+// and a song (/watch, which plays it). Its music needs Pluma's player (there whatever "YouTube en el reproductor de
+// Pluma" says: it has no page player to switch from)
 static bool music_host(const std::wstring &host) { return host == L"music.youtube.com"; }
 static bool music_url(const std::wstring &url) {
-    if (!g_set.native_video || !video_available()) return false;
+    if (!video_available()) return false;
     std::wstring path, query;
     split_url(url, wcslen(L"https://music.youtube.com"), path, query);
     if (path == L"/" || path == L"/library") return true;
